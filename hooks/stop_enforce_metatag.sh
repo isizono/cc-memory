@@ -4,7 +4,8 @@
 #
 # 処理フロー:
 # 1. メタタグチェック → なければblock
-# 2. トピック存在・名前一致チェック → 存在しない or 名前不一致ならblock
+# 2. トピック存在チェック → 存在しなければblock
+# 2b. トピック名一致チェック → 不一致ならnudgeフラグを書く（blockしない）
 # 3. トピック変更チェック → 前topicにdecision/logなければblock
 # 4. approve
 
@@ -59,18 +60,25 @@ if [ $TOPIC_CHECK_EXIT_CODE -ne 0 ]; then
   exit 0
 fi
 
-TOPIC_EXISTS=$(echo "$TOPIC_CHECK" | jq -r '.exists')
+# jqパース失敗時はフェイルクローズ（blockで安全側に倒す）
+if ! TOPIC_EXISTS=$(echo "$TOPIC_CHECK" | jq -re '.exists' 2>/dev/null); then
+  jq -n --arg reason "check_topic_exists.py output parse failed: $TOPIC_CHECK" '{decision: "block", reason: $reason}'
+  exit 0
+fi
 if [ "$TOPIC_EXISTS" = "false" ]; then
   jq -n --arg topic "$CURRENT_TOPIC" '{decision: "block", reason: ("topic_id=" + $topic + " は存在しません。get_topics で正しいtopic_idを確認してください")}'
   exit 0
 fi
 
-TOPIC_NAME_MATCH=$(echo "$TOPIC_CHECK" | jq -r '.name_match')
+# 2b. トピック名一致チェック（不一致時はnudge、blockしない）
+TOPIC_NAME_MATCH=$(echo "$TOPIC_CHECK" | jq -r '.name_match // empty' 2>/dev/null)
 if [ "$TOPIC_NAME_MATCH" = "false" ]; then
   ACTUAL_NAME=$(echo "$TOPIC_CHECK" | jq -r '.actual_name')
-  jq -n --arg topic "$CURRENT_TOPIC" --arg expected "$CURRENT_TOPIC_NAME" --arg actual "$ACTUAL_NAME" \
-    '{decision: "block", reason: ("topic_id=" + $topic + " のトピック名が一致しません。メタタグ: \"" + $expected + "\" / DB: \"" + $actual + "\"。正しいtopic_idを確認してください")}'
-  exit 0
+  # SESSION_IDのスラッシュをアンダースコアに置換（パス安全化）
+  SESSION_ID_SAFE="${SESSION_ID//\//_}"
+  # nudgeフラグにtopic_idと正しい名前を書く
+  jq -n --argjson tid "$CURRENT_TOPIC" --arg name "$ACTUAL_NAME" '{topic_id: $tid, actual_name: $name}' \
+    > "${STATE_DIR}/nudge_topic_name_${SESSION_ID_SAFE}"
 fi
 
 # 3. トピック変更チェック

@@ -53,8 +53,8 @@ def main():
         actual_name = rows[0]["title"]
 
         if topic_name is None:
-            # topic名が渡されなかった場合は存在チェックのみ（後方互換）
-            print(json.dumps({"exists": True, "name_match": True}))
+            # topic名が渡されなかった場合は存在チェックのみ
+            print(json.dumps({"exists": True}))
         elif topic_name == actual_name:
             print(json.dumps({"exists": True, "name_match": True}))
         else:

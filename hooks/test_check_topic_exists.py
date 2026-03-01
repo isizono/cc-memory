@@ -107,11 +107,11 @@ class TestCheckTopicExistsScript:
         )
 
     def test_script_existing_topic_without_name(self, temp_db):
-        """存在するtopic_id、名前なし → exists=true, name_match=true"""
+        """存在するtopic_id、名前なし → exists=trueのみ（name_matchなし）"""
         result = self._run_script(["100"], temp_db)
         assert result.returncode == 0
         output = json.loads(result.stdout.strip())
-        assert output == {"exists": True, "name_match": True}
+        assert output == {"exists": True}
 
     def test_script_existing_topic_with_matching_name(self, temp_db):
         """存在するtopic_id、名前一致 → exists=true, name_match=true"""
