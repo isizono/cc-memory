@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HOST = "localhost"
 PORT = 52836
 IDLE_TIMEOUT_SEC = 300  # 5分
+MAX_REQUEST_BYTES = 10 * 1024 * 1024  # 10MB
 
 MODEL_NAME = "cl-nagoya/ruri-v3-70m"
 DOC_PREFIX = "検索文書: "
@@ -82,10 +83,13 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
         # リクエストボディをパース
         try:
             content_length = int(self.headers.get("Content-Length", 0))
+            if content_length > MAX_REQUEST_BYTES:
+                self._send_json(413, {"error": "Request body too large"})
+                return
             body = self.rfile.read(content_length)
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError) as e:
-            self._send_json(400, {"error": f"Invalid JSON: {e}"})
+            self._send_json(400, {"error": "Invalid request body"})
             return
 
         # バリデーション
@@ -109,7 +113,7 @@ class EmbeddingHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"embeddings": result})
         except Exception as e:
             logger.error(f"encode failed: {e}")
-            self._send_json(500, {"error": f"Encoding failed: {e}"})
+            self._send_json(500, {"error": "Internal server error"})
 
 
 def _idle_watchdog(server: ThreadingHTTPServer):
