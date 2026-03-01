@@ -56,18 +56,21 @@ def _get_recent_topics(subject_id: int) -> list[dict]:
     return results
 
 
-def _get_in_progress_tasks(subject_id: int) -> list[dict]:
-    """サブジェクトのin_progressタスクを取得する"""
+def _get_active_tasks(subject_id: int) -> list[dict]:
+    """サブジェクトのin_progress・pendingタスクを取得する"""
     rows = execute_query(
         """
-        SELECT id, title
+        SELECT id, title, status
         FROM tasks
-        WHERE subject_id = ? AND status = 'in_progress'
-        ORDER BY updated_at DESC
+        WHERE subject_id = ? AND status IN ('in_progress', 'pending')
+        ORDER BY
+            CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,
+            updated_at DESC
+        LIMIT 20
         """,
         (subject_id,),
     )
-    return [{"id": row["id"], "title": row["title"]} for row in rows]
+    return [{"id": row["id"], "title": row["title"], "status": row["status"]} for row in rows]
 
 
 def _build_active_context() -> str:
@@ -87,11 +90,11 @@ def _build_active_context() -> str:
                 for t in topics:
                     lines.append(f"- [{t['id']}] {t['title']}: {t['description']}")
 
-            tasks = _get_in_progress_tasks(s["id"])
+            tasks = _get_active_tasks(s["id"])
             if tasks:
-                lines.append("進行中タスク:")
+                lines.append("アクティブタスク:")
                 for task in tasks:
-                    lines.append(f"- [{task['id']}] {task['title']}")
+                    lines.append(f"- [{task['id']}] {task['title']} ({task['status']})")
 
             lines.append("")
 
