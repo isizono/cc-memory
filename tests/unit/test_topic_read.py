@@ -43,50 +43,113 @@ def test_get_topics_empty(test_subject):
 
     assert "error" not in result
     assert result["topics"] == []
+    assert result["total_count"] == 0
 
 
-def test_get_topics_root_level(test_subject):
-    """最上位トピックを取得できる"""
-    # 最上位トピックを3つ作成
-    topic1 = add_topic(subject_id=test_subject, title="Topic 1", description="Test description")
-    topic2 = add_topic(subject_id=test_subject, title="Topic 2", description="Test description")
-    topic3 = add_topic(subject_id=test_subject, title="Topic 3", description="Test description")
+def test_get_topics_desc_order(test_subject):
+    """新しいトピックが先頭に来る（DESC順）"""
+    topic1 = add_topic(subject_id=test_subject, title="Topic 1", description="Desc 1")
+    topic2 = add_topic(subject_id=test_subject, title="Topic 2", description="Desc 2")
+    topic3 = add_topic(subject_id=test_subject, title="Topic 3", description="Desc 3")
 
     result = get_topics(subject_id=test_subject)
 
     assert "error" not in result
     assert len(result["topics"]) == 3
-    assert result["topics"][0]["id"] == topic1["topic_id"]
+    # DESC順: 新しいものが先頭
+    assert result["topics"][0]["id"] == topic3["topic_id"]
     assert result["topics"][1]["id"] == topic2["topic_id"]
-    assert result["topics"][2]["id"] == topic3["topic_id"]
+    assert result["topics"][2]["id"] == topic1["topic_id"]
+    assert result["total_count"] == 3
 
 
-def test_get_topics_child_level(test_subject):
-    """子トピックを取得できる"""
-    # 親トピックを作成
-    parent = add_topic(subject_id=test_subject, title="Parent", description="Test description")
+def test_get_topics_pagination(test_subject):
+    """ページネーションで取得できる"""
+    topics = []
+    for i in range(5):
+        t = add_topic(subject_id=test_subject, title=f"Topic {i}", description=f"Desc {i}")
+        topics.append(t)
 
-    # 子トピックを2つ作成
-    child1 = add_topic(
-        subject_id=test_subject,
-        title="Child 1",
-        description="Test description",
+    # limit=3, offset=0 で最新3件
+    result1 = get_topics(subject_id=test_subject, limit=3, offset=0)
+    assert len(result1["topics"]) == 3
+    assert result1["topics"][0]["id"] == topics[4]["topic_id"]
+    assert result1["topics"][1]["id"] == topics[3]["topic_id"]
+    assert result1["topics"][2]["id"] == topics[2]["topic_id"]
+    assert result1["total_count"] == 5
+
+    # offset=3 で次の2件
+    result2 = get_topics(subject_id=test_subject, limit=3, offset=3)
+    assert len(result2["topics"]) == 2
+    assert result2["topics"][0]["id"] == topics[1]["topic_id"]
+    assert result2["topics"][1]["id"] == topics[0]["topic_id"]
+    assert result2["total_count"] == 5
+
+
+def test_get_topics_offset_beyond_total(test_subject):
+    """offset >= total_count の場合、空配列でtotal_countは正確な値"""
+    add_topic(subject_id=test_subject, title="Topic 1", description="Desc")
+
+    result = get_topics(subject_id=test_subject, offset=100)
+    assert result["topics"] == []
+    assert result["total_count"] == 1
+
+
+def test_get_topics_invalid_limit(test_subject):
+    """limit < 1 の場合、エラーを返す"""
+    result = get_topics(subject_id=test_subject, limit=0)
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_PARAMETER"
+
+
+def test_get_topics_ancestors_root(test_subject):
+    """ルートトピックのancestorsは空配列"""
+    add_topic(subject_id=test_subject, title="Root", description="Root topic")
+
+    result = get_topics(subject_id=test_subject)
+    assert result["topics"][0]["ancestors"] == []
+
+
+def test_get_topics_ancestors_3_levels(test_subject):
+    """親子3段のトピックでancestorsが[{親}, {祖父}]になる"""
+    grandparent = add_topic(subject_id=test_subject, title="Grandparent", description="GP")
+    parent = add_topic(
+        subject_id=test_subject, title="Parent", description="P",
+        parent_topic_id=grandparent["topic_id"],
+    )
+    child = add_topic(
+        subject_id=test_subject, title="Child", description="C",
         parent_topic_id=parent["topic_id"],
     )
-    child2 = add_topic(
-        subject_id=test_subject,
-        title="Child 2",
-        description="Test description",
-        parent_topic_id=parent["topic_id"],
-    )
 
-    result = get_topics(subject_id=test_subject, parent_topic_id=parent["topic_id"])
+    result = get_topics(subject_id=test_subject)
 
-    assert "error" not in result
-    assert len(result["topics"]) == 2
-    assert result["topics"][0]["id"] == child1["topic_id"]
-    assert result["topics"][1]["id"] == child2["topic_id"]
-    assert result["topics"][0]["parent_topic_id"] == parent["topic_id"]
+    # 各トピックを取得
+    child_topic = next(t for t in result["topics"] if t["id"] == child["topic_id"])
+    parent_topic = next(t for t in result["topics"] if t["id"] == parent["topic_id"])
+    gp_topic = next(t for t in result["topics"] if t["id"] == grandparent["topic_id"])
+
+    # childのancestors: [親, 祖父]
+    assert len(child_topic["ancestors"]) == 2
+    assert child_topic["ancestors"][0]["id"] == parent["topic_id"]
+    assert child_topic["ancestors"][0]["title"] == "Parent"
+    assert child_topic["ancestors"][1]["id"] == grandparent["topic_id"]
+    assert child_topic["ancestors"][1]["title"] == "Grandparent"
+
+    # parentのancestors: [祖父]
+    assert len(parent_topic["ancestors"]) == 1
+    assert parent_topic["ancestors"][0]["id"] == grandparent["topic_id"]
+
+    # grandparentのancestors: []
+    assert gp_topic["ancestors"] == []
+
+
+def test_get_topics_no_parent_topic_id_field(test_subject):
+    """レスポンスにparent_topic_idフィールドが含まれない"""
+    add_topic(subject_id=test_subject, title="Topic", description="Desc")
+
+    result = get_topics(subject_id=test_subject)
+    assert "parent_topic_id" not in result["topics"][0]
 
 
 # ========================================

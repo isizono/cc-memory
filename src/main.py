@@ -334,10 +334,12 @@ def add_decision(
 @mcp.tool()
 def get_topics(
     subject_id: int,
-    parent_topic_id: Optional[int] = None,
+    limit: int = 10,
+    offset: int = 0,
 ) -> dict:
-    """指定した親トピックの直下の子トピックを取得する。"""
-    return topic_service.get_topics(subject_id, parent_topic_id)
+    """サブジェクト内のトピックを新しい順に取得する（ページネーション付き）。
+    各トピックにancestorsフィールド（直親→祖先の順、最大5段、{id, title}のみ）を付与。"""
+    return topic_service.get_topics(subject_id, limit, offset)
 
 
 @mcp.tool()
