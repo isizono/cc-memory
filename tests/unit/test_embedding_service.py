@@ -70,7 +70,6 @@ def test_subject(temp_db, mock_request_encode):
 def test_request_encode_success(monkeypatch):
     """_request_encode: 正常レスポンスのパース"""
     import json
-    import io
 
     class FakeResponse:
         status = 200
@@ -450,30 +449,24 @@ def test_backfill_fills_missing_embeddings(temp_db, monkeypatch):
         conn.close()
 
 
-def test_backfill_noop_when_all_filled(temp_db, mock_request_encode):
+def test_backfill_noop_when_all_filled(temp_db, mock_request_encode, monkeypatch):
     """backfill: 全レコードが既にある場合は何もしない"""
-    # _ensure_serverもモック
-    import src.services.embedding_service as emb_mod
-    original_ensure = emb_mod._ensure_server
-    emb_mod._ensure_server = lambda: True
+    monkeypatch.setattr(emb, '_ensure_server', lambda: True)
 
-    try:
-        # init_database由来の未バックフィルレコードを先に処理しておく
-        emb.backfill_embeddings()
+    # init_database由来の未バックフィルレコードを先に処理しておく
+    emb.backfill_embeddings()
 
-        subject = add_subject(name="backfill-noop-test", description="Test")
-        subject_id = subject["subject_id"]
-        add_topic(
-            subject_id=subject_id,
-            title="全レコード存在テスト",
-            description="バックフィル不要のケース",
-        )
+    subject = add_subject(name="backfill-noop-test", description="Test")
+    subject_id = subject["subject_id"]
+    add_topic(
+        subject_id=subject_id,
+        title="全レコード存在テスト",
+        description="バックフィル不要のケース",
+    )
 
-        # 全レコードにembeddingがある状態でバックフィル実行
-        filled = emb.backfill_embeddings()
-        assert filled == 0
-    finally:
-        emb_mod._ensure_server = original_ensure
+    # 全レコードにembeddingがある状態でバックフィル実行
+    filled = emb.backfill_embeddings()
+    assert filled == 0
 
 
 # ========================================

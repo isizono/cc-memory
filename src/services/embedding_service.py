@@ -93,7 +93,6 @@ def _request_encode(texts: list[str], prefix: str) -> Optional[list[list[float]]
         except Exception as e:
             logger.warning(f"Encode response parse error: {e}")
             return None
-    return None
 
 
 def build_embedding_text(*fields: Optional[str]) -> str:
@@ -105,8 +104,8 @@ def encode_document(text: str) -> Optional[list[float]]:
     """ドキュメント用embedding生成。"""
     global _backfill_done
     if not _backfill_done:
-        _backfill_done = True
         backfill_embeddings()
+        _backfill_done = True
 
     result = _request_encode([text], "document")
     if result is not None:
