@@ -5,6 +5,7 @@
 # 処理フロー:
 # 1. メタタグチェック → なければblock
 # 2. トピック存在チェック → 存在しなければblock
+# 2b. トピック名一致チェック → 不一致ならnudgeフラグを書く（blockしない）
 # 3. トピック変更チェック → 前topicにdecision/logなければblock
 # 4. approve
 
@@ -47,24 +48,45 @@ if [ "$META_FOUND" != "true" ]; then
 fi
 
 CURRENT_TOPIC=$(echo "$META_RESULT" | jq -r '.topic_id')
+CURRENT_TOPIC_NAME=$(echo "$META_RESULT" | jq -r '.topic_name')
 
-# 2. トピック存在チェック
-TOPIC_EXISTS=$(cd "$PROJECT_ROOT" && uv run python "$SCRIPT_DIR/check_topic_exists.py" "$CURRENT_TOPIC" 2>>"$LOG_DIR/uv_stderr.log")
-TOPIC_EXISTS_EXIT_CODE=$?
+# 2. トピック存在・名前一致チェック
+TOPIC_CHECK=$(cd "$PROJECT_ROOT" && uv run python "$SCRIPT_DIR/check_topic_exists.py" "$CURRENT_TOPIC" "$CURRENT_TOPIC_NAME" 2>>"$LOG_DIR/uv_stderr.log")
+TOPIC_CHECK_EXIT_CODE=$?
 
-if [ $TOPIC_EXISTS_EXIT_CODE -ne 0 ]; then
+if [ $TOPIC_CHECK_EXIT_CODE -ne 0 ]; then
   # スクリプト実行エラー
-  jq -n --arg reason "check_topic_exists.py failed: $TOPIC_EXISTS" '{decision: "block", reason: $reason}'
+  jq -n --arg reason "check_topic_exists.py failed: $TOPIC_CHECK" '{decision: "block", reason: $reason}'
   exit 0
 fi
 
+# SESSION_IDのスラッシュをアンダースコアに置換（パス安全化）
+SESSION_ID_SAFE="${SESSION_ID//\//_}"
+
+# jqパース失敗時はフェイルクローズ（blockで安全側に倒す）
+# 注意: -e フラグは値がfalse/nullの場合に非ゼロ終了するため使わない
+TOPIC_EXISTS=$(echo "$TOPIC_CHECK" | jq -r '.exists' 2>/dev/null)
+if [ $? -ne 0 ] || [ -z "$TOPIC_EXISTS" ]; then
+  jq -n --arg reason "check_topic_exists.py output parse failed: $TOPIC_CHECK" '{decision: "block", reason: $reason}'
+  exit 0
+fi
 if [ "$TOPIC_EXISTS" = "false" ]; then
   jq -n --arg topic "$CURRENT_TOPIC" '{decision: "block", reason: ("topic_id=" + $topic + " は存在しません。get_topics で正しいtopic_idを確認してください")}'
   exit 0
 fi
 
+# 2b. トピック名一致チェック（不一致時はnudge、blockしない）
+# 注意: jq の // 演算子は false も代替対象にするため使わない
+TOPIC_NAME_MATCH=$(echo "$TOPIC_CHECK" | jq -r '.name_match' 2>/dev/null)
+if [ "$TOPIC_NAME_MATCH" = "false" ]; then
+  ACTUAL_NAME=$(echo "$TOPIC_CHECK" | jq -r '.actual_name' 2>/dev/null)
+  # nudgeフラグにtopic_idと正しい名前を書く
+  jq -n --argjson tid "$CURRENT_TOPIC" --arg name "$ACTUAL_NAME" '{topic_id: $tid, actual_name: $name}' \
+    > "${STATE_DIR}/nudge_topic_name_${SESSION_ID_SAFE}"
+fi
+
 # 3. トピック変更チェック
-PREV_TOPIC_FILE="${STATE_DIR}/prev_topic_${SESSION_ID}"
+PREV_TOPIC_FILE="${STATE_DIR}/prev_topic_${SESSION_ID_SAFE}"
 PREV_TOPIC=$(cat "$PREV_TOPIC_FILE" 2>/dev/null || echo "")
 
 if [ -n "$PREV_TOPIC" ] && [ "$PREV_TOPIC" != "$CURRENT_TOPIC" ]; then

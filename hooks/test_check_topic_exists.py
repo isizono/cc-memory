@@ -1,5 +1,6 @@
 """check_topic_exists.py のユニットテスト"""
 
+import json
 import os
 import subprocess
 import sys
@@ -96,50 +97,59 @@ class TestCheckTopicExists:
 class TestCheckTopicExistsScript:
     """check_topic_exists.py スクリプトとしての動作テスト"""
 
-    def test_script_with_existing_topic(self, temp_db):
-        """スクリプト実行: 存在するtopic_idでtrueを出力"""
-        result = subprocess.run(
-            [sys.executable, "hooks/check_topic_exists.py", "100"],
+    def _run_script(self, args, temp_db):
+        return subprocess.run(
+            [sys.executable, "hooks/check_topic_exists.py", *args],
             capture_output=True,
             text=True,
             cwd=str(project_root),
             env={**os.environ, "DISCUSSION_DB_PATH": temp_db},
         )
-        assert result.returncode == 0
-        assert result.stdout.strip() == "true"
 
-    def test_script_with_non_existing_topic(self, temp_db):
-        """スクリプト実行: 存在しないtopic_idでfalseを出力"""
-        result = subprocess.run(
-            [sys.executable, "hooks/check_topic_exists.py", "99999"],
-            capture_output=True,
-            text=True,
-            cwd=str(project_root),
-            env={**os.environ, "DISCUSSION_DB_PATH": temp_db},
-        )
+    def test_script_existing_topic_without_name(self, temp_db):
+        """存在するtopic_id、名前なし → exists=trueのみ（name_matchなし）"""
+        result = self._run_script(["100"], temp_db)
         assert result.returncode == 0
-        assert result.stdout.strip() == "false"
+        output = json.loads(result.stdout.strip())
+        assert output == {"exists": True}
+
+    def test_script_existing_topic_with_matching_name(self, temp_db):
+        """存在するtopic_id、名前一致 → exists=true, name_match=true"""
+        result = self._run_script(["100", "Test Topic"], temp_db)
+        assert result.returncode == 0
+        output = json.loads(result.stdout.strip())
+        assert output == {"exists": True, "name_match": True}
+
+    def test_script_existing_topic_with_wrong_name(self, temp_db):
+        """存在するtopic_id、名前不一致 → exists=true, name_match=false, actual_name付き"""
+        result = self._run_script(["100", "Wrong Name"], temp_db)
+        assert result.returncode == 0
+        output = json.loads(result.stdout.strip())
+        assert output == {"exists": True, "name_match": False, "actual_name": "Test Topic"}
+
+    def test_script_non_existing_topic(self, temp_db):
+        """存在しないtopic_id → exists=false"""
+        result = self._run_script(["99999"], temp_db)
+        assert result.returncode == 0
+        output = json.loads(result.stdout.strip())
+        assert output == {"exists": False}
+
+    def test_script_non_existing_topic_with_name(self, temp_db):
+        """存在しないtopic_id + 名前引数あり → exists=false"""
+        result = self._run_script(["99999", "Some Name"], temp_db)
+        assert result.returncode == 0
+        output = json.loads(result.stdout.strip())
+        assert output == {"exists": False}
 
     def test_script_with_invalid_topic_id(self, temp_db):
-        """スクリプト実行: 不正なtopic_idでエラー"""
-        result = subprocess.run(
-            [sys.executable, "hooks/check_topic_exists.py", "invalid"],
-            capture_output=True,
-            text=True,
-            cwd=str(project_root),
-            env={**os.environ, "DISCUSSION_DB_PATH": temp_db},
-        )
+        """不正なtopic_idでエラー"""
+        result = self._run_script(["invalid"], temp_db)
         assert result.returncode == 1
         assert "Invalid topic_id" in result.stderr
 
     def test_script_with_no_args(self, temp_db):
-        """スクリプト実行: 引数なしでfalseを出力"""
-        result = subprocess.run(
-            [sys.executable, "hooks/check_topic_exists.py"],
-            capture_output=True,
-            text=True,
-            cwd=str(project_root),
-            env={**os.environ, "DISCUSSION_DB_PATH": temp_db},
-        )
+        """引数なしでexists=false"""
+        result = self._run_script([], temp_db)
         assert result.returncode == 0
-        assert result.stdout.strip() == "false"
+        output = json.loads(result.stdout.strip())
+        assert output == {"exists": False}
