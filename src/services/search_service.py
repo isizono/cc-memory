@@ -49,6 +49,7 @@ def _fts_search(
         WHERE search_index_fts MATCH ?
           AND si.subject_id = ?
           AND (? IS NULL OR si.source_type = ?)
+        -- bm25() returns negative values; ascending = most relevant first
         ORDER BY bm25(search_index_fts, 5.0, 1.0)
         LIMIT ?
         """,
@@ -209,6 +210,7 @@ def search(
     limit = max(1, min(limit, 50))
 
     try:
+        # RRFで両ソースをマージした後にlimitで切るため、各ソースからlimitより多めに取得する
         fetch_limit = limit * 5
 
         # FTS5検索: 3文字以上の場合のみ
