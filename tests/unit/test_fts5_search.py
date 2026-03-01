@@ -1,4 +1,8 @@
-"""FTS5統合検索（search / get_by_id）のテスト"""
+"""FTS5統合検索（search / get_by_id）のテスト
+
+embeddingサービスを無効化した状態でFTS5のみの検索動作を検証する。
+ハイブリッド検索のテストは test_hybrid_search.py を参照。
+"""
 import os
 import tempfile
 import pytest
@@ -8,6 +12,15 @@ from src.services.topic_service import add_topic
 from src.services.decision_service import add_decision
 from src.services.task_service import add_task
 from src.services.search_service import search, get_by_id
+import src.services.embedding_service as emb
+
+
+@pytest.fixture(autouse=True)
+def disable_embedding(monkeypatch):
+    """FTS5テストではembeddingサービスを無効化"""
+    monkeypatch.setattr(emb, '_model', None)
+    monkeypatch.setattr(emb, '_model_load_failed', True)
+    monkeypatch.setattr(emb, '_backfill_done', True)
 
 
 @pytest.fixture
