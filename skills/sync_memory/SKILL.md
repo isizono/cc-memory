@@ -157,34 +157,47 @@ pendingタスクを上記4カテゴリに分類する。どのカテゴリにも
 
 記録すべきものがなければ6bは空とする。
 
-#### 6c. まとめてユーザーに提案
+#### 6c. ユーザーに提案
 
-6a・6bの結果を1回のAskUserQuestionにまとめて提案する。
+6a・6bの結果を **AskUserQuestionの別々のquestion** として提案する。棚卸しとauto memoryは独立した関心事なので、1つのquestionにまとめず分離する。
 
-**AskUserQuestionのフォーマット:**
+**AskUserQuestionの構成:**
+- 6aが空でなければ → 棚卸し用のquestionを追加
+- 6bが空でなければ → auto memory用のquestionを追加
+- 両方空なら → ステップ6全体をスキップ
 
+**棚卸しquestion:**
 ```
-棚卸し・auto memory更新:
+header: "タスク棚卸し"
+question: |
+  **completedにするタスク（確認）:**
+  - id:XXX タイトル → 理由（例: PR#77でマージ済み）
 
-**completedにするタスク（確認）:**
-- id:XXX タイトル → 理由（例: PR#77でマージ済み）
-
-**対応が必要なタスク（判断をお願い）:**
-- id:XXX タイトル → 理由（例: 7日以上放置、id:YYYと重複、前提変更で不要 など）
-
-**auto memory記録提案:**
-- [記録先] 内容の概要
-  例: [MEMORY.md] MCPプラグインのキャッシュは...
-  例: [add_knowledge] FTS5 trigramの2文字問題の調査結果...
+  **対応が必要なタスク（判断をお願い）:**
+  - id:XXX タイトル → 理由（例: 7日以上放置、id:YYYと重複、前提変更で不要 など）
+options: [提案通り進める, スキップ]
 ```
 
-- 6a・6bどちらかが空ならそのセクションは省略する
+**auto memory question:**
+```
+header: "auto memory"
+question: |
+  auto memoryに記録する？
+  - [記録先] 内容の概要
+    例: [MEMORY.md] MCPプラグインのキャッシュは...
+options:
+  - label: 記録する
+    markdown: |
+      （記録内容のプレビューをここに入れる）
+  - label: 不要
+```
+
 - 判断に迷うものは載せない（誤って消すより残すほうが安全）
+- auto memoryのquestionでは `markdown` パラメータでプレビューを表示し、記録内容を事前確認できるようにする
 
 **ユーザーの回答に応じて処理:**
-- completedセクション: ユーザーがOKすれば `update_task(task_id, new_status="completed")` で更新
-- 対応が必要セクション: ユーザーの指示に従って処理（completed、削除、そのまま残す等）
-- auto memoryセクション: ユーザーが承認した項目をauto memoryに書き込む
+- 棚卸し: ユーザーの指示に従って処理（completed、削除、そのまま残す等）
+- auto memory: ユーザーが承認した項目をauto memoryに書き込む
 
 ## 7. 完了報告
 
