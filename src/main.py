@@ -166,6 +166,10 @@ Be specific. This information is critically important for future AI sessions tha
 Avoid vague language like "as appropriate" or "as needed" — use concrete conditions and values.
 Always include the reasoning behind the decision, not just the outcome.
 
+When a decision implies follow-up work, consider creating a task so the next session can pick it up.
+Choose the appropriate phase prefix based on readiness:
+`[実装]` if the spec is clear, `[設計]` if the approach needs to be worked out, or `[議論]` if requirements are still vague.
+
 ## Recording Logs
 
 Decisions capture conclusions. Logs capture the journey.
