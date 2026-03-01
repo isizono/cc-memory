@@ -72,11 +72,11 @@ def _vector_search(
     limit: int,
 ) -> Optional[list[dict]]:
     """ベクトル検索。ベクトル検索無効時はNoneを返す。"""
-    query_embedding = embedding_service.encode_query(keyword)
-    if query_embedding is None:
-        return None
-
     try:
+        query_embedding = embedding_service.encode_query(keyword)
+        if query_embedding is None:
+            return None
+
         blob = serialize_float32(query_embedding)
 
         # vec_indexからKNN取得
@@ -122,7 +122,7 @@ def _vector_search(
         results.sort(key=lambda x: x["distance"])
         return results
 
-    except Exception:
+    except (ValueError, RuntimeError, OSError):
         logger.warning("Vector search failed, falling back to FTS-only", exc_info=True)
         return None
 
@@ -224,7 +224,7 @@ def search(
             return {
                 "error": {
                     "code": "KEYWORD_TOO_SHORT",
-                    "message": "keyword must be at least 3 characters (vector search unavailable)"
+                    "message": "keyword must be at least 3 characters when vector search is unavailable"
                 }
             }
 

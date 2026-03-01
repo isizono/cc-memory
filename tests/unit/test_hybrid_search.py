@@ -1,4 +1,5 @@
 """ハイブリッド検索（FTS5 + ベクトル + RRF統合）のテスト"""
+import hashlib
 import os
 import tempfile
 import pytest
@@ -39,7 +40,8 @@ def mock_embedding_model(monkeypatch):
             return self._encode_single(text)
 
         def _encode_single(self, text):
-            np.random.seed(hash(text) % (2**32))
+            seed = int(hashlib.sha256(text.encode()).hexdigest(), 16) % (2**32)
+            np.random.seed(seed)
             return np.random.rand(EMBEDDING_DIM).astype(np.float32)
 
     monkeypatch.setattr(emb, '_model', MockModel())
@@ -198,8 +200,10 @@ def test_hybrid_search_2char_vec_only(test_subject):
     result = search(subject_id=test_subject, keyword="設計")
 
     assert "error" not in result
-    # ベクトル検索で何かしら結果が返る（モックモデルの類似度次第）
-    assert isinstance(result["results"], list)
+    assert len(result["results"]) >= 1
+    # 登録したトピックがベクトル検索でヒットする
+    titles = [r["title"] for r in result["results"]]
+    assert "設計ドキュメント" in titles
     assert result["total_count"] == len(result["results"])
 
 
