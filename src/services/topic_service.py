@@ -84,15 +84,21 @@ def get_topics(
     Returns:
         トピック一覧（total_count付き）
     """
-    if limit < 1:
-        return {
-            "error": {
-                "code": "INVALID_PARAMETER",
-                "message": "limit must be >= 1",
-            }
-        }
-
     try:
+        if limit < 1:
+            return {
+                "error": {
+                    "code": "INVALID_PARAMETER",
+                    "message": "limit must be >= 1",
+                }
+            }
+        if offset < 0:
+            return {
+                "error": {
+                    "code": "INVALID_PARAMETER",
+                    "message": "offset must be >= 0",
+                }
+            }
         # total_count取得
         count_rows = execute_query(
             "SELECT COUNT(*) as cnt FROM discussion_topics WHERE subject_id = ?",

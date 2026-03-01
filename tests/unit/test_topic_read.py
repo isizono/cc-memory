@@ -102,6 +102,13 @@ def test_get_topics_invalid_limit(test_subject):
     assert result["error"]["code"] == "INVALID_PARAMETER"
 
 
+def test_get_topics_invalid_offset(test_subject):
+    """offset < 0 の場合、エラーを返す"""
+    result = get_topics(subject_id=test_subject, offset=-1)
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_PARAMETER"
+
+
 def test_get_topics_ancestors_root(test_subject):
     """ルートトピックのancestorsは空配列"""
     add_topic(subject_id=test_subject, title="Root", description="Root topic")
