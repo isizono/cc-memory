@@ -1,5 +1,12 @@
-"""Embeddingサービス: ruri-v3-70mモデルによるベクトル生成とvec_index操作"""
+"""Embeddingサービス: HTTPクライアント経由でembedding生成 + vec_index操作"""
+import json
 import logging
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+import urllib.error
 from typing import Optional
 
 from sqlite_vec import serialize_float32
@@ -8,43 +15,85 @@ from src.db import execute_query, get_connection
 
 logger = logging.getLogger(__name__)
 
-# 定数
-DOC_PREFIX = "検索文書: "
-QUERY_PREFIX = "検索クエリ: "
-MODEL_NAME = "cl-nagoya/ruri-v3-70m"
+# サーバー接続定数
+EMBEDDING_SERVER_HOST = "localhost"
+EMBEDDING_SERVER_PORT = 52836
+EMBEDDING_SERVER_URL = f"http://{EMBEDDING_SERVER_HOST}:{EMBEDDING_SERVER_PORT}"
 
-# グローバル状態（遅延ロード用）
-_model = None
-_model_load_failed = False
+# グローバル状態
 _backfill_done = False
 
 
-def _load_model():
-    """モデルを遅延ロードする。失敗時はフラグを立てて以降Noneを返す。"""
-    global _model, _model_load_failed
-    if _model is not None:
-        return _model
-    if _model_load_failed:
-        return None
+def _ensure_server() -> bool:
+    """embeddingサーバーの起動を保証する。"""
+    # 1. healthチェック
     try:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(MODEL_NAME)
-        logger.info(f"Embedding model loaded: {MODEL_NAME}")
-        return _model
-    except Exception as e:
-        _model_load_failed = True
-        logger.warning(f"Failed to load embedding model: {e}")
-        return None
+        req = urllib.request.Request(f"{EMBEDDING_SERVER_URL}/health")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+
+    # 2. サーバー起動
+    logger.info("Starting embedding server...")
+    log_dir = os.path.expanduser("~/.cache/cc-memory")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "embedding-server.log")
+
+    server_module = os.path.join(os.path.dirname(__file__), "embedding_server.py")
+    log_file = open(log_path, "a")
+    try:
+        subprocess.Popen(
+            [sys.executable, server_module],
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,
+        )
+    finally:
+        log_file.close()
+
+    # 3. 起動待ち（最大30秒）
+    for _ in range(60):
+        time.sleep(0.5)
+        try:
+            req = urllib.request.Request(f"{EMBEDDING_SERVER_URL}/health")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                if resp.status == 200:
+                    logger.info("Embedding server is ready")
+                    return True
+        except Exception:
+            continue
+
+    logger.warning("Embedding server startup timed out (30s)")
+    return False
 
 
-def _ensure_initialized():
-    """モデルのロードとバックフィルを一度だけ実行する。"""
-    global _backfill_done
-    model = _load_model()
-    if model is not None and not _backfill_done:
-        backfill_embeddings()
-        _backfill_done = True
-    return model
+def _request_encode(texts: list[str], prefix: str) -> Optional[list[list[float]]]:
+    """embeddingサーバーにencode要求を送信する。"""
+    payload = json.dumps({"texts": texts, "prefix": prefix}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{EMBEDDING_SERVER_URL}/encode",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                return data["embeddings"]
+        except urllib.error.URLError as e:
+            if attempt == 0:
+                logger.info(f"Encode request failed, retrying: {e}")
+                if _ensure_server():
+                    continue
+            logger.info(f"Encode request failed after retry: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Encode response parse error: {e}")
+            return None
+    return None
 
 
 def build_embedding_text(*fields: Optional[str]) -> str:
@@ -53,23 +102,24 @@ def build_embedding_text(*fields: Optional[str]) -> str:
 
 
 def encode_document(text: str) -> Optional[list[float]]:
-    """ドキュメント用embedding生成。prefix付き。"""
-    model = _ensure_initialized()
-    if model is None:
-        return None
-    prefixed = DOC_PREFIX + text
-    embedding = model.encode(prefixed)
-    return embedding.tolist()
+    """ドキュメント用embedding生成。"""
+    global _backfill_done
+    if not _backfill_done:
+        _backfill_done = True
+        backfill_embeddings()
+
+    result = _request_encode([text], "document")
+    if result is not None:
+        return result[0]
+    return None
 
 
 def encode_query(text: str) -> Optional[list[float]]:
-    """クエリ用embedding生成。prefix付き。"""
-    model = _ensure_initialized()
-    if model is None:
-        return None
-    prefixed = QUERY_PREFIX + text
-    embedding = model.encode(prefixed)
-    return embedding.tolist()
+    """クエリ用embedding生成。"""
+    result = _request_encode([text], "query")
+    if result is not None:
+        return result[0]
+    return None
 
 
 def generate_and_store_embedding(source_type: str, source_id: int, text: str) -> None:
@@ -136,8 +186,7 @@ def backfill_embeddings() -> int:
 
     Returns: 生成したembedding数
     """
-    model = _load_model()
-    if model is None:
+    if not _ensure_server():
         return 0
 
     # リソースタイプごとのクエリ（バッチ推論のためにグループ化）
@@ -180,15 +229,18 @@ def backfill_embeddings() -> int:
                 text = build_embedding_text(row[1], row[2])
                 if text:
                     ids.append(row[0])
-                    texts.append(DOC_PREFIX + text)
+                    texts.append(text)
 
             if not texts:
                 continue
 
             try:
-                embeddings = model.encode(texts)
+                embeddings = _request_encode(texts, "document")
+                if embeddings is None:
+                    logger.warning(f"Failed to backfill {source_type} embeddings: server returned None")
+                    continue
                 for search_index_id, embedding in zip(ids, embeddings):
-                    _insert_embedding_row(conn, search_index_id, embedding.tolist())
+                    _insert_embedding_row(conn, search_index_id, embedding)
                     total += 1
             except Exception as e:
                 logger.warning(f"Failed to backfill {source_type} embeddings: {e}")

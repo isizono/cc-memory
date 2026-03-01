@@ -29,23 +29,21 @@ def temp_db():
             del os.environ["DISCUSSION_DB_PATH"]
 
 
+def _make_deterministic_embedding(text: str) -> list[float]:
+    """テキストから決定論的にembeddingを生成する。"""
+    seed = int(hashlib.sha256(text.encode()).hexdigest(), 16) % (2**32)
+    np.random.seed(seed)
+    return np.random.rand(EMBEDDING_DIM).astype(np.float32).tolist()
+
+
 @pytest.fixture
 def mock_embedding_model(monkeypatch):
-    """sentence-transformersのモデルをモック化"""
+    """_request_encodeをモック化して決定論的なembeddingを返す"""
 
-    class MockModel:
-        def encode(self, text):
-            if isinstance(text, list):
-                return np.array([self._encode_single(t) for t in text])
-            return self._encode_single(text)
+    def fake_request_encode(texts, prefix):
+        return [_make_deterministic_embedding(t) for t in texts]
 
-        def _encode_single(self, text):
-            seed = int(hashlib.sha256(text.encode()).hexdigest(), 16) % (2**32)
-            np.random.seed(seed)
-            return np.random.rand(EMBEDDING_DIM).astype(np.float32)
-
-    monkeypatch.setattr(emb, '_model', MockModel())
-    monkeypatch.setattr(emb, '_model_load_failed', False)
+    monkeypatch.setattr(emb, '_request_encode', fake_request_encode)
     monkeypatch.setattr(emb, '_backfill_done', True)
     yield
 
@@ -53,8 +51,7 @@ def mock_embedding_model(monkeypatch):
 @pytest.fixture
 def disable_embedding(monkeypatch):
     """embeddingサービスを無効化"""
-    monkeypatch.setattr(emb, '_model', None)
-    monkeypatch.setattr(emb, '_model_load_failed', True)
+    monkeypatch.setattr(emb, '_request_encode', lambda texts, prefix: None)
     monkeypatch.setattr(emb, '_backfill_done', True)
 
 
