@@ -2,6 +2,7 @@
 import sqlite3
 from typing import Optional
 from src.db import execute_insert, execute_query, row_to_dict
+from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 
 
 def add_topic(
@@ -27,6 +28,9 @@ def add_topic(
             "INSERT INTO discussion_topics (subject_id, title, description, parent_topic_id) VALUES (?, ?, ?, ?)",
             (subject_id, title, description, parent_topic_id),
         )
+
+        # embedding生成（失敗してもtopic作成には影響しない）
+        generate_and_store_embedding("topic", topic_id, build_embedding_text(title, description))
 
         # 作成したトピックを取得
         rows = execute_query(

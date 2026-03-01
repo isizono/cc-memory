@@ -2,6 +2,7 @@
 import sqlite3
 from typing import Optional
 from src.db import execute_insert, execute_query, row_to_dict
+from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 
 
 def add_decision(
@@ -25,6 +26,9 @@ def add_decision(
             "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
             (topic_id, decision, reason),
         )
+
+        # embedding生成（失敗してもdecision作成には影響しない）
+        generate_and_store_embedding("decision", decision_id, build_embedding_text(decision, reason))
 
         # 作成した決定事項を取得
         rows = execute_query(

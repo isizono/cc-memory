@@ -5,6 +5,7 @@ from typing import Optional
 
 from src.db import execute_query, get_connection, row_to_dict
 from src.db_base import BaseDBService
+from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ def add_task(subject_id: int, title: str, description: str) -> dict:
             'description': description,
             'status': 'pending'
         })
+
+        # embedding生成（失敗してもtask作成には影響しない）
+        generate_and_store_embedding("task", task_id, build_embedding_text(title, description))
 
         # 作成したタスクを取得
         task = _task_db._get_by_id(task_id)
@@ -249,6 +253,15 @@ def update_task(
         row = cursor.fetchone()
         if not row:
             raise Exception("Failed to retrieve updated task")
+
+        # title/descriptionが変更された場合、embeddingを再生成
+        if title is not None or description is not None:
+            updated = row_to_dict(row)
+            generate_and_store_embedding(
+                "task", task_id,
+                build_embedding_text(updated["title"], updated["description"]),
+            )
+
         return _task_to_response(row_to_dict(row))
 
     except sqlite3.IntegrityError as e:
