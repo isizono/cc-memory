@@ -89,6 +89,13 @@ def get_decisions(
         )
         topic_name = topic_rows[0]["title"] if topic_rows else None
 
+        if topic_name is None:
+            return {
+                "topic_id": topic_id,
+                "topic_name": None,
+                "decisions": [],
+            }
+
         if start_id is None:
             rows = execute_query(
                 """
