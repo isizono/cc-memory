@@ -36,8 +36,8 @@ if [ -f "$TOPIC_NAME_FILE" ]; then
   if [ -n "$TOPIC_ID" ] && [ -n "$ACTUAL_NAME" ] && [ "$TOPIC_ID" != "null" ] && [ "$ACTUAL_NAME" != "null" ]; then
     rm -f "$TOPIC_NAME_FILE"
 
-    # <> をサニタイズ（system-reminderタグのinjection防止）
-    ACTUAL_NAME_SAFE=$(echo "$ACTUAL_NAME" | tr -d '<>')
+    # <>" をサニタイズ（system-reminderタグのinjection・引用符破壊防止）
+    ACTUAL_NAME_SAFE=$(echo "$ACTUAL_NAME" | tr -d '<>"')
 
     NUDGE_MSG="<system-reminder>The topic name in your meta tag does not match the database. Topic #${TOPIC_ID} is actually named \"${ACTUAL_NAME_SAFE}\". Please use the correct topic name in your next meta tag, or verify the topic_id with get_topics if you intended a different topic.</system-reminder>"
 
