@@ -60,6 +60,9 @@ if [ $TOPIC_CHECK_EXIT_CODE -ne 0 ]; then
   exit 0
 fi
 
+# SESSION_IDのスラッシュをアンダースコアに置換（パス安全化）
+SESSION_ID_SAFE="${SESSION_ID//\//_}"
+
 # jqパース失敗時はフェイルクローズ（blockで安全側に倒す）
 # 注意: -e フラグは値がfalse/nullの場合に非ゼロ終了するため使わない
 TOPIC_EXISTS=$(echo "$TOPIC_CHECK" | jq -r '.exists' 2>/dev/null)
@@ -73,18 +76,17 @@ if [ "$TOPIC_EXISTS" = "false" ]; then
 fi
 
 # 2b. トピック名一致チェック（不一致時はnudge、blockしない）
-TOPIC_NAME_MATCH=$(echo "$TOPIC_CHECK" | jq -r '.name_match // empty' 2>/dev/null)
+# 注意: jq の // 演算子は false も代替対象にするため使わない
+TOPIC_NAME_MATCH=$(echo "$TOPIC_CHECK" | jq -r '.name_match' 2>/dev/null)
 if [ "$TOPIC_NAME_MATCH" = "false" ]; then
   ACTUAL_NAME=$(echo "$TOPIC_CHECK" | jq -r '.actual_name' 2>/dev/null)
-  # SESSION_IDのスラッシュをアンダースコアに置換（パス安全化）
-  SESSION_ID_SAFE="${SESSION_ID//\//_}"
   # nudgeフラグにtopic_idと正しい名前を書く
   jq -n --argjson tid "$CURRENT_TOPIC" --arg name "$ACTUAL_NAME" '{topic_id: $tid, actual_name: $name}' \
     > "${STATE_DIR}/nudge_topic_name_${SESSION_ID_SAFE}"
 fi
 
 # 3. トピック変更チェック
-PREV_TOPIC_FILE="${STATE_DIR}/prev_topic_${SESSION_ID}"
+PREV_TOPIC_FILE="${STATE_DIR}/prev_topic_${SESSION_ID_SAFE}"
 PREV_TOPIC=$(cat "$PREV_TOPIC_FILE" 2>/dev/null || echo "")
 
 if [ -n "$PREV_TOPIC" ] && [ "$PREV_TOPIC" != "$CURRENT_TOPIC" ]; then

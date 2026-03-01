@@ -34,20 +34,26 @@ if [ -f "$TOPIC_NAME_FILE" ]; then
 
   # パース結果を検証してからフラグ削除（失敗時はフォールバック）
   if [ -n "$TOPIC_ID" ] && [ -n "$ACTUAL_NAME" ] && [ "$TOPIC_ID" != "null" ] && [ "$ACTUAL_NAME" != "null" ]; then
-    rm -f "$TOPIC_NAME_FILE"
-
     # <>" をサニタイズ（system-reminderタグのinjection・引用符破壊防止）
     ACTUAL_NAME_SAFE=$(echo "$ACTUAL_NAME" | tr -d '<>"')
 
     NUDGE_MSG="<system-reminder>The topic name in your meta tag does not match the database. Topic #${TOPIC_ID} is actually named \"${ACTUAL_NAME_SAFE}\". Please use the correct topic name in your next meta tag, or verify the topic_id with get_topics if you intended a different topic.</system-reminder>"
 
-    jq -n --arg ctx "$NUDGE_MSG" '{
+    # jq出力を変数に受けてからフラグ削除（jq失敗時のnudge消失防止）
+    NUDGE_JSON=$(jq -n --arg ctx "$NUDGE_MSG" '{
       "hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "additionalContext": $ctx
       }
-    }'
-    exit 0
+    }')
+
+    if [ -n "$NUDGE_JSON" ]; then
+      rm -f "$TOPIC_NAME_FILE"
+      echo "$NUDGE_JSON"
+      exit 0
+    fi
+    # jq失敗時: フラグを残してフォールバック（次ターンで再試行される）
+    echo '{}' >&2
   fi
   # パース失敗時はフラグを削除してフォールバック（nudge_pendingの処理に続行）
   rm -f "$TOPIC_NAME_FILE"
