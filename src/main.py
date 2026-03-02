@@ -225,14 +225,14 @@ When working on a task, use the corresponding skill:
 
 Phase prefixes belong on **tasks only** — never on topics.
 Tasks define the purpose; topics are the discussion spaces that serve that purpose.
-Link tasks and topics by cross-referencing IDs in their descriptions:
+Link tasks and topics using the `topic_id` parameter:
 
 ```
-1. add_task(subject_id=2, title="[議論] 検索機能の要件整理", description="...")
-   → task id: 50
-
-2. add_topic(subject_id=2, title="検索機能の要件整理", description="task id:50 の議論用")
+1. add_topic(subject_id=2, title="検索機能の要件整理", description="...")
    → topic id: 85
+
+2. add_task(subject_id=2, title="[議論] 検索機能の要件整理", description="...", topic_id=85)
+   → task id: 50
 
 3. As discussion branches off, create child topics under topic 85.
    The task (id:50) remains the single source of purpose.
@@ -417,6 +417,7 @@ def add_task(
     subject_id: int,
     title: str,
     description: str,
+    topic_id: Optional[int] = None,
 ) -> dict:
     """
     新しいタスクを追加する。
@@ -430,11 +431,12 @@ def add_task(
         subject_id: サブジェクトID
         title: タスクのタイトル
         description: タスクの詳細説明（必須）
+        topic_id: 関連トピックID（optional）
 
     Returns:
         作成されたタスク情報
     """
-    return task_service.add_task(subject_id, title, description)
+    return task_service.add_task(subject_id, title, description, topic_id)
 
 
 @mcp.tool()
@@ -470,6 +472,7 @@ def update_task(
     new_status: Optional[str] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
+    topic_id: Optional[int] = None,
 ) -> dict:
     """
     タスクのステータス・タイトル・説明を更新する。
@@ -479,6 +482,7 @@ def update_task(
     - タスク完了: update_task(task_id, new_status="completed")
     - タイトル変更: update_task(task_id, title="新しいタイトル")
     - 説明更新: update_task(task_id, description="新しい説明")
+    - トピック紐付け: update_task(task_id, topic_id=85)
 
     ワークフロー位置: タスク進行状況の更新時
 
@@ -487,11 +491,12 @@ def update_task(
         new_status: 新しいステータス（pending/in_progress/completed）
         title: 新しいタイトル
         description: 新しい説明
+        topic_id: 関連トピックID
 
     Returns:
         更新されたタスク情報
     """
-    return task_service.update_task(task_id, new_status, title, description)
+    return task_service.update_task(task_id, new_status, title, description, topic_id)
 
 
 @mcp.tool()
