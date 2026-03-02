@@ -37,7 +37,7 @@ def _task_to_response(task: dict) -> dict:
     }
 
 
-def add_task(subject_id: int, title: str, description: str) -> dict:
+def add_task(subject_id: int, title: str, description: str, topic_id: Optional[int] = None) -> dict:
     """
     タスクを作成してIDを返す
 
@@ -45,17 +45,22 @@ def add_task(subject_id: int, title: str, description: str) -> dict:
         subject_id: サブジェクトID
         title: タスクのタイトル
         description: タスクの説明
+        topic_id: 関連トピックID（optional）
 
     Returns:
         作成されたタスク情報
     """
     try:
-        task_id = _task_db._execute_insert({
+        insert_data = {
             'subject_id': subject_id,
             'title': title,
             'description': description,
-            'status': 'pending'
-        })
+            'status': 'pending',
+        }
+        if topic_id is not None:
+            insert_data['topic_id'] = topic_id
+
+        task_id = _task_db._execute_insert(insert_data)
 
         # embedding生成（失敗してもtask作成には影響しない）
         generate_and_store_embedding("task", task_id, build_embedding_text(title, description))
@@ -159,25 +164,27 @@ def update_task(
     new_status: Optional[str] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
+    topic_id: Optional[int] = None,
 ) -> dict:
     """
-    タスクを更新する（ステータス、タイトル、説明を変更可能）
+    タスクを更新する（ステータス、タイトル、説明、関連トピックを変更可能）
 
     Args:
         task_id: タスクID
         new_status: 新しいステータス（optional）
         title: 新しいタイトル（optional）
         description: 新しい説明（optional）
+        topic_id: 関連トピックID（optional）
 
     Returns:
         更新されたタスク情報
     """
     # 最低1つのオプショナルパラメータが必要
-    if new_status is None and title is None and description is None:
+    if new_status is None and title is None and description is None and topic_id is None:
         return {
             "error": {
                 "code": "VALIDATION_ERROR",
-                "message": "At least one of new_status, title, or description must be provided",
+                "message": "At least one of new_status, title, description, or topic_id must be provided",
             }
         }
 
@@ -235,6 +242,10 @@ def update_task(
         if description is not None:
             set_parts.append("description = ?")
             values.append(description)
+
+        if topic_id is not None:
+            set_parts.append("topic_id = ?")
+            values.append(topic_id)
 
         set_parts.append("updated_at = CURRENT_TIMESTAMP")
 
