@@ -43,11 +43,12 @@ class HookState:
     def get_prev_topic(self) -> int | None:
         """state/prev_topic_{session_id_safe} を読む。
         ファイルなし or 内容が不正 -> None"""
-        path = self._path("prev_topic")
+        val = self._read_str(self._path("prev_topic"))
+        if val is None:
+            return None
         try:
-            value = path.read_text().strip()
-            return int(value) if value else None
-        except (FileNotFoundError, ValueError):
+            return int(val)
+        except ValueError:
             return None
 
     def set_prev_topic(self, topic_id: int) -> None:
@@ -96,11 +97,11 @@ class HookState:
 
     def pop_nudge_pending(self) -> bool:
         """ファイルが存在すれば削除して True、なければ False"""
-        path = self._path("nudge_pending")
-        if path.exists():
-            path.unlink()
+        try:
+            self._path("nudge_pending").unlink()
             return True
-        return False
+        except FileNotFoundError:
+            return False
 
     # --- nudge_topic_name ---
 
@@ -114,12 +115,12 @@ class HookState:
         """ファイルが存在すればJSON読み込み -> 削除 -> dict返却
         なければ None。JSONパース失敗 -> ファイル削除して None"""
         path = self._path("nudge_topic_name")
-        if not path.exists():
-            return None
         try:
             data = json.loads(path.read_text())
             path.unlink()
             return data
+        except FileNotFoundError:
+            return None
         except (json.JSONDecodeError, ValueError):
             path.unlink(missing_ok=True)
             return None

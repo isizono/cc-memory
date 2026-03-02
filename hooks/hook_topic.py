@@ -6,12 +6,6 @@ src.db.execute_query に依存。
 import sys
 from pathlib import Path
 
-# プロジェクトルートをパスに追加
-project_root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(project_root))
-
-from src.db import execute_query
-
 
 def check_topic_exists(topic_id: int, topic_name: str | None = None) -> dict:
     """指定topic_idがDBに存在し、topic名が一致するかチェックする。
@@ -25,6 +19,11 @@ def check_topic_exists(topic_id: int, topic_name: str | None = None) -> dict:
     Raises:
         sqlite3.Error等 - DB接続失敗時（呼び出し元でcatch）
     """
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from src.db import execute_query
+
     rows = execute_query(
         "SELECT id, title FROM discussion_topics WHERE id = ?",
         (topic_id,),

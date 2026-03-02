@@ -1,29 +1,22 @@
 """hook共通: transcript解析ユーティリティ"""
 import json
 import re
-import subprocess
 from pathlib import Path
 
 
 def get_last_assistant_entry(transcript_path: str) -> dict | None:
     """transcriptから最後のassistantエントリを取得する。
-    末尾100行をtailで読む。"""
+    末尾100行を読み、逆順で最初のassistantエントリを返す。"""
     path = Path(transcript_path).expanduser()
     if not path.exists():
         return None
 
     # 末尾から読んで最初のassistantエントリを見つける
     try:
-        result = subprocess.run(
-            ["tail", "-n", "100", str(path)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        lines = result.stdout.strip().split("\n")
-    except Exception:
         with open(path) as f:
             lines = f.readlines()[-100:]
+    except Exception:
+        return None
 
     for line in reversed(lines):
         line = line.strip()

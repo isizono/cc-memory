@@ -70,6 +70,6 @@ class TestCheckTopicExists:
 
     def test_db_error_raises_exception(self):
         """DB接続エラー -> 例外raise"""
-        with patch("hooks.hook_topic.execute_query", side_effect=sqlite3.OperationalError("mocked DB error")):
+        with patch("src.db.execute_query", side_effect=sqlite3.OperationalError("mocked DB error")):
             with pytest.raises(Exception):
                 check_topic_exists(100)
