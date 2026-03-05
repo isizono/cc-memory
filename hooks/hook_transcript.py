@@ -5,16 +5,15 @@ from pathlib import Path
 
 
 def get_last_assistant_entry(transcript_path: str) -> dict | None:
-    """transcriptから最後のassistantエントリを取得する。
-    末尾100行を読み、逆順で最初のassistantエントリを返す。"""
+    """transcriptから最後のassistantエントリ（textブロック含む）を取得する。
+    全行を読み、逆順でtextブロックを含む最初のassistantエントリを返す。"""
     path = Path(transcript_path).expanduser()
     if not path.exists():
         return None
 
-    # 末尾から読んで最初のassistantエントリを見つける
     try:
         with open(path) as f:
-            lines = f.readlines()[-100:]
+            lines = f.readlines()
     except Exception:
         return None
 
@@ -24,12 +23,23 @@ def get_last_assistant_entry(transcript_path: str) -> dict | None:
             continue
         try:
             entry = json.loads(line)
-            if entry.get("type") == "assistant":
+            if entry.get("type") == "assistant" and _has_text_block(entry):
                 return entry
         except json.JSONDecodeError:
             continue
 
     return None
+
+
+def _has_text_block(entry: dict) -> bool:
+    """エントリにtextブロックが含まれるかチェック。"""
+    content = entry.get("message", {}).get("content", [])
+    if isinstance(content, str):
+        return bool(content.strip())
+    return any(
+        isinstance(block, dict) and block.get("type") == "text"
+        for block in content
+    )
 
 
 def get_assistant_entries(transcript_path: str, last_n: int | None = None) -> list[dict]:
@@ -147,11 +157,12 @@ def find_tool_calls_for_topic(entries: list[dict], topic_id: int) -> bool:
 _RECORDING_TOOLS = [
     "mcp__plugin_claude-code-memory_cc-memory__add_decision",
     "mcp__plugin_claude-code-memory_cc-memory__add_topic",
+    "mcp__plugin_claude-code-memory_cc-memory__add_log",
 ]
 
 
 def has_recent_recording(entries: list[dict]) -> bool:
-    """entriesにadd_decision/add_topicのツール呼び出しがあるかチェック。"""
+    """entriesにadd_decision/add_topic/add_logのツール呼び出しがあるかチェック。"""
     for entry in entries:
         message = entry.get("message", {})
         content = message.get("content", [])

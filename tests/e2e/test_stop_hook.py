@@ -53,11 +53,13 @@ def _run_stop_hook(
     transcript_path: str,
     session_id: str,
     env_override: dict | None = None,
+    last_assistant_message: str = "",
 ) -> dict:
     """stop_hook.py を subprocess で実行し、出力 JSON を返す"""
     input_data = json.dumps({
         "transcript_path": transcript_path,
         "session_id": session_id,
+        "last_assistant_message": last_assistant_message,
     })
 
     env = {**os.environ}
@@ -173,7 +175,8 @@ class TestMetaTagWithExistingTopic:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
         )
         assert result["decision"] == "approve"
 
@@ -192,7 +195,8 @@ class TestTopicNotExists:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG_NONEXISTENT}",
         )
         assert result["decision"] == "block"
         assert "topic_id=99999" in result["reason"]
@@ -213,7 +217,8 @@ class TestTopicNameMismatch:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG_WRONG_NAME}",
         )
         assert result["decision"] == "approve"
 
@@ -248,7 +253,8 @@ class TestTopicChangeNoRecord:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG_TOPIC_200}",
         )
         assert result["decision"] == "block"
         assert "id=100" in result["reason"]
@@ -281,7 +287,8 @@ class TestTopicChangeWithRecord:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG_TOPIC_200}",
         )
         assert result["decision"] == "approve"
 
@@ -338,7 +345,8 @@ class TestExceptionFailOpen:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_override
+            str(transcript), "test-session", env_override,
+            last_assistant_message=f"response\n{META_TAG}",
         )
         # DB接続エラーが発生しても approve
         assert result["decision"] == "approve"
@@ -366,7 +374,8 @@ class TestFirstTopicSkip:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
         )
         # first_topicからの移動はスキップ → approve
         assert result["decision"] == "approve"
@@ -393,7 +402,8 @@ class TestNudgeCounter:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
         )
         assert result["decision"] == "approve"
 
@@ -423,11 +433,41 @@ class TestNudgeCounter:
         )
 
         result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"]
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"recorded\n{META_TAG}",
         )
         assert result["decision"] == "approve"
 
         # nudge_counter がリセットされている（ファイル削除）
+        assert not counter_file.exists()
+
+    def test_nudge_counter_resets_on_add_log(self, env_setup):
+        """3ターン目でadd_log記録あり → nudge_counter がリセットされる（Bug #3検証）"""
+        state_dir = Path(env_setup["state_dir"])
+
+        counter_file = state_dir / "nudge_counter_test-session"
+        counter_file.write_text("2")
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(
+                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_log"],
+                    tool_inputs=[{"topic_id": 100}],
+                    text=f"logged\n{META_TAG}",
+                ),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"logged\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+        # add_logでもnudge_counterがリセットされる
         assert not counter_file.exists()
 
 
@@ -447,7 +487,10 @@ class TestStateUpdatedOnApprove:
             transcript,
         )
 
-        _run_stop_hook(str(transcript), "test-session", env_setup["env_override"])
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
 
         prev_file = state_dir / "prev_topic_test-session"
         assert prev_file.exists()
@@ -470,7 +513,88 @@ class TestStateUpdatedOnApprove:
             transcript,
         )
 
-        _run_stop_hook(str(transcript), "test-session", env_setup["env_override"])
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
 
         # block_count がリセットされている
         assert not block_file.exists()
+
+
+class TestSplitEntries:
+    """エントリ分割パターン: text+meta と tool_use が別エントリ"""
+
+    def test_split_entry_with_last_assistant_message(self, env_setup):
+        """分割エントリでもlast_assistant_messageで検出できる"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        # text+meta と tool_use を別エントリに分割
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),  # textのみ
+                _make_assistant_entry(tool_calls=["Bash"]),  # tool_useのみ
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"{META_TAG}\nresponse",
+        )
+        assert result["decision"] == "approve"
+
+    def test_split_entry_fallback_to_transcript(self, env_setup):
+        """last_assistant_messageなしでもtranscriptフォールバックで検出"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+                _make_assistant_entry(tool_calls=["Bash"]),
+            ],
+            transcript,
+        )
+
+        # last_assistant_message なし → transcriptフォールバック
+        # get_last_assistant_entryがtextブロック付きエントリを返すはず
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "approve"
+
+
+class TestLastAssistantMessage:
+    """last_assistant_message あり/なしの両パターン"""
+
+    def test_meta_tag_via_last_assistant_message(self, env_setup):
+        """last_assistant_messageからメタタグを検出（レースコンディション模擬）"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        # transcriptにはメタタグなし（レースコンディション模擬）
+        _write_transcript(
+            [_make_user_entry("hi")],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"{META_TAG}\nresponse",
+        )
+        assert result["decision"] == "approve"
+
+    def test_no_last_assistant_message_falls_back_to_transcript(self, env_setup):
+        """last_assistant_messageなし → transcriptから検出"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(text=f"response\n{META_TAG}"),
+            ],
+            transcript,
+        )
+
+        # last_assistant_message なし
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "approve"
