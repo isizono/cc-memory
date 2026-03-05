@@ -216,7 +216,7 @@ understanding rejected alternatives is as valuable as knowing the final choice.
 
 Example:
 ```
-User: record_logとsync_memoryのhookを廃止したい。RULESにadd_logの使い方を書いた方がいい？
+User: record_logとsync-memoryのhookを廃止したい。RULESにadd_logの使い方を書いた方がいい？
 Agent: 賛成。ただし毎ターン強制だと負荷が高い。エージェント判断で必要な時だけ記録する方式を提案。
 User: それでいい。粒度は任せる。ただし議論の経緯は最低限追えるように。
 Agent: 了解。記録対象を3つに整理した。(1)議論の経緯 (2)ユーザーの意図 (3)事実・制約。
