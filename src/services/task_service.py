@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 # DB格納可能なステータス値
 REAL_STATUSES = {"pending", "in_progress", "completed"}
+# "active"エイリアスが展開されるステータス
+ACTIVE_STATUSES = ("in_progress", "pending")
 # get_tasks用（エイリアス含む）
 VALID_STATUSES = REAL_STATUSES | {"active"}
 
@@ -119,46 +121,34 @@ def get_tasks(subject_id: int, status: str = "active", limit: int = 5) -> dict:
         }
 
     try:
+        # WHERE句・ORDER BY句・パラメータをステータスに応じて組み立て
         if status == "active":
-            # "active"はpending+in_progressの両方を返すエイリアス
-            # 1. total_count取得（LIMITなし）
-            count_rows = execute_query(
-                "SELECT COUNT(*) as count FROM tasks WHERE subject_id = ? AND status IN ('in_progress', 'pending')",
-                (subject_id,),
-            )
-            total_count = count_rows[0]["count"]
-
-            # 2. LIMIT付きでデータ取得（in_progress優先、updated_at DESC）
-            rows = execute_query(
-                """
-                SELECT * FROM tasks
-                WHERE subject_id = ? AND status IN ('in_progress', 'pending')
-                ORDER BY
-                    CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,
-                    updated_at DESC
-                LIMIT ?
-                """,
-                (subject_id, limit),
-            )
+            placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
+            where_clause = f"status IN ({placeholders})"
+            where_params = (subject_id, *ACTIVE_STATUSES)
+            order_clause = "CASE status WHEN 'in_progress' THEN 0 ELSE 1 END, updated_at DESC"
         else:
-            # 個別ステータス指定
-            # 1. total_count取得（LIMITなし）
-            count_rows = execute_query(
-                "SELECT COUNT(*) as count FROM tasks WHERE subject_id = ? AND status = ?",
-                (subject_id, status),
-            )
-            total_count = count_rows[0]["count"]
+            where_clause = "status = ?"
+            where_params = (subject_id, status)
+            order_clause = "created_at ASC, id ASC"
 
-            # 2. LIMIT付きでデータ取得
-            rows = execute_query(
-                """
-                SELECT * FROM tasks
-                WHERE subject_id = ? AND status = ?
-                ORDER BY created_at ASC, id ASC
-                LIMIT ?
-                """,
-                (subject_id, status, limit),
-            )
+        # 1. total_count取得（LIMITなし）
+        count_rows = execute_query(
+            f"SELECT COUNT(*) as count FROM tasks WHERE subject_id = ? AND {where_clause}",
+            where_params,
+        )
+        total_count = count_rows[0]["count"]
+
+        # 2. LIMIT付きでデータ取得
+        rows = execute_query(
+            f"""
+            SELECT * FROM tasks
+            WHERE subject_id = ? AND {where_clause}
+            ORDER BY {order_clause}
+            LIMIT ?
+            """,
+            (*where_params, limit),
+        )
 
         tasks = []
         for row in rows:

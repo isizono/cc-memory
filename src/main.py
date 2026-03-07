@@ -58,19 +58,12 @@ def _get_recent_topics(subject_id: int) -> list[dict]:
 
 def _get_active_tasks(subject_id: int) -> list[dict]:
     """サブジェクトのin_progress・pendingタスクを取得する"""
-    rows = execute_query(
-        """
-        SELECT id, title, status
-        FROM tasks
-        WHERE subject_id = ? AND status IN ('in_progress', 'pending')
-        ORDER BY
-            CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,
-            updated_at DESC
-        LIMIT 20
-        """,
-        (subject_id,),
-    )
-    return [{"id": row["id"], "title": row["title"], "status": row["status"]} for row in rows]
+    from src.services.task_service import get_tasks
+
+    result = get_tasks(subject_id=subject_id, status="active", limit=20)
+    if "error" in result:
+        return []
+    return [{"id": t["id"], "title": t["title"], "status": t["status"]} for t in result["tasks"]]
 
 
 def _build_active_context() -> str:
