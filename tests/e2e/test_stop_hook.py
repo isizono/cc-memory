@@ -47,6 +47,9 @@ META_TAG = '<!-- [meta] subject: test-subject (id: 1) | topic: test-topic (id: 1
 META_TAG_TOPIC_200 = '<!-- [meta] subject: test-subject (id: 1) | topic: another-topic (id: 200) -->'
 META_TAG_WRONG_NAME = '<!-- [meta] subject: test-subject (id: 1) | topic: wrong-name (id: 100) -->'
 META_TAG_NONEXISTENT = '<!-- [meta] subject: test-subject (id: 1) | topic: ghost (id: 99999) -->'
+TOPIC_LOOKUP_ENTRY = _make_assistant_entry(
+    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_topics"],
+)
 
 
 def _run_stop_hook(
@@ -169,6 +172,7 @@ class TestMetaTagWithExistingTopic:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -189,6 +193,7 @@ class TestTopicNotExists:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG_NONEXISTENT}\nresponse"),
             ],
             transcript,
@@ -211,6 +216,7 @@ class TestTopicNameMismatch:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG_WRONG_NAME}\nresponse"),
             ],
             transcript,
@@ -247,6 +253,7 @@ class TestTopicChangeNoRecord:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG_TOPIC_200}\nresponse"),
             ],
             transcript,
@@ -276,6 +283,7 @@ class TestTopicChangeWithRecord:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
                     tool_inputs=[{"topic_id": 100}],
@@ -338,6 +346,7 @@ class TestExceptionFailOpen:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 # DBが壊れていてもメタタグなしでblockされるので、メタタグありにする
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
@@ -368,6 +377,7 @@ class TestFirstTopicSkip:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -396,6 +406,7 @@ class TestNudgeCounter:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -423,6 +434,7 @@ class TestNudgeCounter:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
                     tool_inputs=[{"topic_id": 100}],
@@ -452,6 +464,7 @@ class TestNudgeCounter:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_log"],
                     tool_inputs=[{"topic_id": 100}],
@@ -482,6 +495,7 @@ class TestStateUpdatedOnApprove:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -508,6 +522,7 @@ class TestStateUpdatedOnApprove:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -532,6 +547,7 @@ class TestSplitEntries:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),  # textのみ
                 _make_assistant_entry(tool_calls=["Bash"]),  # tool_useのみ
             ],
@@ -550,6 +566,7 @@ class TestSplitEntries:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
                 _make_assistant_entry(tool_calls=["Bash"]),
             ],
@@ -570,9 +587,13 @@ class TestLastAssistantMessage:
     def test_meta_tag_via_last_assistant_message(self, env_setup):
         """last_assistant_messageからメタタグを検出（レースコンディション模擬）"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        # transcriptにはメタタグなし（レースコンディション模擬）
+        # transcriptにはメタタグなし（レースコンディション模擬）だが
+        # topic参照ツールの呼び出しは含める
         _write_transcript(
-            [_make_user_entry("hi")],
+            [
+                _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
+            ],
             transcript,
         )
 
@@ -588,6 +609,7 @@ class TestLastAssistantMessage:
         _write_transcript(
             [
                 _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"response\n{META_TAG}"),
             ],
             transcript,
@@ -596,5 +618,86 @@ class TestLastAssistantMessage:
         # last_assistant_message なし
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "approve"
+
+
+class TestTopicToolCallCheck:
+    """topic_id根拠チェック（間接的バリデーション）"""
+
+    def test_no_topic_tool_call_blocks(self, env_setup):
+        """topic参照ツール未呼出 + メタタグあり → block"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "block"
+        assert "get_topics" in result["reason"]
+        assert "確認してください" in result["reason"]
+
+    def test_get_topics_call_approves(self, env_setup):
+        """get_topics呼出済み + メタタグあり → approve"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_search_call_approves(self, env_setup):
+        """search呼出済み + メタタグあり → approve"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(
+                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__search"],
+                ),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_add_topic_call_approves(self, env_setup):
+        """add_topic呼出済み + メタタグあり → approve"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(
+                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_topic"],
+                ),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
         )
         assert result["decision"] == "approve"

@@ -160,9 +160,16 @@ _RECORDING_TOOLS = [
     "mcp__plugin_claude-code-memory_cc-memory__add_log",
 ]
 
+_TOPIC_TOOLS = [
+    "mcp__plugin_claude-code-memory_cc-memory__get_topics",
+    "mcp__plugin_claude-code-memory_cc-memory__search",
+    "mcp__plugin_claude-code-memory_cc-memory__get_by_id",
+    "mcp__plugin_claude-code-memory_cc-memory__add_topic",
+]
 
-def has_recent_recording(entries: list[dict]) -> bool:
-    """entriesにadd_decision/add_topic/add_logのツール呼び出しがあるかチェック。"""
+
+def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
+    """entriesに指定ツールの呼び出しがあるかチェック。"""
     for entry in entries:
         message = entry.get("message", {})
         content = message.get("content", [])
@@ -175,7 +182,17 @@ def has_recent_recording(entries: list[dict]) -> bool:
                 continue
             if block.get("type") != "tool_use":
                 continue
-            if block.get("name", "") in _RECORDING_TOOLS:
+            if block.get("name", "") in tool_names:
                 return True
 
     return False
+
+
+def has_recent_recording(entries: list[dict]) -> bool:
+    """entriesにadd_decision/add_topic/add_logのツール呼び出しがあるかチェック。"""
+    return _has_tool_calls(entries, _RECORDING_TOOLS)
+
+
+def has_topic_tool_calls(entries: list[dict]) -> bool:
+    """entriesにtopic_idを返すツールの呼び出しがあるかチェック。"""
+    return _has_tool_calls(entries, _TOPIC_TOOLS)
