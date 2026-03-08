@@ -25,7 +25,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from hooks.hook_state import HookState
-from hooks.hook_topic import check_topic_exists
+from hooks.hook_topic import check_topic_exists, check_topic_has_tags
 from hooks.hook_transcript import (
     extract_text_from_entry,
     find_tool_calls_for_topic,
@@ -89,7 +89,7 @@ def main() -> None:
             _output(
                 "block",
                 "応答の最初にメタタグを出力してください。フォーマット: "
-                "<!-- [meta] subject: xxx (id: N) | topic: yyy (id: M) -->",
+                "<!-- [meta] topic: xxx (id: N) -->",
             )
             return
 
@@ -118,6 +118,15 @@ def main() -> None:
                 "block",
                 f"topic_id={current_topic_id} は存在しません。"
                 "get_topics で正しいtopic_idを確認してください",
+            )
+            return
+
+        # 5.5 タグ存在チェック
+        if not check_topic_has_tags(current_topic_id):
+            state.increment_block_count()
+            _output(
+                "block",
+                "このトピックにタグがありません。add_topicまたはタグ付けツールでタグを付与してください",
             )
             return
 

@@ -84,35 +84,19 @@ def init_database() -> None:
 
     conn = get_connection()
     try:
-        # 初期データの投入（既存データがある場合は挿入しない）
-        # nameのUNIQUE制約を活用してIDハードコードを避ける
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO subjects (name, description)
-            VALUES ('first_subject', 'これはサンプルのサブジェクトです。サブジェクトは1つの取り組み・関心事を表す単位で、関連するトピックを束ねるグループです。新しい取り組みや関心事が出てきたら、新しいサブジェクトを作成してください。')
-            """
-        )
-
-        # first_subjectのIDを取得してdiscussion_topicsに使用
+        # 初期データの投入
+        # subjects テーブルは 0010_remove_subjects で削除済み
+        # discussion_topics に直接 first_topic を挿入する
         cursor = conn.execute(
-            "SELECT id FROM subjects WHERE name = 'first_subject'"
+            "SELECT id FROM discussion_topics WHERE title = 'first_topic'"
         )
-        row = cursor.fetchone()
-        if row:
-            subject_id = row[0]
-            # discussion_topicsにはtitleのUNIQUE制約がないため、存在確認してから挿入
-            cursor = conn.execute(
-                "SELECT id FROM discussion_topics WHERE subject_id = ? AND title = 'first_topic'",
-                (subject_id,)
+        if cursor.fetchone() is None:
+            conn.execute(
+                """
+                INSERT INTO discussion_topics (title, description)
+                VALUES ('first_topic', 'これはサンプルのトピックです。トピックは「この会話を一言で表すと？」に答えられる粒度が目安です。例：「[議論] ユーザー認証に使う外部サービスの選定」「[設計] エラーAPIのレスポンス形式」「[作業] 商品詳細→カート画面遷移時のクラッシュ」など。新しい話題が出てきたら、新しいトピックを作成してください。')
+                """
             )
-            if cursor.fetchone() is None:
-                conn.execute(
-                    """
-                    INSERT INTO discussion_topics (subject_id, title, description)
-                    VALUES (?, 'first_topic', 'これはサンプルのトピックです。トピックは「この会話を一言で表すと？」に答えられる粒度が目安です。例：「[議論] ユーザー認証に使う外部サービスの選定」「[設計] エラーAPIのレスポンス形式」「[作業] 商品詳細→カート画面遷移時のクラッシュ」など。新しい話題が出てきたら、新しいトピックを作成してください。話題がサブジェクトの範囲を超えたら、サブジェクトの変更も検討してください。')
-                    """,
-                    (subject_id,)
-                )
         # FTS5初期マイグレーション
         _migrate_fts5_search_index(conn)
 

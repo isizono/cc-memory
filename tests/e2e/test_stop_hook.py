@@ -43,10 +43,11 @@ def _make_user_entry(text: str = "hello") -> dict:
     return {"type": "human", "message": {"content": [{"type": "text", "text": text}]}}
 
 
-META_TAG = '<!-- [meta] subject: test-subject (id: 1) | topic: test-topic (id: 100) -->'
-META_TAG_TOPIC_200 = '<!-- [meta] subject: test-subject (id: 1) | topic: another-topic (id: 200) -->'
-META_TAG_WRONG_NAME = '<!-- [meta] subject: test-subject (id: 1) | topic: wrong-name (id: 100) -->'
-META_TAG_NONEXISTENT = '<!-- [meta] subject: test-subject (id: 1) | topic: ghost (id: 99999) -->'
+META_TAG = '<!-- [meta] topic: test-topic (id: 100) -->'
+META_TAG_TOPIC_200 = '<!-- [meta] topic: another-topic (id: 200) -->'
+META_TAG_WRONG_NAME = '<!-- [meta] topic: wrong-name (id: 100) -->'
+META_TAG_NONEXISTENT = '<!-- [meta] topic: ghost (id: 99999) -->'
+META_TAG_NO_TAGS = '<!-- [meta] topic: no-tags-topic (id: 300) -->'
 TOPIC_LOOKUP_ENTRY = _make_assistant_entry(
     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_topics"],
 )
@@ -101,23 +102,26 @@ def env_setup(tmp_path):
     os.environ["DISCUSSION_DB_PATH"] = db_path
     init_database()
 
-    # テスト用トピックを追加
+    # テスト用トピックを追加（subject_id は migration 0010 で削除済み）
     conn = get_connection()
     try:
-        cursor = conn.execute("SELECT id FROM subjects WHERE name = 'first_subject'")
-        row = cursor.fetchone()
-        subject_id = row[0] if row else 1
-
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) "
-            "VALUES (100, ?, 'test-topic', 'Description')",
-            (subject_id,),
+            "INSERT INTO discussion_topics (id, title, description) "
+            "VALUES (100, 'test-topic', 'Description')"
         )
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) "
-            "VALUES (200, ?, 'another-topic', 'Description')",
-            (subject_id,),
+            "INSERT INTO discussion_topics (id, title, description) "
+            "VALUES (200, 'another-topic', 'Description')"
         )
+        # タグなしトピック
+        conn.execute(
+            "INSERT INTO discussion_topics (id, title, description) "
+            "VALUES (300, 'no-tags-topic', 'Description')"
+        )
+        # テスト用タグを追加
+        conn.execute("INSERT OR IGNORE INTO tags (id, namespace, name) VALUES (1, 'domain', 'test')")
+        conn.execute("INSERT INTO topic_tags (topic_id, tag_id) VALUES (100, 1)")
+        conn.execute("INSERT INTO topic_tags (topic_id, tag_id) VALUES (200, 1)")
         conn.commit()
     finally:
         conn.close()
@@ -165,7 +169,7 @@ class TestNoMetaTag:
 
 
 class TestMetaTagWithExistingTopic:
-    """2. メタタグあり + トピック存在 → approve"""
+    """2. メタタグあり + トピック存在 + タグあり → approve"""
 
     def test_meta_tag_with_existing_topic_approves(self, env_setup):
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
@@ -711,6 +715,47 @@ class TestTopicToolCallCheck:
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_topic"],
                 ),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+
+class TestTopicTagsCheck:
+    """topic_tagsタグ存在チェック（ステップ5.5）"""
+
+    def test_topic_without_tags_blocks(self, env_setup):
+        """タグなしトピック → block"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG_NO_TAGS}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG_NO_TAGS}",
+        )
+        assert result["decision"] == "block"
+        assert "タグがありません" in result["reason"]
+
+    def test_topic_with_tags_approves(self, env_setup):
+        """タグありトピック → approve"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,

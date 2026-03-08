@@ -47,23 +47,23 @@ class TestParseMetaTag:
 
     def test_valid_meta_tag(self):
         """正常なメタタグをパースできる"""
-        text = '<!-- [meta] subject: claude-code-exterminal-memory (id: 2) | topic: Stopフック実装 (id: 55) -->'
+        text = '<!-- [meta] topic: Stopフック実装 (id: 55) -->'
         result = parse_meta_tag(text)
-        assert result == {"found": True, "subject_name": "claude-code-exterminal-memory", "subject_id": 2, "topic_name": "Stopフック実装", "topic_id": 55}
+        assert result == {"found": True, "topic_name": "Stopフック実装", "topic_id": 55}
 
     def test_meta_tag_with_surrounding_text(self):
         """前後にテキストがあってもパースできる"""
         text = """これは応答の本文です。
 
-<!-- [meta] subject: テストサブジェクト (id: 10) | topic: テストトピック (id: 100) -->"""
+<!-- [meta] topic: テストトピック (id: 100) -->"""
         result = parse_meta_tag(text)
-        assert result == {"found": True, "subject_name": "テストサブジェクト", "subject_id": 10, "topic_name": "テストトピック", "topic_id": 100}
+        assert result == {"found": True, "topic_name": "テストトピック", "topic_id": 100}
 
     def test_meta_tag_with_japanese(self):
-        """日本語のサブジェクト名・トピック名をパースできる"""
-        text = '<!-- [meta] subject: 日本語サブジェクト (id: 5) | topic: 日本語トピック (id: 99) -->'
+        """日本語のトピック名をパースできる"""
+        text = '<!-- [meta] topic: 日本語トピック (id: 99) -->'
         result = parse_meta_tag(text)
-        assert result == {"found": True, "subject_name": "日本語サブジェクト", "subject_id": 5, "topic_name": "日本語トピック", "topic_id": 99}
+        assert result == {"found": True, "topic_name": "日本語トピック", "topic_id": 99}
 
     def test_no_meta_tag(self):
         """メタタグがない場合はNoneを返す"""
@@ -79,21 +79,27 @@ class TestParseMetaTag:
     def test_malformed_meta_tag(self):
         """不正なフォーマットはNoneを返す"""
         # idがない
-        text = '<!-- [meta] subject: test | topic: test -->'
+        text = '<!-- [meta] topic: test -->'
         result = parse_meta_tag(text)
         assert result is None
 
     def test_large_ids(self):
         """大きなID値もパースできる"""
-        text = '<!-- [meta] subject: big (id: 999999) | topic: numbers (id: 888888) -->'
+        text = '<!-- [meta] topic: numbers (id: 888888) -->'
         result = parse_meta_tag(text)
-        assert result == {"found": True, "subject_name": "big", "subject_id": 999999, "topic_name": "numbers", "topic_id": 888888}
+        assert result == {"found": True, "topic_name": "numbers", "topic_id": 888888}
 
     def test_name_with_parentheses(self):
         """名前に括弧が含まれていてもパースできる"""
-        text = '<!-- [meta] subject: テスト(仮) (id: 2) | topic: 機能追加(v2) (id: 55) -->'
+        text = '<!-- [meta] topic: 機能追加(v2) (id: 55) -->'
         result = parse_meta_tag(text)
-        assert result == {"found": True, "subject_name": "テスト(仮)", "subject_id": 2, "topic_name": "機能追加(v2)", "topic_id": 55}
+        assert result == {"found": True, "topic_name": "機能追加(v2)", "topic_id": 55}
+
+    def test_old_subject_format_not_matched(self):
+        """旧フォーマット（subject:付き）はマッチしない"""
+        text = '<!-- [meta] subject: old-format (id: 1) | topic: some topic (id: 2) -->'
+        result = parse_meta_tag(text)
+        assert result is None
 
     def test_old_project_format_not_matched(self):
         """旧フォーマット（project:）はマッチしない"""

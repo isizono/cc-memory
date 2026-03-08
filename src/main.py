@@ -151,7 +151,7 @@ If you don't output a meta tag, or output one with a wrong ID, your response wil
 NEVER GUESS OR PREDICT A TOPIC ID. A FABRICATED ID DIRECTLY POLLUTES THE USER'S CONTEXT AND IS EXTREMELY DISRUPTIVE.
 Only use IDs that already exist or that `add_topic` has just returned. No exceptions.
 
-Meta tag format: `<!-- [meta] subject: <name> (id: <N>) | topic: <name> (id: <M>) -->`
+Meta tag format: `<!-- [meta] topic: <name> (id: <N>) -->`
 
 ## Recording Decisions
 

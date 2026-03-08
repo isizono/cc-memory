@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from src.db import get_connection, init_database
-from hooks.hook_topic import check_topic_exists
+from hooks.hook_topic import check_topic_exists, check_topic_has_tags
 
 
 @pytest.fixture
@@ -15,22 +15,23 @@ def temp_db(monkeypatch, tmp_path):
     monkeypatch.setenv("DISCUSSION_DB_PATH", db_path)
     init_database()
 
-    # init_databaseで作成されたfirst_subjectのIDを取得
+    # テスト用のトピックを追加作成（subject_id は migration 0010 で削除済み）
     conn = get_connection()
     try:
-        cursor = conn.execute("SELECT id FROM subjects WHERE name = 'first_subject'")
-        row = cursor.fetchone()
-        subject_id = row[0] if row else 1
-
-        # テスト用のトピックを追加作成
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) VALUES (100, ?, 'Test Topic', 'Description')",
-            (subject_id,)
+            "INSERT INTO discussion_topics (id, title, description) VALUES (100, 'Test Topic', 'Description')"
         )
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) VALUES (200, ?, 'Another Topic', 'Description')",
-            (subject_id,)
+            "INSERT INTO discussion_topics (id, title, description) VALUES (200, 'Another Topic', 'Description')"
         )
+        # タグなしトピック
+        conn.execute(
+            "INSERT INTO discussion_topics (id, title, description) VALUES (300, 'No Tags Topic', 'Description')"
+        )
+        # テスト用タグを追加
+        conn.execute("INSERT OR IGNORE INTO tags (id, namespace, name) VALUES (1, 'domain', 'test')")
+        conn.execute("INSERT INTO topic_tags (topic_id, tag_id) VALUES (100, 1)")
+        conn.execute("INSERT INTO topic_tags (topic_id, tag_id) VALUES (200, 1)")
         conn.commit()
     finally:
         conn.close()
@@ -66,3 +67,25 @@ class TestCheckTopicExists:
         with patch("src.db.execute_query", side_effect=sqlite3.OperationalError("mocked DB error")):
             with pytest.raises(sqlite3.OperationalError):
                 check_topic_exists(100)
+
+
+class TestCheckTopicHasTags:
+    """check_topic_has_tags関数のテスト"""
+
+    def test_topic_with_tags(self, temp_db):
+        """タグがあるトピック -> True"""
+        assert check_topic_has_tags(100) is True
+
+    def test_topic_without_tags(self, temp_db):
+        """タグがないトピック -> False"""
+        assert check_topic_has_tags(300) is False
+
+    def test_nonexistent_topic(self, temp_db):
+        """存在しないトピック -> False（行がないのでCOUNT=0）"""
+        assert check_topic_has_tags(99999) is False
+
+    def test_db_error_raises_exception(self):
+        """DB接続エラー -> 例外raise"""
+        with patch("src.db.execute_query", side_effect=sqlite3.OperationalError("mocked DB error")):
+            with pytest.raises(sqlite3.OperationalError):
+                check_topic_has_tags(100)
