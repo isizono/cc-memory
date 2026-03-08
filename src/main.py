@@ -4,7 +4,6 @@ from fastmcp import FastMCP
 from typing import Literal, Optional
 from src.db import execute_query
 from src.services import (
-    subject_service,
     topic_service,
     discussion_log_service,
     decision_service,
@@ -15,86 +14,11 @@ from src.services import (
 
 logger = logging.getLogger(__name__)
 
-ACTIVE_SUBJECT_DAYS = 7
-RECENT_TOPICS_LIMIT = 3
-DESC_MAX_LEN = 30
-
-
-def _get_active_subjects() -> list[dict]:
-    """直近7日以内にトピック更新があったサブジェクトを取得する"""
-    rows = execute_query(
-        """
-        SELECT DISTINCT s.id, s.name
-        FROM subjects s
-        JOIN discussion_topics t ON s.id = t.subject_id
-        WHERE t.created_at > datetime('now', ? || ' days')
-        ORDER BY s.id
-        """,
-        (f"-{ACTIVE_SUBJECT_DAYS}",),
-    )
-    return [{"id": row["id"], "name": row["name"]} for row in rows]
-
-
-def _get_recent_topics(subject_id: int) -> list[dict]:
-    """サブジェクトの最新トピック3件を取得する"""
-    rows = execute_query(
-        """
-        SELECT id, title, description
-        FROM discussion_topics
-        WHERE subject_id = ?
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (subject_id, RECENT_TOPICS_LIMIT),
-    )
-    results = []
-    for row in rows:
-        desc = row["description"] or ""
-        if len(desc) > DESC_MAX_LEN:
-            desc = desc[:DESC_MAX_LEN] + "..."
-        results.append({"id": row["id"], "title": row["title"], "description": desc})
-    return results
-
-
-def _get_active_tasks(subject_id: int) -> list[dict]:
-    """サブジェクトのin_progress・pendingタスクを取得する"""
-    from src.services.task_service import get_tasks
-
-    result = get_tasks(subject_id=subject_id, status="active", limit=20)
-    if "error" in result:
-        return []
-    return [{"id": t["id"], "title": t["title"], "status": t["status"]} for t in result["tasks"]]
-
 
 def _build_active_context() -> str:
-    """アクティブサブジェクトのコンテキスト文字列を組み立てる"""
-    try:
-        subjects = _get_active_subjects()
-        if not subjects:
-            return ""
-
-        lines = ["# アクティブサブジェクト（直近7日）\n"]
-        for s in subjects:
-            lines.append(f"## {s['name']} (id: {s['id']})")
-
-            topics = _get_recent_topics(s["id"])
-            if topics:
-                lines.append("最新トピック:")
-                for t in topics:
-                    lines.append(f"- [{t['id']}] {t['title']}: {t['description']}")
-
-            tasks = _get_active_tasks(s["id"])
-            if tasks:
-                lines.append("アクティブタスク:")
-                for task in tasks:
-                    lines.append(f"- [{task['id']}] {task['title']} ({task['status']})")
-
-            lines.append("")
-
-        return "\n".join(lines)
-    except Exception:
-        logger.warning("Failed to build active context", exc_info=True)
-        return ""
+    """アクティブコンテキスト文字列を組み立てる（暫定: subjectsテーブル廃止後は別タスクで再設計）"""
+    # subjects廃止後の暫定実装: 空文字列を返す
+    return ""
 
 
 # Instructions injected into the MCP server
@@ -130,7 +54,7 @@ Retrieval flow: `search` -> `get_decisions` -> `get_logs`.
 ## Topic Management
 
 A topic represents a single concern, problem, or feature.
-Topics support parent-child relationships, so create child topics when a discussion branches off.
+Use tags to organize topics by domain and scope.
 
 Splitting topics later is far harder than splitting them upfront.
 When the conversation shifts to a different subject, create a new topic instead of overloading the existing one.
@@ -151,7 +75,7 @@ If you don't output a meta tag, or output one with a wrong ID, your response wil
 NEVER GUESS OR PREDICT A TOPIC ID. A FABRICATED ID DIRECTLY POLLUTES THE USER'S CONTEXT AND IS EXTREMELY DISRUPTIVE.
 Only use IDs that already exist or that `add_topic` has just returned. No exceptions.
 
-Meta tag format: `<!-- [meta] topic: <name> (id: <N>) -->`
+Meta tag format: `<!-- [meta] topic: <name> (id: <M>) -->`
 
 ## Recording Decisions
 
@@ -232,17 +156,14 @@ When working on a task, use the corresponding skill:
 
 Phase prefixes belong on **tasks only** — never on topics.
 Tasks define the purpose; topics are the discussion spaces that serve that purpose.
-Link tasks and topics using the `topic_id` parameter:
+Use tags to link tasks and topics to the same domain and scope:
 
 ```
-1. add_topic(subject_id=2, title="検索機能の要件整理", description="...")
+1. add_topic(title="検索機能の要件整理", description="...", tags=["domain:cc-memory", "scope:search"])
    -> topic id: 85
 
-2. add_task(subject_id=2, title="[議論] 検索機能の要件整理", description="...", topic_id=85)
+2. add_task(title="[議論] 検索機能の要件整理", description="...", tags=["domain:cc-memory", "scope:search"])
    -> task id: 50
-
-3. As discussion branches off, create child topics under topic 85.
-   The task (id:50) remains the single source of purpose.
 ```
 
 **Discussion phase**: Work with the user to articulate What they want, Why they want it,
@@ -286,49 +207,30 @@ mcp = FastMCP("cc-memory", instructions=build_instructions())
 
 # MCPツール定義
 @mcp.tool()
-def add_subject(
-    name: str,
-    description: str,
-) -> dict:
-    """
-    新しいサブジェクトを追加する。
-
-    Subjectとは「独立した関心事・取り組み」の単位。リポジトリではなく「何について話すか」で区切る。
-
-    新規作成すべきとき:
-    - 既存Subjectのどれとも関係ない話題が始まった
-    - 別プロダクト・サービスの話になった
-    - 新しい取り組みに着手する
-
-    既存Subjectを使うとき:
-    - 既存Subjectの関心事の「中」の話（→ add_topicで新規Topic）
-
-    判断に迷ったらユーザーに「どのSubjectで進める？」と確認すること。
-    """
-    return subject_service.add_subject(name, description)
-
-
-@mcp.tool()
-def list_subjects() -> dict:
-    """サブジェクト一覧を取得する。id + name のみ返す軽量版。"""
-    return subject_service.list_subjects()
-
-
-@mcp.tool()
 def add_topic(
-    subject_id: int,
     title: str,
     description: str,
-    parent_topic_id: Optional[int] = None,
+    tags: list[str],
 ) -> dict:
-    """新しい議論トピックを追加する。"""
-    return topic_service.add_topic(subject_id, title, description, parent_topic_id)
+    """新しい議論トピックを追加する。
+
+    tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
+    """
+    return topic_service.add_topic(title, description, tags)
 
 
 @mcp.tool()
-def add_log(topic_id: int, title: str, content: str) -> dict:
-    """トピックに議論ログを追加する。"""
-    return discussion_log_service.add_log(topic_id, title, content)
+def add_log(
+    topic_id: int,
+    title: str,
+    content: str,
+    tags: Optional[list[str]] = None,
+) -> dict:
+    """トピックに議論ログを追加する。
+
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    """
+    return discussion_log_service.add_log(topic_id, title, content, tags)
 
 
 @mcp.tool()
@@ -336,9 +238,13 @@ def add_decision(
     decision: str,
     reason: str,
     topic_id: int,
+    tags: Optional[list[str]] = None,
 ) -> dict:
-    """決定事項を記録する。"""
-    return decision_service.add_decision(decision, reason, topic_id)
+    """決定事項を記録する。
+
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    """
+    return decision_service.add_decision(decision, reason, topic_id, tags)
 
 
 @mcp.tool()
@@ -421,29 +327,25 @@ def get_by_id(
 
 @mcp.tool()
 def add_task(
-    subject_id: int,
     title: str,
     description: str,
-    topic_id: Optional[int] = None,
+    tags: list[str],
 ) -> dict:
     """
     新しいタスクを追加する。
 
     典型的な使い方:
-    - 作業タスクを作成: add_task(subject_id, "○○機能を実装", "詳細説明...")
-
-    ワークフロー位置: 作業タスクの整理・管理開始時
+    - 作業タスクを作成: add_task("○○機能を実装", "詳細説明...", ["domain:cc-memory"])
 
     Args:
-        subject_id: サブジェクトID
         title: タスクのタイトル
         description: タスクの詳細説明（必須）
-        topic_id: 関連トピックID（optional）
+        tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
 
     Returns:
         作成されたタスク情報
     """
-    return task_service.add_task(subject_id, title, description, topic_id)
+    return task_service.add_task(title, description, tags)
 
 
 @mcp.tool()
@@ -506,30 +408,6 @@ def update_task(
         更新されたタスク情報
     """
     return task_service.update_task(task_id, new_status, title, description, topic_id)
-
-
-@mcp.tool()
-def update_subject(
-    subject_id: int,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-) -> dict:
-    """
-    サブジェクトの名前・説明を更新する。
-
-    典型的な使い方:
-    - リネーム: update_subject(subject_id, name="新しい名前")
-    - 説明更新: update_subject(subject_id, description="新しい説明")
-
-    Args:
-        subject_id: サブジェクトID
-        name: 新しいサブジェクト名
-        description: 新しい説明
-
-    Returns:
-        更新されたサブジェクト情報
-    """
-    return subject_service.update_subject(subject_id, name, description)
 
 
 @mcp.tool()

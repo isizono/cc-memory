@@ -111,16 +111,16 @@ def env_setup(tmp_path):
     os.environ["DISCUSSION_DB_PATH"] = db_path
     init_database()
 
-    # テスト用トピックを追加（subject_id は migration 0010 で削除済み）
+    # テスト用トピックを追加（subjects廃止後: subject_idなしでINSERT）
     conn = get_connection()
     try:
         conn.execute(
             "INSERT INTO discussion_topics (id, title, description) "
-            "VALUES (100, 'test-topic', 'Description')"
+            "VALUES (100, 'test-topic', 'Description')",
         )
         conn.execute(
             "INSERT INTO discussion_topics (id, title, description) "
-            "VALUES (200, 'another-topic', 'Description')"
+            "VALUES (200, 'another-topic', 'Description')",
         )
         # タグなしトピック
         conn.execute(

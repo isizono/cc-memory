@@ -1,55 +1,78 @@
 """議論トピック管理サービス"""
 import sqlite3
 from typing import Optional
-from src.db import execute_insert, execute_query, row_to_dict
+from src.db import execute_query, get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
+from src.services.tag_service import (
+    validate_and_parse_tags,
+    ensure_tag_ids,
+    link_tags,
+    get_entity_tags,
+)
 
 
 def add_topic(
-    subject_id: int,
     title: str,
     description: str,
-    parent_topic_id: Optional[int] = None,
+    tags: list[str],
 ) -> dict:
     """
     新しい議論トピックを追加する。
 
     Args:
-        subject_id: サブジェクトID
         title: トピックのタイトル
         description: トピックの説明（必須）
-        parent_topic_id: 親トピックのID（未指定なら最上位トピック）
+        tags: タグ配列（必須、1個以上）
 
     Returns:
         作成されたトピック情報
     """
+    # タグのバリデーション
+    parsed_tags = validate_and_parse_tags(tags, required=True)
+    if isinstance(parsed_tags, dict):
+        return parsed_tags
+
+    conn = get_connection()
     try:
-        topic_id = execute_insert(
-            "INSERT INTO discussion_topics (subject_id, title, description, parent_topic_id) VALUES (?, ?, ?, ?)",
-            (subject_id, title, description, parent_topic_id),
+        # トピックをINSERT
+        cursor = conn.execute(
+            "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+            (title, description),
         )
+        topic_id = cursor.lastrowid
+
+        # タグをリンク
+        tag_ids = ensure_tag_ids(conn, parsed_tags)
+        link_tags(conn, "topic_tags", "topic_id", topic_id, tag_ids)
+
+        conn.commit()
+
+        # タグを取得
+        tag_strings = get_entity_tags(conn, "topic_tags", "topic_id", topic_id)
+
+        # 作成したトピックを取得
+        cursor = conn.execute(
+            "SELECT * FROM discussion_topics WHERE id = ?", (topic_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise Exception("Failed to retrieve created topic")
+
+        topic = row_to_dict(row)
 
         # embedding生成（失敗してもtopic作成には影響しない）
         generate_and_store_embedding("topic", topic_id, build_embedding_text(title, description))
 
-        # 作成したトピックを取得
-        rows = execute_query(
-            "SELECT * FROM discussion_topics WHERE id = ?", (topic_id,)
-        )
-        if rows:
-            topic = row_to_dict(rows[0])
-            return {
-                "topic_id": topic["id"],
-                "subject_id": topic["subject_id"],
-                "title": topic["title"],
-                "description": topic["description"],
-                "parent_topic_id": topic["parent_topic_id"],
-                "created_at": topic["created_at"],
-            }
-        else:
-            raise Exception("Failed to retrieve created topic")
+        return {
+            "topic_id": topic["id"],
+            "title": topic["title"],
+            "description": topic["description"],
+            "tags": tag_strings,
+            "created_at": topic["created_at"],
+        }
 
     except sqlite3.IntegrityError as e:
+        conn.rollback()
         return {
             "error": {
                 "code": "CONSTRAINT_VIOLATION",
@@ -57,12 +80,15 @@ def add_topic(
             }
         }
     except Exception as e:
+        conn.rollback()
         return {
             "error": {
                 "code": "DATABASE_ERROR",
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()
 
 
 def get_topics(

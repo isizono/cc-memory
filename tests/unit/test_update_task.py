@@ -3,8 +3,10 @@ import os
 import tempfile
 import pytest
 from src.db import init_database
-from src.services.subject_service import add_subject
 from src.services.task_service import add_task, update_task
+
+
+DEFAULT_TAGS = ["domain:test"]
 
 
 @pytest.fixture
@@ -20,19 +22,12 @@ def temp_db():
 
 
 @pytest.fixture
-def test_subject(temp_db):
-    """テスト用サブジェクトを作成する"""
-    result = add_subject(name="test-subject", description="Test subject")
-    return result["subject_id"]
-
-
-@pytest.fixture
-def test_task(test_subject):
+def test_task(temp_db):
     """テスト用タスクを作成する"""
     result = add_task(
-        subject_id=test_subject,
         title="Original Title",
         description="Original Description",
+        tags=DEFAULT_TAGS,
     )
     return result
 
@@ -85,6 +80,14 @@ class TestUpdateTaskSuccess:
         assert result["status"] == "in_progress"
         assert result["title"] == "Updated Title"
         assert result["description"] == "Updated Description"
+
+    def test_update_preserves_tags(self, test_task):
+        """update_taskでタグが保持される"""
+        result = update_task(test_task["task_id"], new_status="in_progress")
+
+        assert "error" not in result
+        assert "tags" in result
+        assert "domain:test" in result["tags"]
 
 
 # ========================================

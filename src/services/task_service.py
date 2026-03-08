@@ -4,8 +4,13 @@ import sqlite3
 from typing import Optional
 
 from src.db import execute_query, get_connection, row_to_dict
-from src.db_base import BaseDBService
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
+from src.services.tag_service import (
+    validate_and_parse_tags,
+    ensure_tag_ids,
+    link_tags,
+    get_entity_tags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,65 +22,69 @@ ACTIVE_STATUSES = ("in_progress", "pending")
 VALID_STATUSES = REAL_STATUSES | {"active"}
 
 
-class TaskDBService(BaseDBService):
-    """タスクのDB操作を管理するサービス"""
-
-    table_name = "tasks"
-
-
-# グローバルインスタンス
-_task_db = TaskDBService()
-
-
-def _task_to_response(task: dict) -> dict:
+def _task_to_response(task: dict, tags: list[str]) -> dict:
     """タスクデータをAPIレスポンス形式に変換"""
     return {
         "task_id": task["id"],
-        "subject_id": task["subject_id"],
         "title": task["title"],
         "description": task["description"],
         "status": task["status"],
-        "topic_id": task["topic_id"],
+        "tags": tags,
         "created_at": task["created_at"],
         "updated_at": task["updated_at"],
     }
 
 
-def add_task(subject_id: int, title: str, description: str, topic_id: Optional[int] = None) -> dict:
+def add_task(title: str, description: str, tags: list[str]) -> dict:
     """
     タスクを作成してIDを返す
 
     Args:
-        subject_id: サブジェクトID
         title: タスクのタイトル
         description: タスクの説明
-        topic_id: 関連トピックID（optional）
+        tags: タグ配列（必須、1個以上）
 
     Returns:
         作成されたタスク情報
     """
-    try:
-        insert_data = {
-            'subject_id': subject_id,
-            'title': title,
-            'description': description,
-            'status': 'pending',
-        }
-        if topic_id is not None:
-            insert_data['topic_id'] = topic_id
+    # タグのバリデーション
+    parsed_tags = validate_and_parse_tags(tags, required=True)
+    if isinstance(parsed_tags, dict):
+        return parsed_tags
 
-        task_id = _task_db._execute_insert(insert_data)
+    conn = get_connection()
+    try:
+        # タスクをINSERT
+        cursor = conn.execute(
+            "INSERT INTO tasks (title, description, status) VALUES (?, ?, ?)",
+            (title, description, 'pending'),
+        )
+        task_id = cursor.lastrowid
+
+        # タグをリンク
+        tag_ids = ensure_tag_ids(conn, parsed_tags)
+        link_tags(conn, "task_tags", "task_id", task_id, tag_ids)
+
+        conn.commit()
+
+        # タグを取得
+        tag_strings = get_entity_tags(conn, "task_tags", "task_id", task_id)
+
+        # 作成したタスクを取得
+        cursor = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise Exception("Failed to retrieve created task")
+
+        task = row_to_dict(row)
 
         # embedding生成（失敗してもtask作成には影響しない）
         generate_and_store_embedding("task", task_id, build_embedding_text(title, description))
 
-        # 作成したタスクを取得
-        task = _task_db._get_by_id(task_id)
-        if not task:
-            raise Exception("Failed to retrieve created task")
-        return _task_to_response(task)
+        return _task_to_response(task, tag_strings)
 
     except sqlite3.IntegrityError as e:
+        conn.rollback()
         return {
             "error": {
                 "code": "CONSTRAINT_VIOLATION",
@@ -83,12 +92,15 @@ def add_task(subject_id: int, title: str, description: str, topic_id: Optional[i
             }
         }
     except Exception as e:
+        conn.rollback()
         return {
             "error": {
                 "code": "DATABASE_ERROR",
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()
 
 
 def get_tasks(subject_id: int, status: str = "active", limit: int = 5) -> dict:
@@ -289,7 +301,10 @@ def update_task(
                 build_embedding_text(updated["title"], updated["description"]),
             )
 
-        return _task_to_response(row_to_dict(row))
+        # タグを取得
+        tag_strings = get_entity_tags(conn, "task_tags", "task_id", task_id)
+
+        return _task_to_response(row_to_dict(row), tag_strings)
 
     except sqlite3.IntegrityError as e:
         conn.rollback()

@@ -84,9 +84,8 @@ def init_database() -> None:
 
     conn = get_connection()
     try:
-        # 初期データの投入
-        # subjects テーブルは 0010_remove_subjects で削除済み
-        # discussion_topics に直接 first_topic を挿入する
+        # 初期データの投入（subjects廃止後はタグベースで初期トピックを作成）
+        # discussion_topicsにはtitleのUNIQUE制約がないため、存在確認してから挿入
         cursor = conn.execute(
             "SELECT id FROM discussion_topics WHERE title = 'first_topic'"
         )
@@ -97,6 +96,12 @@ def init_database() -> None:
                 VALUES ('first_topic', 'これはサンプルのトピックです。トピックは「この会話を一言で表すと？」に答えられる粒度が目安です。例：「[議論] ユーザー認証に使う外部サービスの選定」「[設計] エラーAPIのレスポンス形式」「[作業] 商品詳細→カート画面遷移時のクラッシュ」など。新しい話題が出てきたら、新しいトピックを作成してください。')
                 """
             )
+            topic_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            # 初期トピックにdomain:defaultタグを付与
+            from src.services.tag_service import ensure_tag_ids, link_tags
+            tag_ids = ensure_tag_ids(conn, [("domain", "default")])
+            link_tags(conn, "topic_tags", "topic_id", topic_id, tag_ids)
+
         # FTS5初期マイグレーション
         _migrate_fts5_search_index(conn)
 
@@ -128,23 +133,22 @@ def _migrate_fts5_search_index(conn: sqlite3.Connection) -> None:
 
     # topics
     conn.execute("""
-        INSERT OR IGNORE INTO search_index (source_type, source_id, subject_id, title)
-        SELECT 'topic', id, subject_id, title
+        INSERT OR IGNORE INTO search_index (source_type, source_id, title)
+        SELECT 'topic', id, title
         FROM discussion_topics
     """)
 
-    # decisions（topic_idは常にNOT NULL、JOINでsubject_idを取得）
+    # decisions（topic_idは常にNOT NULL）
     conn.execute("""
-        INSERT OR IGNORE INTO search_index (source_type, source_id, subject_id, title)
-        SELECT 'decision', d.id, dt.subject_id, d.decision
+        INSERT OR IGNORE INTO search_index (source_type, source_id, title)
+        SELECT 'decision', d.id, d.decision
         FROM decisions d
-        JOIN discussion_topics dt ON d.topic_id = dt.id
     """)
 
     # tasks
     conn.execute("""
-        INSERT OR IGNORE INTO search_index (source_type, source_id, subject_id, title)
-        SELECT 'task', id, subject_id, title
+        INSERT OR IGNORE INTO search_index (source_type, source_id, title)
+        SELECT 'task', id, title
         FROM tasks
     """)
 
