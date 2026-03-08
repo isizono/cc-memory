@@ -9,12 +9,13 @@ from src.services import embedding_service
 
 logger = logging.getLogger(__name__)
 
-VALID_TYPES = {'topic', 'decision', 'task'}
+VALID_TYPES = {'topic', 'decision', 'task', 'log'}
 
 TYPE_TO_TABLE = {
     'topic': 'discussion_topics',
     'decision': 'decisions',
     'task': 'tasks',
+    'log': 'discussion_logs',
 }
 
 # RRFパラメータ
@@ -183,7 +184,7 @@ def search(
     Args:
         subject_id: サブジェクトID
         keyword: 検索キーワード（2文字以上）
-        type_filter: 検索対象の絞り込み（'topic', 'decision', 'task'。未指定で全種類）
+        type_filter: 検索対象の絞り込み（'topic', 'decision', 'task', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
 
     Returns:
@@ -234,6 +235,17 @@ def search(
         effective_vec = vec_results if vec_results is not None else []
         results = _rrf_merge(fts_results, effective_vec, limit)
 
+        # titleが空のlogアイテムにcontentの先頭50文字をフォールバック表示
+        for item in results:
+            if item["type"] == "log" and not item["title"]:
+                rows = execute_query(
+                    "SELECT content FROM discussion_logs WHERE id = ?",
+                    (item["id"],)
+                )
+                if rows:
+                    content = rows[0]["content"]
+                    item["title"] = content[:50] if len(content) > 50 else content
+
         return {"results": results, "total_count": len(results)}
 
     except Exception as e:
@@ -275,6 +287,14 @@ def _format_row(type_name: str, data: dict) -> dict:
             "created_at": data["created_at"],
             "updated_at": data["updated_at"],
         }
+    elif type_name == 'log':
+        return {
+            "id": data["id"],
+            "topic_id": data["topic_id"],
+            "title": data["title"],
+            "content": data["content"],
+            "created_at": data["created_at"],
+        }
     return data
 
 
@@ -286,7 +306,7 @@ def get_by_id(type: str, id: int) -> dict:
     元データの完全な情報を取得する。
 
     Args:
-        type: データ種別（'topic', 'decision', 'task'）
+        type: データ種別（'topic', 'decision', 'task', 'log'）
         id: データのID
 
     Returns:

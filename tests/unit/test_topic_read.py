@@ -178,9 +178,9 @@ def test_get_logs_multiple(test_subject):
     topic = add_topic(subject_id=test_subject, title="Topic", description="Test description")
 
     # 3つのログを追加
-    log1 = add_log(topic_id=topic["topic_id"], content="Log 1")
-    log2 = add_log(topic_id=topic["topic_id"], content="Log 2")
-    log3 = add_log(topic_id=topic["topic_id"], content="Log 3")
+    log1 = add_log(topic_id=topic["topic_id"], title="Title 1", content="Log 1")
+    log2 = add_log(topic_id=topic["topic_id"], title="Title 2", content="Log 2")
+    log3 = add_log(topic_id=topic["topic_id"], title="Title 3", content="Log 3")
 
     result = get_logs(topic_id=topic["topic_id"])
 
@@ -199,7 +199,7 @@ def test_get_logs_with_pagination(test_subject):
     # 5つのログを追加
     logs = []
     for i in range(5):
-        log = add_log(topic_id=topic["topic_id"], content=f"Log {i}")
+        log = add_log(topic_id=topic["topic_id"], title=f"Title {i}", content=f"Log {i}")
         logs.append(log)
 
     # 最初の3件を取得

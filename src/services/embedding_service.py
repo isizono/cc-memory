@@ -226,6 +226,13 @@ def backfill_embeddings() -> int:
             LEFT JOIN vec_index vi ON si.id = vi.rowid
             WHERE si.source_type = 'task' AND vi.rowid IS NULL
         """,
+        "log": """
+            SELECT si.id, dl.title, dl.content
+            FROM search_index si
+            INNER JOIN discussion_logs dl ON si.source_id = dl.id
+            LEFT JOIN vec_index vi ON si.id = vi.rowid
+            WHERE si.source_type = 'log' AND vi.rowid IS NULL
+        """,
     }
 
     conn = get_connection()

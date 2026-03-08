@@ -72,12 +72,14 @@ def test_add_log_success(test_subject):
     # ログを追加
     result = add_log(
         topic_id=topic["topic_id"],
+        title="プランモードの議論",
         content="AI: プランモードは設計議論フェーズでは不要だと考えます\nユーザー：同意します。",
     )
 
     assert "error" not in result
     assert result["log_id"] > 0
     assert result["topic_id"] == topic["topic_id"]
+    assert result["title"] == "プランモードの議論"
     assert "AI: プランモードは設計議論フェーズでは不要だと考えます" in result["content"]
     assert "created_at" in result
 
@@ -87,9 +89,9 @@ def test_add_log_multiple(test_subject):
     topic = add_topic(subject_id=test_subject, title="テストトピック", description="Test description")
 
     # 3つのログを追加
-    log1 = add_log(topic_id=topic["topic_id"], content="ログ1")
-    log2 = add_log(topic_id=topic["topic_id"], content="ログ2")
-    log3 = add_log(topic_id=topic["topic_id"], content="ログ3")
+    log1 = add_log(topic_id=topic["topic_id"], title="タイトル1", content="ログ1")
+    log2 = add_log(topic_id=topic["topic_id"], title="タイトル2", content="ログ2")
+    log3 = add_log(topic_id=topic["topic_id"], title="タイトル3", content="ログ3")
 
     assert "error" not in log1
     assert "error" not in log2
@@ -99,7 +101,7 @@ def test_add_log_multiple(test_subject):
 
 def test_add_log_invalid_topic(test_subject):
     """存在しないトピックIDでエラーになる"""
-    result = add_log(topic_id=99999, content="test")
+    result = add_log(topic_id=99999, title="test title", content="test")
 
     assert "error" in result
     assert result["error"]["code"] == "CONSTRAINT_VIOLATION"
@@ -237,9 +239,9 @@ def test_on_delete_cascade_discussion_logs(test_subject):
     topic_id = topic["topic_id"]
 
     # discussion_logsを3件追加
-    add_log(topic_id=topic_id, content="ログ1: カスケードテスト")
-    add_log(topic_id=topic_id, content="ログ2: カスケードテスト")
-    add_log(topic_id=topic_id, content="ログ3: カスケードテスト")
+    add_log(topic_id=topic_id, title="カスケード1", content="ログ1: カスケードテスト")
+    add_log(topic_id=topic_id, title="カスケード2", content="ログ2: カスケードテスト")
+    add_log(topic_id=topic_id, title="カスケード3", content="ログ3: カスケードテスト")
 
     # 削除前に3件あることを確認
     assert _count_logs(topic_id) == 3

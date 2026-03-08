@@ -11,6 +11,7 @@ from src.services.subject_service import add_subject
 from src.services.topic_service import add_topic
 from src.services.decision_service import add_decision
 from src.services.task_service import add_task
+from src.services.discussion_log_service import add_log as add_log_entry
 from src.services.search_service import search, get_by_id
 import src.services.embedding_service as emb
 
@@ -425,3 +426,172 @@ def test_get_by_id_invalid_type(test_subject):
     assert "error" in result
     assert result["error"]["code"] == "INVALID_TYPE"
     assert "Invalid type: foo" in result["error"]["message"]
+
+
+# ========================================
+# discussion_logs 検索テスト
+# ========================================
+
+
+def test_search_trigger_sync_log(test_subject):
+    """トリガー同期の検証: logのINSERT後にsearchで見つかる"""
+    topic = add_topic(
+        subject_id=test_subject,
+        title="ログ検索テスト用トピック",
+        description="テスト用",
+    )
+    add_log_entry(
+        topic_id=topic["topic_id"],
+        title="トリガー同期ログテスト",
+        content="ログのトリガー同期を検証する内容",
+    )
+
+    result = search(subject_id=test_subject, keyword="トリガー同期ログテスト")
+
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    log_results = [r for r in result["results"] if r["type"] == "log"]
+    assert len(log_results) >= 1
+
+
+def test_search_type_filter_log(test_subject):
+    """type_filterの動作: type_filter='log'でlogのみ返る"""
+    topic = add_topic(
+        subject_id=test_subject,
+        title="ログフィルタテスト用トピック",
+        description="テスト用",
+    )
+    add_log_entry(
+        topic_id=topic["topic_id"],
+        title="ログフィルタテスト記録",
+        content="ログフィルタの動作を確認する",
+    )
+
+    result = search(subject_id=test_subject, keyword="ログフィルタテスト", type_filter="log")
+
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    for item in result["results"]:
+        assert item["type"] == "log"
+
+
+def test_search_cross_type_includes_log(test_subject):
+    """横断検索: logも含めてtopics, decisions, tasks, logsが検索対象になる"""
+    topic = add_topic(
+        subject_id=test_subject,
+        title="横断ログ検索テスト用トピック",
+        description="横断検索の動作を確認する",
+    )
+    add_decision(
+        topic_id=topic["topic_id"],
+        decision="横断ログ検索テスト決定事項",
+        reason="横断ログ検索テストのため",
+    )
+    add_task(
+        subject_id=test_subject,
+        title="横断ログ検索テストタスク",
+        description="横断ログ検索のタスク",
+    )
+    add_log_entry(
+        topic_id=topic["topic_id"],
+        title="横断ログ検索テスト記録",
+        content="横断ログ検索のログ内容",
+    )
+
+    result = search(subject_id=test_subject, keyword="横断ログ検索テスト")
+
+    assert "error" not in result
+    types_found = {r["type"] for r in result["results"]}
+    assert "topic" in types_found
+    assert "decision" in types_found
+    assert "task" in types_found
+    assert "log" in types_found
+
+
+def test_get_by_id_log(test_subject):
+    """log取得: typeとidから正しいデータが返る"""
+    topic = add_topic(
+        subject_id=test_subject,
+        title="取得テスト用トピック",
+        description="テスト用",
+    )
+    log = add_log_entry(
+        topic_id=topic["topic_id"],
+        title="取得テストログ",
+        content="取得テスト用のログ内容",
+    )
+
+    result = get_by_id(type="log", id=log["log_id"])
+
+    assert "error" not in result
+    assert result["type"] == "log"
+    assert result["data"]["id"] == log["log_id"]
+    assert result["data"]["title"] == "取得テストログ"
+    assert result["data"]["content"] == "取得テスト用のログ内容"
+    assert result["data"]["topic_id"] == topic["topic_id"]
+    assert "created_at" in result["data"]
+
+
+def test_search_log_title_fallback(test_subject):
+    """titleフォールバック: title空のlogでcontentの先頭50文字がtitleに入る"""
+    topic = add_topic(
+        subject_id=test_subject,
+        title="フォールバックテスト用トピック",
+        description="テスト用",
+    )
+    # title空のログを直接INSERTする（add_logはバリデーションで弾くため）
+    from src.db import execute_insert
+    execute_insert(
+        "INSERT INTO discussion_logs (topic_id, title, content) VALUES (?, ?, ?)",
+        (topic["topic_id"], "", "フォールバックテスト" + "あ" * 50),
+    )
+
+    result = search(subject_id=test_subject, keyword="フォールバックテスト")
+
+    assert "error" not in result
+    log_results = [r for r in result["results"] if r["type"] == "log"]
+    assert len(log_results) >= 1
+    # contentの先頭50文字がtitleに入っている
+    assert len(log_results[0]["title"]) == 50
+
+
+def test_search_log_title_fallback_short_content(test_subject):
+    """titleフォールバック: content50文字未満で全文がtitleに入る"""
+    topic = add_topic(
+        subject_id=test_subject,
+        title="短文フォールバックテスト用トピック",
+        description="テスト用",
+    )
+    # title空のログを直接INSERTする
+    from src.db import execute_insert
+    short_content = "短文フォールバックテスト内容"
+    execute_insert(
+        "INSERT INTO discussion_logs (topic_id, title, content) VALUES (?, ?, ?)",
+        (topic["topic_id"], "", short_content),
+    )
+
+    result = search(subject_id=test_subject, keyword="短文フォールバックテスト")
+
+    assert "error" not in result
+    log_results = [r for r in result["results"] if r["type"] == "log"]
+    assert len(log_results) >= 1
+    assert log_results[0]["title"] == short_content
+
+
+def test_add_log_empty_title_error(test_subject):
+    """バリデーション: title空文字でadd_logするとバリデーションエラー"""
+    topic = add_topic(
+        subject_id=test_subject,
+        title="バリデーションテスト用トピック",
+        description="テスト用",
+    )
+
+    result = add_log_entry(
+        topic_id=topic["topic_id"],
+        title="",
+        content="内容があってもtitleが空ならエラー",
+    )
+
+    assert "error" in result
+    assert result["error"]["code"] == "VALIDATION_ERROR"
+    assert "title must not be empty" in result["error"]["message"]

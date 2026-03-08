@@ -333,9 +333,9 @@ def add_topic(
 
 
 @mcp.tool()
-def add_log(topic_id: int, content: str) -> dict:
+def add_log(topic_id: int, title: str, content: str) -> dict:
     """トピックに議論ログを追加する。"""
-    return discussion_log_service.add_log(topic_id, content)
+    return discussion_log_service.add_log(topic_id, title, content)
 
 
 @mcp.tool()
@@ -396,7 +396,7 @@ def search(
     Args:
         subject_id: サブジェクトID
         keyword: 検索キーワード（3文字以上）
-        type_filter: 検索対象の絞り込み（'topic', 'decision', 'task'。未指定で全種類）
+        type_filter: 検索対象の絞り込み（'topic', 'decision', 'task', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
 
     Returns:
@@ -417,7 +417,7 @@ def get_by_id(
     元データの完全な情報を取得する。
 
     Args:
-        type: データ種別（'topic', 'decision', 'task'）
+        type: データ種別（'topic', 'decision', 'task', 'log'）
         id: データのID
 
     Returns:

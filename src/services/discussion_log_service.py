@@ -2,24 +2,37 @@
 import sqlite3
 from typing import Optional
 from src.db import execute_insert, execute_query, row_to_dict
+from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 
 
-def add_log(topic_id: int, content: str) -> dict:
+def add_log(topic_id: int, title: str, content: str) -> dict:
     """
     トピックに議論ログ（1やりとり）を追加する。
 
     Args:
         topic_id: 対象トピックのID
+        title: ログのタイトル（必須、空文字不可）
         content: 議論内容（マークダウン可）
 
     Returns:
         作成されたログ情報
     """
+    if not title or not title.strip():
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "title must not be empty"
+            }
+        }
+
     try:
         log_id = execute_insert(
-            "INSERT INTO discussion_logs (topic_id, content) VALUES (?, ?)",
-            (topic_id, content),
+            "INSERT INTO discussion_logs (topic_id, title, content) VALUES (?, ?, ?)",
+            (topic_id, title, content),
         )
+
+        # embedding生成（失敗してもlog作成には影響しない）
+        generate_and_store_embedding("log", log_id, build_embedding_text(title, content))
 
         # 作成したログを取得
         rows = execute_query(
@@ -30,6 +43,7 @@ def add_log(topic_id: int, content: str) -> dict:
             return {
                 "log_id": log["id"],
                 "topic_id": log["topic_id"],
+                "title": log["title"],
                 "content": log["content"],
                 "created_at": log["created_at"],
             }
@@ -99,6 +113,7 @@ def get_logs(
             logs.append({
                 "id": log["id"],
                 "topic_id": log["topic_id"],
+                "title": log["title"],
                 "content": log["content"],
                 "created_at": log["created_at"],
             })
