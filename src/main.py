@@ -2,7 +2,6 @@
 import logging
 from fastmcp import FastMCP
 from typing import Literal, Optional
-from src.db import execute_query
 from src.services import (
     topic_service,
     discussion_log_service,
@@ -11,14 +10,191 @@ from src.services import (
     task_service,
     knowledge_service,
 )
+from src.services.tag_service import list_tags as _list_tags
+from src.db import execute_query, row_to_dict
 
 logger = logging.getLogger(__name__)
 
+# アクティブコンテキスト用の定数
+ACTIVE_DAYS = 7
+RECENT_TOPICS_LIMIT = 3
+DESC_MAX_LEN = 30
+
+
+def _get_active_domains() -> list[dict]:
+    """直近7日でトピック更新があったdomain:タグを取得する。
+
+    Returns:
+        [{"tag_id": int, "name": str}, ...]（name順ソート）
+    """
+    rows = execute_query(
+        """
+        SELECT DISTINCT t.id AS tag_id, t.name
+        FROM tags t
+        JOIN topic_tags tt ON t.id = tt.tag_id
+        JOIN discussion_topics dt ON tt.topic_id = dt.id
+        WHERE t.namespace = 'domain'
+          AND dt.created_at > datetime('now', ? || ' days')
+        ORDER BY t.name
+        """,
+        (f"-{ACTIVE_DAYS}",),
+    )
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_recent_topics_by_tag(tag_id: int) -> list[dict]:
+    """domain:タグに紐づく最新トピック3件を取得する。
+
+    Args:
+        tag_id: タグID
+
+    Returns:
+        [{"id": int, "title": str, "description": str}, ...]（新しい順）
+    """
+    rows = execute_query(
+        """
+        SELECT dt.id, dt.title, dt.description
+        FROM discussion_topics dt
+        JOIN topic_tags tt ON dt.id = tt.topic_id
+        WHERE tt.tag_id = ?
+        ORDER BY dt.created_at DESC, dt.id DESC
+        LIMIT ?
+        """,
+        (tag_id, RECENT_TOPICS_LIMIT),
+    )
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_active_tasks_by_tag(tag_id: int) -> list[dict]:
+    """domain:タグに紐づくアクティブタスク（pending + in_progress）を取得する。
+
+    Args:
+        tag_id: タグID
+
+    Returns:
+        [{"id": int, "title": str, "status": str}, ...]（in_progress優先、updated_at降順）
+    """
+    rows = execute_query(
+        """
+        SELECT tk.id, tk.title, tk.status
+        FROM tasks tk
+        JOIN task_tags tkt ON tk.id = tkt.task_id
+        WHERE tkt.tag_id = ?
+          AND tk.status IN ('in_progress', 'pending')
+        ORDER BY CASE tk.status WHEN 'in_progress' THEN 0 ELSE 1 END,
+                 tk.updated_at DESC
+        """,
+        (tag_id,),
+    )
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_recent_non_domain_tags() -> list[str]:
+    """直近7日で使われたdomain:以外のタグをフラット列挙する。
+
+    topic_tags経由でトピックの作成日が直近7日のタグを取得する。
+
+    Returns:
+        ["scope:設計", "scope:実装", "mode:議論", "hooks", ...]（使用頻度降順）
+    """
+    rows = execute_query(
+        """
+        SELECT t.namespace, t.name, COUNT(DISTINCT tt.topic_id) AS freq
+        FROM tags t
+        JOIN topic_tags tt ON t.id = tt.tag_id
+        JOIN discussion_topics dt ON tt.topic_id = dt.id
+        WHERE t.namespace != 'domain'
+          AND dt.created_at > datetime('now', ? || ' days')
+        GROUP BY t.id
+        ORDER BY freq DESC, t.name ASC
+        """,
+        (f"-{ACTIVE_DAYS}",),
+    )
+    tags = []
+    for row in rows:
+        r = row_to_dict(row)
+        ns = r["namespace"]
+        name = r["name"]
+        if ns:
+            tags.append(f"{ns}:{name}")
+        else:
+            tags.append(name)
+    return tags
+
+
+def _truncate_desc(desc: str) -> str:
+    """descriptionをDESC_MAX_LEN文字に切り詰める。"""
+    if not desc:
+        return ""
+    if len(desc) <= DESC_MAX_LEN:
+        return desc
+    return desc[:DESC_MAX_LEN] + "..."
+
 
 def _build_active_context() -> str:
-    """アクティブコンテキスト文字列を組み立てる（暫定: subjectsテーブル廃止後は別タスクで再設計）"""
-    # subjects廃止後の暫定実装: 空文字列を返す
-    return ""
+    """アクティブコンテキスト文字列を組み立てる。
+
+    domain:タグごとに旧subject形式を再現（最新トピック3件 + アクティブタスク一覧）し、
+    末尾にdomain:以外のタグを直近7日の使用頻度でフラット列挙する。
+    """
+    try:
+        # domain:タグのセクション
+        domains = _get_active_domains()
+        domain_sections = []
+
+        for domain in domains:
+            tag_id = domain["tag_id"]
+            name = domain["name"]
+
+            topics = _get_recent_topics_by_tag(tag_id)
+            tasks = _get_active_tasks_by_tag(tag_id)
+
+            # トピックもタスクもなければスキップ
+            if not topics and not tasks:
+                continue
+
+            lines = [f"## {name} (domain)"]
+
+            if topics:
+                lines.append("最新トピック:")
+                for t in topics:
+                    desc = _truncate_desc(t["description"])
+                    desc_part = f": {desc}" if desc else ""
+                    lines.append(f"- [{t['id']}] {t['title']}{desc_part}")
+
+            if tasks:
+                lines.append("アクティブタスク:")
+                for t in tasks:
+                    lines.append(f"- [{t['id']}] {t['title']} ({t['status']})")
+
+            domain_sections.append("\n".join(lines))
+
+        # domain:以外のタグセクション
+        non_domain_tags = _get_recent_non_domain_tags()
+
+        # 何も表示するものがなければ空文字列
+        if not domain_sections and not non_domain_tags:
+            return ""
+
+        # 組み立て
+        parts = ["# アクティブコンテキスト", ""]
+        if domain_sections:
+            parts.append(domain_sections[0])
+            for section in domain_sections[1:]:
+                parts.append("")
+                parts.append(section)
+
+        if non_domain_tags:
+            if domain_sections:
+                parts.append("")
+            parts.append("## 最近使われたタグ")
+            parts.append(", ".join(non_domain_tags))
+
+        return "\n".join(parts) + "\n"
+
+    except Exception:
+        logger.exception("Failed to build active context")
+        return ""
 
 
 # Instructions injected into the MCP server
@@ -187,13 +363,15 @@ def add_decision(
 
 @mcp.tool()
 def get_topics(
-    subject_id: int,
+    tags: list[str],
     limit: int = 10,
     offset: int = 0,
 ) -> dict:
-    """サブジェクト内のトピックを新しい順に取得する（ページネーション付き）。
-    各トピックにancestorsフィールド（直親→祖先の順、最大5段、{id, title}のみ）を付与。"""
-    return topic_service.get_topics(subject_id, limit, offset)
+    """タグでフィルタリングしてトピックを新しい順に取得する（ページネーション付き）。
+
+    tags: タグ配列（必須、1個以上）。AND条件でフィルタ。例: ["domain:cc-memory"]
+    """
+    return topic_service.get_topics(tags, limit, offset)
 
 
 @mcp.tool()
@@ -218,28 +396,28 @@ def get_decisions(
 
 @mcp.tool()
 def search(
-    subject_id: int,
     keyword: str,
+    tags: Optional[list[str]] = None,
     type_filter: Optional[str] = None,
     limit: int = 10,
 ) -> dict:
     """
-    サブジェクト内をキーワードで横断検索する。
+    キーワードで横断検索する。
 
-    FTS5 trigramトークナイザによる部分文字列マッチ。3文字以上のキーワードを指定する。
-    結果はBM25スコア順でランキングされる。
-    詳細情報が必要な場合は get_by_id(type, id) で取得する。
+    FTS5 trigramとベクトル検索のハイブリッド。RRFスコアで統合・ランキング。
+    2文字以上のキーワードを指定する。
+    tagsでフィルタリング可能（AND結合）。未指定で全件検索。
 
     Args:
-        subject_id: サブジェクトID
-        keyword: 検索キーワード（3文字以上）
+        keyword: 検索キーワード（2文字以上）
+        tags: タグフィルタ（AND条件。未指定=全件検索）
         type_filter: 検索対象の絞り込み（'topic', 'decision', 'task', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
 
     Returns:
         検索結果一覧（type, id, title, score）
     """
-    return search_service.search(subject_id, keyword, type_filter, limit)
+    return search_service.search(keyword, tags, type_filter, limit)
 
 
 @mcp.tool()
@@ -261,6 +439,25 @@ def get_by_id(
         指定した種別に応じた詳細情報
     """
     return search_service.get_by_id(type, id)
+
+
+@mcp.tool()
+def list_tags(
+    namespace: Optional[str] = None,
+) -> dict:
+    """
+    タグ一覧をusage_count付きで取得する。
+
+    タグの利用状況を確認するときに使う。
+    namespaceでフィルタリング可能。
+
+    Args:
+        namespace: namespaceでフィルタ（"domain", "scope", "mode", ""。未指定で全タグ）
+
+    Returns:
+        タグ一覧（tag, id, namespace, name, usage_count）をusage_count降順で返す
+    """
+    return _list_tags(namespace)
 
 
 @mcp.tool()
@@ -288,23 +485,23 @@ def add_task(
 
 @mcp.tool()
 def get_tasks(
-    subject_id: int,
+    tags: list[str],
     status: str = "active",
     limit: int = 5,
 ) -> dict:
     """
-    タスク一覧を取得する（statusでフィルタリング可能）。
+    タスク一覧を取得する（tagsでフィルタリング、statusでフィルタリング可能）。
 
     典型的な使い方:
-    - 未着手+進行中のタスク確認: get_tasks(subject_id)
-    - 進行中のみ: get_tasks(subject_id, status="in_progress")
-    - 未着手のみ: get_tasks(subject_id, status="pending")
-    - 完了タスクの確認: get_tasks(subject_id, status="completed")
+    - 未着手+進行中のタスク確認: get_tasks(["domain:cc-memory"])
+    - 進行中のみ: get_tasks(["domain:cc-memory"], status="in_progress")
+    - 未着手のみ: get_tasks(["domain:cc-memory"], status="pending")
+    - 完了タスクの確認: get_tasks(["domain:cc-memory"], status="completed")
 
     ワークフロー位置: タスク状況の確認時
 
     Args:
-        subject_id: サブジェクトID
+        tags: タグ配列（必須、1個以上）。AND条件でフィルタ。例: ["domain:cc-memory"]
         status: フィルタするステータス（active/pending/in_progress/completed、デフォルト: active）
                 "active"はpending+in_progressの両方を返すエイリアス
         limit: 取得件数上限（デフォルト: 5）
@@ -312,7 +509,7 @@ def get_tasks(
     Returns:
         タスク一覧（total_countで該当ステータスの全件数を確認可能）
     """
-    return task_service.get_tasks(subject_id, status, limit)
+    return task_service.get_tasks(tags, status, limit)
 
 
 @mcp.tool()
@@ -321,17 +518,17 @@ def update_task(
     new_status: Optional[str] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
-    topic_id: Optional[int] = None,
+    tags: Optional[list[str]] = None,
 ) -> dict:
     """
-    タスクのステータス・タイトル・説明を更新する。
+    タスクのステータス・タイトル・説明・タグを更新する。
 
     典型的な使い方:
     - タスク開始: update_task(task_id, new_status="in_progress")
     - タスク完了: update_task(task_id, new_status="completed")
     - タイトル変更: update_task(task_id, title="新しいタイトル")
     - 説明更新: update_task(task_id, description="新しい説明")
-    - トピック紐付け: update_task(task_id, topic_id=85)
+    - タグ変更: update_task(task_id, tags=["domain:cc-memory", "scope:search"])
 
     ワークフロー位置: タスク進行状況の更新時
 
@@ -340,12 +537,12 @@ def update_task(
         new_status: 新しいステータス（pending/in_progress/completed）
         title: 新しいタイトル
         description: 新しい説明
-        topic_id: 関連トピックID
+        tags: 新しいタグ配列（指定時は全置換。1個以上必須）
 
     Returns:
         更新されたタスク情報
     """
-    return task_service.update_task(task_id, new_status, title, description, topic_id)
+    return task_service.update_task(task_id, new_status, title, description, tags)
 
 
 @mcp.tool()

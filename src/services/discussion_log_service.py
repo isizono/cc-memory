@@ -1,13 +1,14 @@
 """議論ログ管理サービス"""
 import sqlite3
 from typing import Optional
-from src.db import execute_query, get_connection, row_to_dict
+from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 from src.services.tag_service import (
     validate_and_parse_tags,
     ensure_tag_ids,
     link_tags,
     get_effective_tags,
+    get_effective_tags_batch,
 )
 
 
@@ -111,14 +112,15 @@ def get_logs(
         limit: 取得件数上限（最大30件）
 
     Returns:
-        議論ログ一覧
+        議論ログ一覧（各logにtags付き）
     """
+    conn = get_connection()
     try:
         # limitを30件に制限
         limit = min(limit, 30)
 
         if start_id is None:
-            rows = execute_query(
+            rows = conn.execute(
                 """
                 SELECT * FROM discussion_logs
                 WHERE topic_id = ?
@@ -126,9 +128,9 @@ def get_logs(
                 LIMIT ?
                 """,
                 (topic_id, limit),
-            )
+            ).fetchall()
         else:
-            rows = execute_query(
+            rows = conn.execute(
                 """
                 SELECT * FROM discussion_logs
                 WHERE topic_id = ? AND id >= ?
@@ -136,7 +138,10 @@ def get_logs(
                 LIMIT ?
                 """,
                 (topic_id, start_id, limit),
-            )
+            ).fetchall()
+
+        # バッチでタグ取得
+        tags_map = get_effective_tags_batch(conn, "log", topic_id)
 
         logs = []
         for row in rows:
@@ -146,6 +151,7 @@ def get_logs(
                 "topic_id": log["topic_id"],
                 "title": log["title"],
                 "content": log["content"],
+                "tags": tags_map.get(log["id"], []),
                 "created_at": log["created_at"],
             })
 
@@ -158,3 +164,5 @@ def get_logs(
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()

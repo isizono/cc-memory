@@ -48,16 +48,6 @@ def test_add_topic_with_invalid_namespace_returns_error(temp_db):
 # ========================================
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (search uses subject_id)")
-def test_search_with_percent_character(temp_db):
-    pass
-
-
-@pytest.mark.skip("Pending task #404/#405: read tool migration (search uses subject_id)")
-def test_search_with_underscore_character(temp_db):
-    pass
-
-
 # ========================================
 # パラメータバリデーションのテスト
 # ========================================

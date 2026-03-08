@@ -387,7 +387,3 @@ def test_on_delete_cascade_discussion_logs(temp_db):
     assert _count_logs(topic_id) == 0
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (search uses subject_id)")
-def test_on_delete_cascade_decisions_fts5_sync(temp_db):
-    """トピック削除時にdecisionsのFTS5インデックスもカスケード削除される"""
-    pass

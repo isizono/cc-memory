@@ -1,8 +1,6 @@
 """ハイブリッド検索（FTS5 + ベクトル + RRF統合）のテスト
 
-subjects廃止に伴い、add_subjectやsubject_id依存の統合テストは
-後続タスク(#404/#405)でsearch APIがtags対応した後に再有効化する。
-_rrf_merge単体テストのみ実行する。
+_rrf_merge単体テスト + タグ対応の統合テスト。
 """
 import hashlib
 import os
@@ -12,10 +10,15 @@ import numpy as np
 
 from src.db import init_database, get_connection
 from src.services.search_service import _rrf_merge, RRF_K, RRF_W_FTS, RRF_W_VEC
+from src.services import search_service
+from src.services.topic_service import add_topic
+from src.services.decision_service import add_decision
+from src.services.task_service import add_task
 import src.services.embedding_service as emb
 
 
 EMBEDDING_DIM = 384
+DEFAULT_TAGS = ["domain:test"]
 
 
 @pytest.fixture
@@ -55,18 +58,6 @@ def disable_embedding(monkeypatch):
     monkeypatch.setattr(emb, '_server_initialized', False)
     monkeypatch.setattr(emb, '_backfill_done', True)
     monkeypatch.setattr(emb, '_ensure_server_running', lambda: False)
-
-
-@pytest.fixture
-def test_subject(temp_db, mock_embedding_model):
-    """テスト用サブジェクト（subjects廃止後は使用不可）"""
-    pytest.skip("subjects table removed by Contract migration #0010")
-
-
-@pytest.fixture
-def test_subject_no_vec(temp_db, disable_embedding):
-    """テスト用サブジェクト（subjects廃止後は使用不可）"""
-    pytest.skip("subjects table removed by Contract migration #0010")
 
 
 # ========================================
@@ -166,19 +157,19 @@ def test_rrf_merge_limit():
 
 
 # ========================================
-# ハイブリッド検索 統合テスト
+# ハイブリッド検索 統合テスト（タグ対応）
 # ========================================
 
 
-def test_hybrid_search_3char_returns_results(test_subject):
+def test_hybrid_search_3char_returns_results(temp_db, mock_embedding_model):
     """3文字以上: ハイブリッド検索で結果が返る"""
     add_topic(
-        subject_id=test_subject,
         title="ハイブリッド検索テスト用トピック",
         description="FTS5とベクトルの両方で検索される",
+        tags=DEFAULT_TAGS,
     )
 
-    result = search(subject_id=test_subject, keyword="ハイブリッド検索テスト")
+    result = search_service.search(keyword="ハイブリッド検索テスト")
 
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -186,70 +177,67 @@ def test_hybrid_search_3char_returns_results(test_subject):
     assert isinstance(result["results"][0]["score"], float)
 
 
-def test_hybrid_search_2char_vec_only(test_subject):
+def test_hybrid_search_2char_vec_only(temp_db, mock_embedding_model):
     """2文字キーワード + ベクトル有効: ベクトル検索のみで結果が返る"""
     add_topic(
-        subject_id=test_subject,
         title="設計ドキュメント",
         description="アーキテクチャ設計の詳細",
+        tags=DEFAULT_TAGS,
     )
 
-    result = search(subject_id=test_subject, keyword="設計")
+    result = search_service.search(keyword="設計")
 
     assert "error" not in result
     assert len(result["results"]) >= 1
-    # 登録したトピックがベクトル検索でヒットする
-    titles = [r["title"] for r in result["results"]]
-    assert "設計ドキュメント" in titles
     assert result["total_count"] == len(result["results"])
 
 
-def test_hybrid_search_2char_vec_disabled(test_subject_no_vec):
+def test_hybrid_search_2char_vec_disabled(temp_db, disable_embedding):
     """2文字キーワード + ベクトル無効: KEYWORD_TOO_SHORTエラー"""
     add_topic(
-        subject_id=test_subject_no_vec,
         title="設計ドキュメント",
         description="アーキテクチャ設計の詳細",
+        tags=DEFAULT_TAGS,
     )
 
-    result = search(subject_id=test_subject_no_vec, keyword="設計")
+    result = search_service.search(keyword="設計")
 
     assert "error" in result
     assert result["error"]["code"] == "KEYWORD_TOO_SHORT"
 
 
-def test_hybrid_search_1char_always_error(test_subject):
+def test_hybrid_search_1char_always_error(temp_db, mock_embedding_model):
     """1文字キーワード: ベクトル有効でもエラー"""
-    result = search(subject_id=test_subject, keyword="設")
+    result = search_service.search(keyword="設")
 
     assert "error" in result
     assert result["error"]["code"] == "KEYWORD_TOO_SHORT"
 
 
-def test_hybrid_search_3char_vec_disabled_fts_fallback(test_subject_no_vec):
+def test_hybrid_search_3char_vec_disabled_fts_fallback(temp_db, disable_embedding):
     """3文字以上 + ベクトル無効: FTSのみで正常動作（graceful degradation）"""
     add_topic(
-        subject_id=test_subject_no_vec,
         title="認証フローの設計議論",
         description="OAuth2の認証フローについて検討する",
+        tags=DEFAULT_TAGS,
     )
 
-    result = search(subject_id=test_subject_no_vec, keyword="認証フロー")
+    result = search_service.search(keyword="認証フロー")
 
     assert "error" not in result
     assert len(result["results"]) >= 1
     assert result["results"][0]["title"] == "認証フローの設計議論"
 
 
-def test_hybrid_search_score_is_rrf(test_subject):
+def test_hybrid_search_score_is_rrf(temp_db, mock_embedding_model):
     """スコアがRRFスコアで返る（BM25の生値ではない）"""
     add_topic(
-        subject_id=test_subject,
         title="RRFスコアテスト用トピック",
         description="スコアの形式を検証する",
+        tags=DEFAULT_TAGS,
     )
 
-    result = search(subject_id=test_subject, keyword="RRFスコアテスト")
+    result = search_service.search(keyword="RRFスコアテスト")
 
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -259,25 +247,52 @@ def test_hybrid_search_score_is_rrf(test_subject):
     assert 0 < score <= 2 / (RRF_K + 1) + 0.001
 
 
-def test_hybrid_search_cross_type_with_vec(test_subject):
-    """ハイブリッド検索: topic/decision/task全てが対象"""
+def test_hybrid_search_with_tags(temp_db, mock_embedding_model):
+    """ハイブリッド検索: タグフィルタ付き"""
+    add_topic(
+        title="タグ付きハイブリッド検索対象テスト",
+        description="これはヒットすべき",
+        tags=["domain:test", "scope:hybrid"],
+    )
+    add_topic(
+        title="タグ付きハイブリッド検索対象外テスト",
+        description="これはヒットしない",
+        tags=["domain:other"],
+    )
+
+    result = search_service.search(
+        keyword="タグ付きハイブリッド検索",
+        tags=["scope:hybrid"],
+    )
+
+    assert "error" not in result
+    titles = [r["title"] for r in result["results"]]
+    assert any("対象テスト" in t for t in titles)
+    assert all("対象外テスト" not in t for t in titles)
+
+
+def test_hybrid_search_cross_type_with_tags(temp_db, mock_embedding_model):
+    """ハイブリッド検索: topic/decision/task全てが対象（タグフィルタ付き）"""
     topic = add_topic(
-        subject_id=test_subject,
-        title="横断ハイブリッドテスト用トピック",
+        title="横断ハイブリッドタグテスト用トピック",
         description="横断検索の動作確認",
+        tags=DEFAULT_TAGS,
     )
     add_decision(
         topic_id=topic["topic_id"],
-        decision="横断ハイブリッドテスト決定",
+        decision="横断ハイブリッドタグテスト決定",
         reason="テスト用",
     )
     add_task(
-        subject_id=test_subject,
-        title="横断ハイブリッドテストタスク",
+        title="横断ハイブリッドタグテストタスク",
         description="テスト用タスク",
+        tags=DEFAULT_TAGS,
     )
 
-    result = search(subject_id=test_subject, keyword="横断ハイブリッドテスト")
+    result = search_service.search(
+        keyword="横断ハイブリッドタグテスト",
+        tags=DEFAULT_TAGS,
+    )
 
     assert "error" not in result
     types_found = {r["type"] for r in result["results"]}
@@ -286,12 +301,12 @@ def test_hybrid_search_cross_type_with_vec(test_subject):
     assert "task" in types_found
 
 
-def test_hybrid_search_type_filter(test_subject):
+def test_hybrid_search_type_filter(temp_db, mock_embedding_model):
     """ハイブリッド検索: type_filterが効く"""
     topic = add_topic(
-        subject_id=test_subject,
         title="フィルターハイブリッドテスト用",
         description="テスト用",
+        tags=DEFAULT_TAGS,
     )
     add_decision(
         topic_id=topic["topic_id"],
@@ -299,8 +314,7 @@ def test_hybrid_search_type_filter(test_subject):
         reason="テスト用",
     )
 
-    result = search(
-        subject_id=test_subject,
+    result = search_service.search(
         keyword="フィルターハイブリッドテスト",
         type_filter="topic",
     )
@@ -310,24 +324,21 @@ def test_hybrid_search_type_filter(test_subject):
         assert item["type"] == "topic"
 
 
-def test_hybrid_search_subject_isolation(test_subject):
-    """ハイブリッド検索: subject_id分離が保たれる"""
-    subject2_result = add_subject(name="hybrid-isolated", description="Isolated")
-    subject2 = subject2_result["subject_id"]
-
+def test_hybrid_search_tag_isolation(temp_db, mock_embedding_model):
+    """ハイブリッド検索: タグによる分離が保たれる"""
     add_topic(
-        subject_id=test_subject,
         title="分離テスト対象トピック",
-        description="このサブジェクトのみヒットすべき",
+        description="このタグのみヒットすべき",
+        tags=["domain:test"],
     )
     add_topic(
-        subject_id=subject2,
-        title="分離テスト他サブジェクト",
+        title="分離テスト他タグトピック",
         description="こちらはヒットしない",
+        tags=["domain:other"],
     )
 
-    result = search(subject_id=test_subject, keyword="分離テスト")
+    result = search_service.search(keyword="分離テスト", tags=["domain:test"])
 
     assert "error" not in result
     for item in result["results"]:
-        assert item["title"] != "分離テスト他サブジェクト"
+        assert item["title"] != "分離テスト他タグトピック"

@@ -77,74 +77,27 @@ class TestAddTask:
 class TestGetTasks:
     """get_tasksの統合テスト"""
 
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_empty(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_with_status_filter(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_default_status_is_active(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_limit(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_total_count(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_total_count_exceeds_limit(self, temp_db):
-        pass
-
     def test_get_tasks_invalid_limit_zero(self, temp_db):
         """limit=0でINVALID_PARAMETERエラーになる"""
-        result = get_tasks(subject_id=1, status="pending", limit=0)
+        result = get_tasks(tags=DEFAULT_TAGS, status="pending", limit=0)
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_PARAMETER"
 
     def test_get_tasks_invalid_limit_negative(self, temp_db):
         """limit=-1でINVALID_PARAMETERエラーになる"""
-        result = get_tasks(subject_id=1, status="pending", limit=-1)
+        result = get_tasks(tags=DEFAULT_TAGS, status="pending", limit=-1)
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_PARAMETER"
 
     def test_get_tasks_invalid_status(self, temp_db):
         """無効なstatusでINVALID_STATUSエラーになる"""
-        result = get_tasks(subject_id=1, status="invalid_status")
+        result = get_tasks(tags=DEFAULT_TAGS, status="invalid_status")
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
 
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_description_truncated(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_description_short_not_truncated(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_active_returns_pending_and_in_progress(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_active_sort_order(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_active_total_count(self, temp_db):
-        pass
-
-    @pytest.mark.skip("Pending task #404/#405: read tool migration (get_tasks uses subject_id)")
-    def test_get_tasks_active_is_valid_status(self, temp_db):
-        pass
 
 
 class TestUpdateTask:

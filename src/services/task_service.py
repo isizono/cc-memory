@@ -3,13 +3,15 @@ import logging
 import sqlite3
 from typing import Optional
 
-from src.db import execute_query, get_connection, row_to_dict
+from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 from src.services.tag_service import (
     validate_and_parse_tags,
     ensure_tag_ids,
+    resolve_tag_ids,
     link_tags,
     get_entity_tags,
+    get_entity_tags_batch,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,12 +105,12 @@ def add_task(title: str, description: str, tags: list[str]) -> dict:
         conn.close()
 
 
-def get_tasks(subject_id: int, status: str = "active", limit: int = 5) -> dict:
+def get_tasks(tags: list[str], status: str = "active", limit: int = 5) -> dict:
     """
-    タスク一覧を取得（statusでフィルタリング）
+    タスク一覧を取得（tagsでフィルタリング、statusでフィルタリング）
 
     Args:
-        subject_id: サブジェクトID
+        tags: タグ配列（必須、1個以上。AND条件でフィルタ）
         status: フィルタするステータス（active/pending/in_progress/completed、デフォルト: active）
                 "active"はpending+in_progressの両方を返すエイリアス
         limit: 取得件数上限（デフォルト: 5）
@@ -116,6 +118,11 @@ def get_tasks(subject_id: int, status: str = "active", limit: int = 5) -> dict:
     Returns:
         タスク一覧とtotal_count
     """
+    # タグのバリデーション
+    parsed_tags = validate_and_parse_tags(tags, required=True)
+    if isinstance(parsed_tags, dict):
+        return parsed_tags
+
     if limit < 1:
         return {
             "error": {
@@ -132,46 +139,74 @@ def get_tasks(subject_id: int, status: str = "active", limit: int = 5) -> dict:
             }
         }
 
+    conn = get_connection()
     try:
+        # タグIDを取得（読み取り専用、INSERTしない）
+        tag_ids = resolve_tag_ids(conn, parsed_tags)
+        if not tag_ids or len(tag_ids) < len(parsed_tags):
+            return {"tasks": [], "total_count": 0}
+        tag_placeholders = ",".join("?" * len(tag_ids))
+
+        # AND結合: 全タグを持つtaskのみ
+        task_ids_rows = conn.execute(
+            f"""
+            SELECT task_id FROM task_tags
+            WHERE tag_id IN ({tag_placeholders})
+            GROUP BY task_id
+            HAVING COUNT(DISTINCT tag_id) = ?
+            """,
+            (*tag_ids, len(tag_ids)),
+        ).fetchall()
+
+        task_ids = [row["task_id"] for row in task_ids_rows]
+
+        if not task_ids:
+            return {"tasks": [], "total_count": 0}
+
+        id_placeholders = ",".join("?" * len(task_ids))
+
         # WHERE句・ORDER BY句・パラメータをステータスに応じて組み立て
         if status == "active":
-            placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
-            where_clause = f"status IN ({placeholders})"
-            where_params = (subject_id, *ACTIVE_STATUSES)
+            status_placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
+            where_clause = f"id IN ({id_placeholders}) AND status IN ({status_placeholders})"
+            where_params = (*task_ids, *ACTIVE_STATUSES)
             order_clause = "CASE status WHEN 'in_progress' THEN 0 ELSE 1 END, updated_at DESC"
         else:
-            where_clause = "status = ?"
-            where_params = (subject_id, status)
+            where_clause = f"id IN ({id_placeholders}) AND status = ?"
+            where_params = (*task_ids, status)
             order_clause = "created_at ASC, id ASC"
 
         # 1. total_count取得（LIMITなし）
-        count_rows = execute_query(
-            f"SELECT COUNT(*) as count FROM tasks WHERE subject_id = ? AND {where_clause}",
+        count_row = conn.execute(
+            f"SELECT COUNT(*) as count FROM tasks WHERE {where_clause}",
             where_params,
-        )
-        total_count = count_rows[0]["count"]
+        ).fetchone()
+        total_count = count_row["count"]
 
         # 2. LIMIT付きでデータ取得
-        rows = execute_query(
+        rows = conn.execute(
             f"""
             SELECT * FROM tasks
-            WHERE subject_id = ? AND {where_clause}
+            WHERE {where_clause}
             ORDER BY {order_clause}
             LIMIT ?
             """,
             (*where_params, limit),
-        )
+        ).fetchall()
+
+        # バッチでタグ取得
+        fetched_ids = [row["id"] for row in rows]
+        tags_map = get_entity_tags_batch(conn, "task_tags", "task_id", fetched_ids)
 
         tasks = []
         for row in rows:
             task = row_to_dict(row)
             tasks.append({
                 "id": task["id"],
-                "subject_id": task["subject_id"],
                 "title": task["title"],
                 "description": (task["description"] or "")[:100],
                 "status": task["status"],
-                "topic_id": task["topic_id"],
+                "tags": tags_map.get(task["id"], []),
                 "created_at": task["created_at"],
                 "updated_at": task["updated_at"],
             })
@@ -185,6 +220,8 @@ def get_tasks(subject_id: int, status: str = "active", limit: int = 5) -> dict:
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()
 
 
 def update_task(
@@ -192,29 +229,36 @@ def update_task(
     new_status: Optional[str] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
-    topic_id: Optional[int] = None,
+    tags: Optional[list[str]] = None,
 ) -> dict:
     """
-    タスクを更新する（ステータス、タイトル、説明、関連トピックを変更可能）
+    タスクを更新する（ステータス、タイトル、説明、タグを変更可能）
 
     Args:
         task_id: タスクID
         new_status: 新しいステータス（optional）
         title: 新しいタイトル（optional）
         description: 新しい説明（optional）
-        topic_id: 関連トピックID（optional）
+        tags: 新しいタグ配列（optional、指定時は全置換。1個以上必須）
 
     Returns:
         更新されたタスク情報
     """
     # 最低1つのオプショナルパラメータが必要
-    if new_status is None and title is None and description is None and topic_id is None:
+    if new_status is None and title is None and description is None and tags is None:
         return {
             "error": {
                 "code": "VALIDATION_ERROR",
-                "message": "At least one of new_status, title, description, or topic_id must be provided",
+                "message": "At least one of new_status, title, description, or tags must be provided",
             }
         }
+
+    # タグのバリデーション（tags指定時のみ）
+    parsed_tags = None
+    if tags is not None:
+        parsed_tags = validate_and_parse_tags(tags, required=True)
+        if isinstance(parsed_tags, dict):
+            return parsed_tags
 
     # ステータスバリデーション
     if new_status is not None and new_status not in REAL_STATUSES:
@@ -271,9 +315,11 @@ def update_task(
             set_parts.append("description = ?")
             values.append(description)
 
-        if topic_id is not None:
-            set_parts.append("topic_id = ?")
-            values.append(topic_id)
+        # タグの全置換（tags指定時のみ）
+        if parsed_tags is not None:
+            conn.execute("DELETE FROM task_tags WHERE task_id = ?", (task_id,))
+            tag_ids = ensure_tag_ids(conn, parsed_tags)
+            link_tags(conn, "task_tags", "task_id", task_id, tag_ids)
 
         set_parts.append("updated_at = CURRENT_TIMESTAMP")
 

@@ -164,3 +164,38 @@ class TestUpdateTaskError:
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
+
+
+# ========================================
+# タグ更新テスト
+# ========================================
+
+
+class TestUpdateTaskTags:
+    """update_taskのタグ更新テスト"""
+
+    def test_update_tags(self, test_task):
+        """タグ全置換"""
+        result = update_task(test_task["task_id"], tags=["scope:search", "domain:cc-memory"])
+
+        assert "error" not in result
+        assert "tags" in result
+        assert "scope:search" in result["tags"]
+        assert "domain:cc-memory" in result["tags"]
+        # 旧タグは除去されている
+        assert "domain:test" not in result["tags"]
+
+    def test_update_tags_empty_list(self, test_task):
+        """tags=[]でTAGS_REQUIREDエラー"""
+        result = update_task(test_task["task_id"], tags=[])
+
+        assert "error" in result
+        assert result["error"]["code"] == "TAGS_REQUIRED"
+
+    def test_update_tags_none(self, test_task):
+        """tags=None（未指定）ではタグ変更なし"""
+        # まずステータスだけ変更
+        result = update_task(test_task["task_id"], new_status="in_progress")
+
+        assert "error" not in result
+        assert result["tags"] == ["domain:test"]  # 元のタグが保持される

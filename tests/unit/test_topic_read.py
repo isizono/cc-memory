@@ -1,9 +1,7 @@
 """トピック管理API（読み取り系）のテスト
 
-get_topicsはsubject_idパラメータを使用しており、後続タスク(#404)でtags引数に切り替える。
-ここではadd_topic/add_log/add_decisionの書き込み呼び出し修正のみ行い、
-get_topicsのテストはスキップする。
-get_logs/get_decisionsは引数変更なしのため、書き込み部分のみ修正して動作させる。
+get_topicsはtags引数でフィルタリングする。
+get_logs/get_decisionsは各アイテムにtagsフィールドを含む。
 """
 import os
 import tempfile
@@ -35,53 +33,139 @@ def temp_db():
 
 # ========================================
 # get-topics のテスト
-# 後続タスク(#404)でget_topicsのsubject_id → tagsに切り替えた後に再有効化
 # ========================================
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
 def test_get_topics_empty(temp_db):
-    pass
+    """tags指定だがマッチするtopicが0件"""
+    result = get_topics(tags=["domain:nonexistent"])
+
+    assert "error" not in result
+    assert result["topics"] == []
+    assert result["total_count"] == 0
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
 def test_get_topics_desc_order(temp_db):
-    pass
+    """複数topic作成、降順確認"""
+    add_topic(title="Topic A", description="First", tags=DEFAULT_TAGS)
+    add_topic(title="Topic B", description="Second", tags=DEFAULT_TAGS)
+    add_topic(title="Topic C", description="Third", tags=DEFAULT_TAGS)
+
+    result = get_topics(tags=DEFAULT_TAGS)
+
+    assert "error" not in result
+    # init_databaseで作成されるfirst_topicは"domain:default"なのでDEFAULT_TAGSには含まれない
+    assert len(result["topics"]) == 3
+    # 降順（新しい順）
+    assert result["topics"][0]["title"] == "Topic C"
+    assert result["topics"][1]["title"] == "Topic B"
+    assert result["topics"][2]["title"] == "Topic A"
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
 def test_get_topics_pagination(temp_db):
-    pass
+    """offset/limit動作確認"""
+    for i in range(5):
+        add_topic(title=f"Topic {i}", description=f"Desc {i}", tags=DEFAULT_TAGS)
+
+    result = get_topics(tags=DEFAULT_TAGS, limit=2, offset=0)
+
+    assert "error" not in result
+    assert len(result["topics"]) == 2
+    assert result["total_count"] == 5
+
+    result2 = get_topics(tags=DEFAULT_TAGS, limit=2, offset=2)
+    assert len(result2["topics"]) == 2
+
+    result3 = get_topics(tags=DEFAULT_TAGS, limit=2, offset=4)
+    assert len(result3["topics"]) == 1
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
 def test_get_topics_offset_beyond_total(temp_db):
-    pass
+    """offset超過で空配列"""
+    add_topic(title="Only One", description="Desc", tags=DEFAULT_TAGS)
+
+    result = get_topics(tags=DEFAULT_TAGS, offset=100)
+
+    assert "error" not in result
+    assert result["topics"] == []
+    assert result["total_count"] == 1
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
 def test_get_topics_invalid_limit(temp_db):
-    pass
+    """limit=0でINVALID_PARAMETERエラー"""
+    result = get_topics(tags=DEFAULT_TAGS, limit=0)
+
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_PARAMETER"
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
 def test_get_topics_invalid_offset(temp_db):
-    pass
+    """offset=-1でINVALID_PARAMETERエラー"""
+    result = get_topics(tags=DEFAULT_TAGS, offset=-1)
+
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_PARAMETER"
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
-def test_get_topics_ancestors_root(temp_db):
-    pass
+def test_get_topics_tags_required(temp_db):
+    """tags=[]でTAGS_REQUIREDエラー"""
+    result = get_topics(tags=[])
+
+    assert "error" in result
+    assert result["error"]["code"] == "TAGS_REQUIRED"
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
-def test_get_topics_ancestors_3_levels(temp_db):
-    pass
+def test_get_topics_nonexistent_tag(temp_db):
+    """存在しないタグで空配列"""
+    add_topic(title="Topic", description="Desc", tags=DEFAULT_TAGS)
+
+    result = get_topics(tags=["domain:does-not-exist"])
+
+    assert "error" not in result
+    assert result["topics"] == []
+    assert result["total_count"] == 0
 
 
-@pytest.mark.skip("Pending task #404/#405: read tool migration (get_topics uses subject_id)")
-def test_get_topics_no_parent_topic_id_field(temp_db):
-    pass
+def test_get_topics_partial_nonexistent_tags(temp_db):
+    """存在するタグと存在しないタグの混在で空配列が返る"""
+    add_topic(title="Topic", description="Desc", tags=["domain:test"])
+
+    result = get_topics(tags=["domain:test", "domain:nonexistent"])
+
+    assert "error" not in result
+    assert result["topics"] == []
+    assert result["total_count"] == 0
+
+
+def test_get_topics_and_filter(temp_db):
+    """複数タグAND条件"""
+    add_topic(title="Both Tags", description="Desc", tags=["domain:test", "scope:search"])
+    add_topic(title="Only domain", description="Desc", tags=["domain:test"])
+    add_topic(title="Only scope", description="Desc", tags=["scope:search"])
+
+    result = get_topics(tags=["domain:test", "scope:search"])
+
+    assert "error" not in result
+    assert result["total_count"] == 1
+    assert result["topics"][0]["title"] == "Both Tags"
+
+
+def test_get_topics_has_tags_field(temp_db):
+    """各topicにtags付き"""
+    add_topic(title="Tagged Topic", description="Desc", tags=["domain:test", "scope:search"])
+
+    result = get_topics(tags=["domain:test"])
+
+    assert "error" not in result
+    assert len(result["topics"]) == 1
+    topic = result["topics"][0]
+    assert "tags" in topic
+    assert "domain:test" in topic["tags"]
+    assert "scope:search" in topic["tags"]
+    # 旧フィールドが除去されている
+    assert "subject_id" not in topic
+    assert "parent_topic_id" not in topic
+    assert "ancestors" not in topic
 
 
 # ========================================
@@ -139,6 +223,20 @@ def test_get_logs_with_pagination(temp_db):
     )
     assert len(result2["logs"]) == 2
     assert result2["logs"][0]["id"] == logs[3]["log_id"]
+
+
+def test_get_logs_with_tags(temp_db):
+    """各logにtags含む（topicタグ継承）"""
+    topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
+    add_log(topic_id=topic["topic_id"], title="Log 1", content="Content 1")
+
+    result = get_logs(topic_id=topic["topic_id"])
+
+    assert "error" not in result
+    assert len(result["logs"]) == 1
+    log = result["logs"][0]
+    assert "tags" in log
+    assert "domain:test" in log["tags"]
 
 
 # ========================================
@@ -237,3 +335,39 @@ def test_get_decisions_with_pagination(temp_db):
     )
     assert len(result2["decisions"]) == 2
     assert result2["decisions"][0]["id"] == decisions[3]["decision_id"]
+
+
+def test_get_decisions_with_tags(temp_db):
+    """各decisionにtags含む（topicタグ継承）"""
+    topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
+    add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason 1")
+
+    result = get_decisions(topic_id=topic["topic_id"])
+
+    assert "error" not in result
+    assert len(result["decisions"]) == 1
+    dec = result["decisions"][0]
+    assert "tags" in dec
+    assert "domain:test" in dec["tags"]
+
+
+def test_get_decisions_with_extra_tags(temp_db):
+    """decision個別タグ+topic継承"""
+    topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
+    add_decision(
+        topic_id=topic["topic_id"],
+        decision="Dec with extra tags",
+        reason="Reason",
+        tags=["scope:search"],
+    )
+
+    result = get_decisions(topic_id=topic["topic_id"])
+
+    assert "error" not in result
+    assert len(result["decisions"]) == 1
+    dec = result["decisions"][0]
+    assert "tags" in dec
+    # topicのタグを継承
+    assert "domain:test" in dec["tags"]
+    # decision個別のタグも含む
+    assert "scope:search" in dec["tags"]

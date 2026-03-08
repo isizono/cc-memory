@@ -1,13 +1,14 @@
 """決定事項管理サービス"""
 import sqlite3
 from typing import Optional
-from src.db import execute_query, get_connection, row_to_dict
+from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 from src.services.tag_service import (
     validate_and_parse_tags,
     ensure_tag_ids,
     link_tags,
     get_effective_tags,
+    get_effective_tags_batch,
 )
 
 
@@ -103,18 +104,19 @@ def get_decisions(
         limit: 取得件数上限（最大30件）
 
     Returns:
-        決定事項一覧
+        決定事項一覧（各decisionにtags付き）
     """
+    conn = get_connection()
     try:
         # limitを30件に制限
         limit = min(limit, 30)
 
         # topic_nameを取得
-        topic_rows = execute_query(
+        topic_row = conn.execute(
             "SELECT title FROM discussion_topics WHERE id = ?",
             (topic_id,),
-        )
-        topic_name = topic_rows[0]["title"] if topic_rows else None
+        ).fetchone()
+        topic_name = topic_row["title"] if topic_row else None
 
         if topic_name is None:
             return {
@@ -124,7 +126,7 @@ def get_decisions(
             }
 
         if start_id is None:
-            rows = execute_query(
+            rows = conn.execute(
                 """
                 SELECT * FROM decisions
                 WHERE topic_id = ?
@@ -132,9 +134,9 @@ def get_decisions(
                 LIMIT ?
                 """,
                 (topic_id, limit),
-            )
+            ).fetchall()
         else:
-            rows = execute_query(
+            rows = conn.execute(
                 """
                 SELECT * FROM decisions
                 WHERE topic_id = ? AND id >= ?
@@ -142,7 +144,10 @@ def get_decisions(
                 LIMIT ?
                 """,
                 (topic_id, start_id, limit),
-            )
+            ).fetchall()
+
+        # バッチでタグ取得
+        tags_map = get_effective_tags_batch(conn, "decision", topic_id)
 
         decisions = []
         for row in rows:
@@ -151,6 +156,7 @@ def get_decisions(
                 "id": dec["id"],
                 "decision": dec["decision"],
                 "reason": dec["reason"],
+                "tags": tags_map.get(dec["id"], []),
                 "created_at": dec["created_at"],
             })
 
@@ -167,3 +173,5 @@ def get_decisions(
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()
