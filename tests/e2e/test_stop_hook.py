@@ -737,10 +737,10 @@ class TestTopicToolCallCheck:
 
 
 class TestTopicTagsCheck:
-    """topic_tagsタグ存在チェック（ステップ5.5）"""
+    """topic_tagsタグ存在チェック（ステップ6）"""
 
-    def test_topic_without_tags_approves(self, env_setup):
-        """タグなしトピック → approve（stderrにwarning出力）"""
+    def test_topic_without_tags_blocks(self, env_setup):
+        """タグなしトピック → block"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -751,14 +751,13 @@ class TestTopicTagsCheck:
             transcript,
         )
 
-        result, stderr = _run_stop_hook(
+        result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
             last_assistant_message=f"response\n{META_TAG_NO_TAGS}",
-            return_stderr=True,
         )
-        assert result["decision"] == "approve"
-        assert "topic_id=300" in stderr
-        assert "タグがありません" in stderr
+        assert result["decision"] == "block"
+        assert "タグがありません" in result["reason"]
+        assert "add_topic" in result["reason"]
 
     def test_topic_with_tags_approves(self, env_setup):
         """タグありトピック → approve"""
