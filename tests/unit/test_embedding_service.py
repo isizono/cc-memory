@@ -6,7 +6,6 @@ import pytest
 import numpy as np
 
 from src.db import init_database, get_connection, execute_query
-from src.services.subject_service import add_subject
 from src.services.topic_service import add_topic
 from src.services.decision_service import add_decision
 from src.services.task_service import add_task
@@ -14,6 +13,7 @@ import src.services.embedding_service as emb
 
 
 EMBEDDING_DIM = 384
+DEFAULT_TAGS = ["domain:test"]
 
 
 @pytest.fixture
@@ -45,13 +45,6 @@ def mock_embedding_server(monkeypatch):
     monkeypatch.setattr(emb, '_server_initialized', True)
     monkeypatch.setattr(emb, '_backfill_done', True)
     yield
-
-
-@pytest.fixture
-def test_subject(temp_db, mock_embedding_server):
-    """テスト用サブジェクトを作成する"""
-    result = add_subject(name="test-emb-subject", description="Embedding test subject")
-    return result["subject_id"]
 
 
 # ========================================
@@ -168,12 +161,10 @@ def test_ensure_initialized_only_once(temp_db, monkeypatch):
 
 def test_insert_embedding_adds_to_vec_index(temp_db, mock_embedding_server):
     """insert_embedding: vec_indexにレコードが追加される"""
-    subject = add_subject(name="insert-emb-test", description="Test")
-    subject_id = subject["subject_id"]
     topic = add_topic(
-        subject_id=subject_id,
         title="テストトピック",
         description="テスト説明",
+        tags=DEFAULT_TAGS,
     )
 
     # search_indexのIDを取得
@@ -199,12 +190,12 @@ def test_insert_embedding_adds_to_vec_index(temp_db, mock_embedding_server):
 # ========================================
 
 
-def test_add_topic_creates_embedding(test_subject):
+def test_add_topic_creates_embedding(temp_db, mock_embedding_server):
     """add_topic後にvec_indexにembeddingが存在する"""
     topic = add_topic(
-        subject_id=test_subject,
         title="Embedding統合テストトピック",
         description="vec_indexへの格納を検証する",
+        tags=DEFAULT_TAGS,
     )
 
     assert "error" not in topic
@@ -227,12 +218,12 @@ def test_add_topic_creates_embedding(test_subject):
         conn.close()
 
 
-def test_add_decision_creates_embedding(test_subject):
+def test_add_decision_creates_embedding(temp_db, mock_embedding_server):
     """add_decision後にvec_indexにembeddingが存在する"""
     topic = add_topic(
-        subject_id=test_subject,
         title="テスト用トピック",
         description="テスト",
+        tags=DEFAULT_TAGS,
     )
     dec = add_decision(
         topic_id=topic["topic_id"],
@@ -260,12 +251,12 @@ def test_add_decision_creates_embedding(test_subject):
         conn.close()
 
 
-def test_add_task_creates_embedding(test_subject):
+def test_add_task_creates_embedding(temp_db, mock_embedding_server):
     """add_task後にvec_indexにembeddingが存在する"""
     task = add_task(
-        subject_id=test_subject,
         title="Embedding統合テストタスク",
         description="vec_indexへの格納を検証する",
+        tags=DEFAULT_TAGS,
     )
 
     assert "error" not in task
@@ -304,12 +295,10 @@ def test_backfill_fills_missing_embeddings(temp_db, monkeypatch):
     monkeypatch.setattr(emb, '_backfill_done', True)
     monkeypatch.setattr(emb, '_ensure_server_running', lambda: False)
 
-    subject = add_subject(name="backfill-test", description="Test")
-    subject_id = subject["subject_id"]
     topic = add_topic(
-        subject_id=subject_id,
         title="バックフィルテストトピック",
         description="バックフィルの動作を検証する",
+        tags=DEFAULT_TAGS,
     )
 
     # この時点ではvec_indexにembeddingがないことを確認
@@ -355,13 +344,11 @@ def test_backfill_noop_when_all_filled(temp_db, mock_embedding_server, monkeypat
     # init_database由来の未バックフィルレコードを先に処理しておく
     emb.backfill_embeddings()
 
-    subject = add_subject(name="backfill-noop-test", description="Test")
-    subject_id = subject["subject_id"]
     # add_topicがembeddingも生成する（mock_embedding_serverがある）
     add_topic(
-        subject_id=subject_id,
         title="全レコード存在テスト",
         description="バックフィル不要のケース",
+        tags=DEFAULT_TAGS,
     )
 
     # 全レコードにembeddingがある状態でバックフィル実行
@@ -380,13 +367,10 @@ def test_add_topic_succeeds_when_embedding_fails(temp_db, monkeypatch):
     monkeypatch.setattr(emb, '_backfill_done', True)
     monkeypatch.setattr(emb, '_ensure_server_running', lambda: False)
 
-    subject = add_subject(name="graceful-test", description="Test")
-    subject_id = subject["subject_id"]
-
     topic = add_topic(
-        subject_id=subject_id,
         title="Embedding失敗テスト",
         description="サーバー接続失敗時もtopic作成は成功する",
+        tags=DEFAULT_TAGS,
     )
 
     assert "error" not in topic
@@ -415,12 +399,10 @@ def test_add_decision_succeeds_when_embedding_fails(temp_db, monkeypatch):
     monkeypatch.setattr(emb, '_backfill_done', True)
     monkeypatch.setattr(emb, '_ensure_server_running', lambda: False)
 
-    subject = add_subject(name="graceful-dec-test", description="Test")
-    subject_id = subject["subject_id"]
     topic = add_topic(
-        subject_id=subject_id,
         title="テスト用トピック",
         description="テスト",
+        tags=DEFAULT_TAGS,
     )
 
     dec = add_decision(
@@ -439,13 +421,10 @@ def test_add_task_succeeds_when_embedding_fails(temp_db, monkeypatch):
     monkeypatch.setattr(emb, '_backfill_done', True)
     monkeypatch.setattr(emb, '_ensure_server_running', lambda: False)
 
-    subject = add_subject(name="graceful-task-test", description="Test")
-    subject_id = subject["subject_id"]
-
     task = add_task(
-        subject_id=subject_id,
         title="Embedding失敗テストタスク",
         description="サーバー接続失敗時もtask作成は成功する",
+        tags=DEFAULT_TAGS,
     )
 
     assert "error" not in task

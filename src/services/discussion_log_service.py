@@ -1,11 +1,22 @@
 """議論ログ管理サービス"""
 import sqlite3
 from typing import Optional
-from src.db import execute_insert, execute_query, row_to_dict
+from src.db import execute_query, get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
+from src.services.tag_service import (
+    validate_and_parse_tags,
+    ensure_tag_ids,
+    link_tags,
+    get_effective_tags,
+)
 
 
-def add_log(topic_id: int, title: str, content: str) -> dict:
+def add_log(
+    topic_id: int,
+    title: str,
+    content: str,
+    tags: Optional[list[str]] = None,
+) -> dict:
     """
     トピックに議論ログ（1やりとり）を追加する。
 
@@ -13,6 +24,7 @@ def add_log(topic_id: int, title: str, content: str) -> dict:
         topic_id: 対象トピックのID
         title: ログのタイトル（必須、空文字不可）
         content: 議論内容（マークダウン可）
+        tags: 追加タグ（optional）。省略時はtopicのタグを継承
 
     Returns:
         作成されたログ情報
@@ -25,32 +37,48 @@ def add_log(topic_id: int, title: str, content: str) -> dict:
             }
         }
 
+    # タグのバリデーション（tagsが指定された場合のみ）
+    parsed_tags = None
+    if tags is not None:
+        parsed_tags = validate_and_parse_tags(tags)
+        if isinstance(parsed_tags, dict):
+            return parsed_tags
+
+    conn = get_connection()
     try:
-        log_id = execute_insert(
+        # ログをINSERT
+        cursor = conn.execute(
             "INSERT INTO discussion_logs (topic_id, title, content) VALUES (?, ?, ?)",
             (topic_id, title, content),
         )
+        log_id = cursor.lastrowid
+
+        # タグをリンク（指定された場合のみ）
+        if parsed_tags:
+            tag_ids = ensure_tag_ids(conn, parsed_tags)
+            link_tags(conn, "log_tags", "log_id", log_id, tag_ids)
+
+        conn.commit()
+
+        # 有効タグを取得（topic_tags UNION log_tags）
+        effective_tags = get_effective_tags(conn, "log", log_id)
 
         # embedding生成（失敗してもlog作成には影響しない）
         generate_and_store_embedding("log", log_id, build_embedding_text(title, content))
 
-        # 作成したログを取得
-        rows = execute_query(
-            "SELECT * FROM discussion_logs WHERE id = ?", (log_id,)
-        )
-        if rows:
-            log = row_to_dict(rows[0])
-            return {
-                "log_id": log["id"],
-                "topic_id": log["topic_id"],
-                "title": log["title"],
-                "content": log["content"],
-                "created_at": log["created_at"],
-            }
-        else:
-            raise Exception("Failed to retrieve created log")
+        return {
+            "log_id": log_id,
+            "topic_id": topic_id,
+            "title": title,
+            "content": content,
+            "tags": effective_tags,
+            "created_at": row_to_dict(
+                conn.execute("SELECT created_at FROM discussion_logs WHERE id = ?", (log_id,)).fetchone()
+            )["created_at"],
+        }
 
     except sqlite3.IntegrityError as e:
+        conn.rollback()
         return {
             "error": {
                 "code": "CONSTRAINT_VIOLATION",
@@ -58,12 +86,15 @@ def add_log(topic_id: int, title: str, content: str) -> dict:
             }
         }
     except Exception as e:
+        conn.rollback()
         return {
             "error": {
                 "code": "DATABASE_ERROR",
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()
 
 
 def get_logs(

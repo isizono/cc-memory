@@ -101,22 +101,16 @@ def env_setup(tmp_path):
     os.environ["DISCUSSION_DB_PATH"] = db_path
     init_database()
 
-    # テスト用トピックを追加
+    # テスト用トピックを追加（subjects廃止後: subject_idなしでINSERT）
     conn = get_connection()
     try:
-        cursor = conn.execute("SELECT id FROM subjects WHERE name = 'first_subject'")
-        row = cursor.fetchone()
-        subject_id = row[0] if row else 1
-
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) "
-            "VALUES (100, ?, 'test-topic', 'Description')",
-            (subject_id,),
+            "INSERT INTO discussion_topics (id, title, description) "
+            "VALUES (100, 'test-topic', 'Description')",
         )
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) "
-            "VALUES (200, ?, 'another-topic', 'Description')",
-            (subject_id,),
+            "INSERT INTO discussion_topics (id, title, description) "
+            "VALUES (200, 'another-topic', 'Description')",
         )
         conn.commit()
     finally:

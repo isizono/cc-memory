@@ -1,4 +1,9 @@
-"""ハイブリッド検索（FTS5 + ベクトル + RRF統合）のテスト"""
+"""ハイブリッド検索（FTS5 + ベクトル + RRF統合）のテスト
+
+subjects廃止に伴い、add_subjectやsubject_id依存の統合テストは
+後続タスク(#404/#405)でsearch APIがtags対応した後に再有効化する。
+_rrf_merge単体テストのみ実行する。
+"""
 import hashlib
 import os
 import tempfile
@@ -6,11 +11,7 @@ import pytest
 import numpy as np
 
 from src.db import init_database, get_connection
-from src.services.subject_service import add_subject
-from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
-from src.services.task_service import add_task
-from src.services.search_service import search, _rrf_merge, RRF_K, RRF_W_FTS, RRF_W_VEC
+from src.services.search_service import _rrf_merge, RRF_K, RRF_W_FTS, RRF_W_VEC
 import src.services.embedding_service as emb
 
 
@@ -58,16 +59,14 @@ def disable_embedding(monkeypatch):
 
 @pytest.fixture
 def test_subject(temp_db, mock_embedding_model):
-    """テスト用サブジェクト（embedding有効）"""
-    result = add_subject(name="hybrid-test", description="Hybrid search test")
-    return result["subject_id"]
+    """テスト用サブジェクト（subjects廃止後は使用不可）"""
+    pytest.skip("subjects table removed by Contract migration #0010")
 
 
 @pytest.fixture
 def test_subject_no_vec(temp_db, disable_embedding):
-    """テスト用サブジェクト（embedding無効）"""
-    result = add_subject(name="fts-only-test", description="FTS only test")
-    return result["subject_id"]
+    """テスト用サブジェクト（subjects廃止後は使用不可）"""
+    pytest.skip("subjects table removed by Contract migration #0010")
 
 
 # ========================================

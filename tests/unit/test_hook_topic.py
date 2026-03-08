@@ -15,21 +15,14 @@ def temp_db(monkeypatch, tmp_path):
     monkeypatch.setenv("DISCUSSION_DB_PATH", db_path)
     init_database()
 
-    # init_databaseで作成されたfirst_subjectのIDを取得
+    # テスト用のトピックを追加作成（subjects廃止後: subject_idなしでINSERT）
     conn = get_connection()
     try:
-        cursor = conn.execute("SELECT id FROM subjects WHERE name = 'first_subject'")
-        row = cursor.fetchone()
-        subject_id = row[0] if row else 1
-
-        # テスト用のトピックを追加作成
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) VALUES (100, ?, 'Test Topic', 'Description')",
-            (subject_id,)
+            "INSERT INTO discussion_topics (id, title, description) VALUES (100, 'Test Topic', 'Description')",
         )
         conn.execute(
-            "INSERT INTO discussion_topics (id, subject_id, title, description) VALUES (200, ?, 'Another Topic', 'Description')",
-            (subject_id,)
+            "INSERT INTO discussion_topics (id, title, description) VALUES (200, 'Another Topic', 'Description')",
         )
         conn.commit()
     finally:
