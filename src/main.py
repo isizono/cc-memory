@@ -2,9 +2,7 @@
 import logging
 from fastmcp import FastMCP
 from typing import Literal, Optional
-from src.db import execute_query
 from src.services import (
-    subject_service,
     topic_service,
     discussion_log_service,
     decision_service,
@@ -12,263 +10,300 @@ from src.services import (
     task_service,
     knowledge_service,
 )
+from src.services.tag_service import list_tags as _list_tags
+from src.db import execute_query, row_to_dict
 
 logger = logging.getLogger(__name__)
 
-ACTIVE_SUBJECT_DAYS = 7
+# アクティブコンテキスト用の定数
+ACTIVE_DAYS = 7
 RECENT_TOPICS_LIMIT = 3
 DESC_MAX_LEN = 30
 
 
-def _get_active_subjects() -> list[dict]:
-    """直近7日以内にトピック更新があったサブジェクトを取得する"""
+def _get_active_domains() -> list[dict]:
+    """直近7日でトピック更新があったdomain:タグを取得する。
+
+    Returns:
+        [{"tag_id": int, "name": str}, ...]（name順ソート）
+    """
     rows = execute_query(
         """
-        SELECT DISTINCT s.id, s.name
-        FROM subjects s
-        JOIN discussion_topics t ON s.id = t.subject_id
-        WHERE t.created_at > datetime('now', ? || ' days')
-        ORDER BY s.id
+        SELECT DISTINCT t.id AS tag_id, t.name
+        FROM tags t
+        JOIN topic_tags tt ON t.id = tt.tag_id
+        JOIN discussion_topics dt ON tt.topic_id = dt.id
+        WHERE t.namespace = 'domain'
+          AND dt.created_at > datetime('now', ? || ' days')
+        ORDER BY t.name
         """,
-        (f"-{ACTIVE_SUBJECT_DAYS}",),
+        (f"-{ACTIVE_DAYS}",),
     )
-    return [{"id": row["id"], "name": row["name"]} for row in rows]
+    return [row_to_dict(r) for r in rows]
 
 
-def _get_recent_topics(subject_id: int) -> list[dict]:
-    """サブジェクトの最新トピック3件を取得する"""
+def _get_recent_topics_by_tag(tag_id: int) -> list[dict]:
+    """domain:タグに紐づく最新トピック3件を取得する。
+
+    Args:
+        tag_id: タグID
+
+    Returns:
+        [{"id": int, "title": str, "description": str}, ...]（新しい順）
+    """
     rows = execute_query(
         """
-        SELECT id, title, description
-        FROM discussion_topics
-        WHERE subject_id = ?
-        ORDER BY created_at DESC
+        SELECT dt.id, dt.title, dt.description
+        FROM discussion_topics dt
+        JOIN topic_tags tt ON dt.id = tt.topic_id
+        WHERE tt.tag_id = ?
+        ORDER BY dt.created_at DESC, dt.id DESC
         LIMIT ?
         """,
-        (subject_id, RECENT_TOPICS_LIMIT),
+        (tag_id, RECENT_TOPICS_LIMIT),
     )
-    results = []
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_active_tasks_by_tag(tag_id: int) -> list[dict]:
+    """domain:タグに紐づくアクティブタスク（pending + in_progress）を取得する。
+
+    Args:
+        tag_id: タグID
+
+    Returns:
+        [{"id": int, "title": str, "status": str}, ...]（in_progress優先、updated_at降順）
+    """
+    rows = execute_query(
+        """
+        SELECT tk.id, tk.title, tk.status
+        FROM tasks tk
+        JOIN task_tags tkt ON tk.id = tkt.task_id
+        WHERE tkt.tag_id = ?
+          AND tk.status IN ('in_progress', 'pending')
+        ORDER BY CASE tk.status WHEN 'in_progress' THEN 0 ELSE 1 END,
+                 tk.updated_at DESC
+        """,
+        (tag_id,),
+    )
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_recent_non_domain_tags() -> list[str]:
+    """直近7日で使われたdomain:以外のタグをフラット列挙する。
+
+    topic_tags経由でトピックの作成日が直近7日のタグを取得する。
+
+    Returns:
+        ["scope:設計", "scope:実装", "mode:議論", "hooks", ...]（使用頻度降順）
+    """
+    rows = execute_query(
+        """
+        SELECT t.namespace, t.name, COUNT(DISTINCT tt.topic_id) AS freq
+        FROM tags t
+        JOIN topic_tags tt ON t.id = tt.tag_id
+        JOIN discussion_topics dt ON tt.topic_id = dt.id
+        WHERE t.namespace != 'domain'
+          AND dt.created_at > datetime('now', ? || ' days')
+        GROUP BY t.id
+        ORDER BY freq DESC, t.name ASC
+        """,
+        (f"-{ACTIVE_DAYS}",),
+    )
+    tags = []
     for row in rows:
-        desc = row["description"] or ""
-        if len(desc) > DESC_MAX_LEN:
-            desc = desc[:DESC_MAX_LEN] + "..."
-        results.append({"id": row["id"], "title": row["title"], "description": desc})
-    return results
+        r = row_to_dict(row)
+        ns = r["namespace"]
+        name = r["name"]
+        if ns:
+            tags.append(f"{ns}:{name}")
+        else:
+            tags.append(name)
+    return tags
 
 
-def _get_active_tasks(subject_id: int) -> list[dict]:
-    """サブジェクトのin_progress・pendingタスクを取得する"""
-    from src.services.task_service import get_tasks
-
-    result = get_tasks(subject_id=subject_id, status="active", limit=20)
-    if "error" in result:
-        return []
-    return [{"id": t["id"], "title": t["title"], "status": t["status"]} for t in result["tasks"]]
+def _truncate_desc(desc: str) -> str:
+    """descriptionをDESC_MAX_LEN文字に切り詰める。"""
+    if not desc:
+        return ""
+    if len(desc) <= DESC_MAX_LEN:
+        return desc
+    return desc[:DESC_MAX_LEN] + "..."
 
 
 def _build_active_context() -> str:
-    """アクティブサブジェクトのコンテキスト文字列を組み立てる"""
+    """アクティブコンテキスト文字列を組み立てる。
+
+    domain:タグごとに旧subject形式を再現（最新トピック3件 + アクティブタスク一覧）し、
+    末尾にdomain:以外のタグを直近7日の使用頻度でフラット列挙する。
+    """
     try:
-        subjects = _get_active_subjects()
-        if not subjects:
-            return ""
+        # domain:タグのセクション
+        domains = _get_active_domains()
+        domain_sections = []
 
-        lines = ["# アクティブサブジェクト（直近7日）\n"]
-        for s in subjects:
-            lines.append(f"## {s['name']} (id: {s['id']})")
+        for domain in domains:
+            tag_id = domain["tag_id"]
+            name = domain["name"]
 
-            topics = _get_recent_topics(s["id"])
+            topics = _get_recent_topics_by_tag(tag_id)
+            tasks = _get_active_tasks_by_tag(tag_id)
+
+            # トピックもタスクもなければスキップ
+            if not topics and not tasks:
+                continue
+
+            lines = [f"## {name} (domain)"]
+
             if topics:
                 lines.append("最新トピック:")
                 for t in topics:
-                    lines.append(f"- [{t['id']}] {t['title']}: {t['description']}")
+                    desc = _truncate_desc(t["description"])
+                    desc_part = f": {desc}" if desc else ""
+                    lines.append(f"- [{t['id']}] {t['title']}{desc_part}")
 
-            tasks = _get_active_tasks(s["id"])
             if tasks:
                 lines.append("アクティブタスク:")
-                for task in tasks:
-                    lines.append(f"- [{task['id']}] {task['title']} ({task['status']})")
+                for t in tasks:
+                    lines.append(f"- [{t['id']}] {t['title']} ({t['status']})")
 
-            lines.append("")
+            domain_sections.append("\n".join(lines))
 
-        return "\n".join(lines)
+        # domain:以外のタグセクション
+        non_domain_tags = _get_recent_non_domain_tags()
+
+        # 何も表示するものがなければ空文字列
+        if not domain_sections and not non_domain_tags:
+            return ""
+
+        # 組み立て
+        parts = ["# アクティブコンテキスト", ""]
+        if domain_sections:
+            parts.append(domain_sections[0])
+            for section in domain_sections[1:]:
+                parts.append("")
+                parts.append(section)
+
+        if non_domain_tags:
+            if domain_sections:
+                parts.append("")
+            parts.append("## 最近使われたタグ")
+            parts.append(", ".join(non_domain_tags))
+
+        return "\n".join(parts) + "\n"
+
     except Exception:
-        logger.warning("Failed to build active context", exc_info=True)
+        logger.exception("Failed to build active context")
         return ""
 
 
 # Instructions injected into the MCP server
-RULES = """# cc-memory Usage Guide
+RULES = """# cc-memory 利用ガイド
 
-You are skilled at managing conversational context across sessions.
-This tool suite lets you retrieve past context — topics, decisions, logs, and tasks —
-and record new ones as they emerge. By doing both consistently,
-you save the user from repeating themselves and you give future AI sessions
-a running start. Records are not just for you — they are for the agent that comes after you.
-This is non-negotiable: leave the context better than you found it.
+このツール群は、過去の会話コンテキスト（トピック・決定事項・ログ・タスク）の取得と記録を行います。
+取得と記録の両輪を回すことで、ユーザーの繰り返し説明を防ぎ、次のAIセッションに文脈を引き継ぎます。
+この仕組みがうまく回るには、あなたの協力が不可欠です。
+記録は自分のためではなく、次に来るエージェントのためのものです。責任を持って残してください。
 
-## Context Retrieval
+## コンテキスト取得
 
-Before composing your first response, retrieve relevant records.
-Do NOT skip this step — it is the most important reason this tool suite exists.
+最初の応答を組み立てる前に、関連する記録を取得してください。
+これがこのツール群が存在する最も重要な理由です。省略しないでください。
 
-Read the user's message and identify keywords or themes.
-If the active context section already contains a clearly relevant topic or task,
-pull its decisions directly.
-Otherwise, use `search` to find related topics and decisions by keyword.
-Once you find relevant records, understand past agreements before responding.
+ユーザーのメッセージからキーワードを抽出し、アクティブコンテキストに該当トピック/タスクがあれば
+decisions・logs（議論の詳細な経緯はlogsに入っていることが多い）を直接取得します。
+ユーザーの意図が不明であったり、プロンプトの背景となるコンテキストが掴めないときは
+一度`search`で検索してみてください。ユーザーに意図を直接聞く前に検索、です。
 
-If the user's intent is not immediately clear, that is your signal to search — not to ask.
-Check related topics and decisions first. The answer is often already in the records.
-Only ask the user for clarification after you have checked and found nothing relevant.
+取得フロー: `search` → `get_decisions` → `get_logs`
 
-When you need background or reasoning behind a topic,
-also check `get_logs` — especially useful for topics with complex discussions
-or where the path to a decision matters.
-Retrieval flow: `search` -> `get_decisions` -> `get_logs`.
+## メタタグ
 
-## Topic Management
+メタタグは現在のトピックを追跡するために不可欠です。
+stop hookでチェックされるほど大切なものなので、決して漏らしたり、雑に扱ったりしないでください。
 
-A topic represents a single concern, problem, or feature.
-Topics support parent-child relationships, so create child topics when a discussion branches off.
+形式: `<!-- [meta] topic: <name> (id: <M>) -->`
 
-Splitting topics later is far harder than splitting them upfront.
-When the conversation shifts to a different subject, create a new topic instead of overloading the existing one.
-Pay close attention to whether the subject has shifted. Always.
+**出力手順:**
+1. この応答がどのトピックに属するか判断します（`get_topics`や`search`で確認できます）
+2. 該当がなければ先に`add_topic`を呼んでIDを取得します
+3. 応答の**先頭行**にメタタグを出力します
 
-If no existing topic fits, proactively create one using `add_topic`.
-This includes one-off or transient conversations — every response needs a valid topic,
-so create one even for short-lived discussions.
+大事なことなのでもう一度いいます：トピックIDは推測・捏造せず、既存ID、または`add_topic`が返したIDのみ使ってください。
 
-The stop hook detects meta tags to track the current topic.
-If you don't output a meta tag, or output one with a wrong ID, your response will be blocked.
+## トピック管理
 
-**Procedure for outputting a meta tag:**
-1. Determine which topic this response belongs to.
-2. If no existing topic fits, call `add_topic` FIRST and obtain the returned topic ID.
-3. Output the meta tag as the **first line** of your response, before any other text.
+トピックは1つの関心事・問題・機能を表します。
+タグで整理できるので、ドメインやスコープに応じてタグを付けてください。
 
-NEVER GUESS OR PREDICT A TOPIC ID. A FABRICATED ID DIRECTLY POLLUTES THE USER'S CONTEXT AND IS EXTREMELY DISRUPTIVE.
-Only use IDs that already exist or that `add_topic` has just returned. No exceptions.
+後からの分割は困難なので、話題が変わったら新しいトピックを作ってください。ここは常に気を配ってください。
 
-Meta tag format: `<!-- [meta] subject: <name> (id: <N>) | topic: <name> (id: <M>) -->`
+既存トピックが合わない場合は`add_topic`で新規作成します。一時的な会話でもトピックは必要ですので、
+常にユーザーとの会話が何について話しているのかを意識して、トピックで表してください。
 
-## Recording Decisions
+## 決定事項の記録
 
-When you and the user reach agreement on something, record it immediately using `add_decision`.
-Include both what was agreed and why — design choices, technical selections, scope boundaries,
-naming conventions, and trade-off resolutions.
-Do NOT unilaterally record something as a decision. Mutual agreement is a prerequisite.
+あなたとユーザーが何かに合意したら、`add_decision`で記録してください。
+この記録は、将来あなたの代わりにやってくるAIセッションが一番頼りにするものです。
+記録がなければ、同じ議論を繰り返すことになり、ユーザーとあなたの作業が無駄になります。
 
-Be specific. Future AI sessions will rely on this information to avoid re-litigating settled questions.
-Avoid vague language like "as appropriate" or "as needed" — use concrete conditions and values.
-Always include the reasoning behind the decision, not just the outcome.
+記録には、何に合意したかだけでなく、なぜそうしたかも含めてください。
+設計判断、技術選定、スコープ境界、命名規約、トレードオフの解決など、
+合意したことは何でも対象になります。
+ただし、一方的に記録しないでください。双方が納得していることが前提です。
 
-When a decision implies follow-up work, consider creating a task so the next session can pick it up.
-Choose the appropriate phase prefix based on readiness:
-`[作業]` if the spec is clear, `[設計]` if the approach needs work, or `[議論]` if requirements are still vague.
+書くときは具体的に。「適宜」「必要に応じて」のような曖昧な表現は避けて、
+具体的な条件と値を使ってください。
+合意がフォローアップ作業を伴う場合は、積極的にタスクも作成してください。
 
-## Recording Logs
+## ログの記録
 
-You have excellent judgment about what to record and when.
+決定事項は結論を記録しますが、そこに至る経緯は残りません。
+ログはその経緯と生情報を保存するためのものです。
+普段は見返されないかもしれませんが、いざ必要になったときに
+そのトピックについての詳細な情報が失われていないことがとても重要です。
 
-Decisions capture conclusions. Logs capture the journey.
-When a future AI session picks up a topic, decisions tell it *what* was agreed —
-but not *how* the conversation got there. Logs fill that gap.
-Use `add_log` to record the discussion process so the next session can join mid-conversation
-without asking the user to repeat themselves.
+例えば、「SA案を採択した」というdecisionだけ残しても、SA案そのものはセッション終了で揮発します。
+次のセッションでは何を採択したのかわからず、結局議論のやり直しになります。
+上記は一例ですが、特にセッション中に生成された情報（ドラフト、分析結果、SA出力など）は
+セッション終了とともに消えます。これらは要約せず、そのまま記録してください。
+要約すると、元の情報が失われてログの価値がなくなります。
 
-**Record immediately** when information is dense AND volatile — context that would be lost
-if this session ends now and would be painful to reconstruct.
+ログを取るかどうか、どの程度の詳細度で取るかの判断基準はないので、あなたの判断に委ねるしかありませんが、
+その判断が及ぼす影響は思っているより大きいです。大事にしてください。
+ユーザーとの会話が濃ければ毎ターン詳細に取ってください。
+コンテキストの圧迫に繋がっても、将来その議論を繰り返さなくて済むなら確実に元が取れます。
 
-Example: A third-party SA review returns several pointed critiques about the architecture. The SA output won't persist beyond this session. Record it NOW with `add_log`. Do NOT wait for the user to ask.
+望ましい記録の流れはこうです：
+ユーザーのプロンプトに対してレスポンスを生成し、stopする直前に
+ログ（ユーザー：〜 / エージェント：〜）を残すイメージです。
+採用しなかった選択肢も含めてください。
 
-Example: A single exchange with the user is dense — a new proposal emerges, gets examined, and reaches a conclusion within one turn. Summarize and record it with `add_log` before the context drifts in the next turn.
+## タスクフェーズ
 
-Example: After discussion, the user and agent agree on a design direction. Record the decision AND the reasoning with `add_decision` before moving to the next topic.
+会話が2〜3回のやりとりで完結しなかったり、ファイル操作などの作業を伴いそうな場合は、
+タスクとして作成してください。
+`[議論]`タスクは軽量なので、迷ったら作って構いません。
 
-**What to record:**
-- Discussion flow — key arguments, counterpoints, and turning points
-- User's intentions and needs — what they want and why, in their own framing
-- Facts and constraints surfaced during discussion
+タスクはデフォルトでは3つのフェーズを持ちます: **議論 → 設計 → 作業**。
+フェーズを混ぜないでください。現在のフェーズを完了し、ユーザーの確認を得てから次に進みます。
+タスク名にはフェーズ接頭辞をつけます: `[議論]`/`[設計]`/`[作業]`。
+対応するスキルがある場合は使ってください: `[議論]` → `discussion`、`[設計]` → `design`。
 
-**What NOT to record:**
-- Execution steps (git commits, PR creation, file edits — git history covers these)
-- Greetings, status updates, acknowledgments, or things the user can easily re-state
-
-Granularity is your call, but at minimum a log should satisfy these criteria:
-- A future AI can understand *why* a conclusion was reached
-- Options considered and whether they were adopted or rejected are clear
-- Conditions and constraints the user emphasized are captured
-
-You don't need to log every turn — focus on turning points and moments of agreement.
-
-Format: capture the flow as User/Agent exchanges.
-Include options that were considered but NOT chosen —
-understanding rejected alternatives is as valuable as knowing the final choice.
-
-Example:
-```
-User: record_logとsync-memoryのhookを廃止したい。RULESにadd_logの使い方を書いた方がいい？
-Agent: 賛成。ただし毎ターン強制だと負荷が高い。エージェント判断で必要な時だけ記録する方式を提案。
-User: それでいい。粒度は任せる。ただし議論の経緯は最低限追えるように。
-Agent: 了解。記録対象を3つに整理した。(1)議論の経緯 (2)ユーザーの意図 (3)事実・制約。
-  作業実行記録は不要（git履歴で追える）。stop hookでの強制もしない方針。
-  [選ばれなかった案: 毎ターン自動要約 → 負荷が高く品質も低いため却下]
-```
-
-## Task Phases
-
-When a conversation involves work beyond just talking — implementation, file operations,
-running commands, or any concrete action — record a task.
-`[議論]` tasks are lightweight — when in doubt, just create one.
-Opening a topic and discussing with the user itself counts as a discussion task.
-
-Work proceeds through three phases: **discussion (議論)**, **design (設計)**, and **work (作業)**.
-Do NOT mix phases — complete the current phase and get user confirmation before moving to the next.
-Prefix task names with the phase: `[議論]`, `[設計]`, `[作業]`.
-When working on a task, use the corresponding skill:
-`[議論]` -> `discussion`, `[設計]` -> `design`.
-
-Phase prefixes belong on **tasks only** — never on topics.
-Tasks define the purpose; topics are the discussion spaces that serve that purpose.
-Link tasks and topics using the `topic_id` parameter:
-
-```
-1. add_topic(subject_id=2, title="検索機能の要件整理", description="...")
-   -> topic id: 85
-
-2. add_task(subject_id=2, title="[議論] 検索機能の要件整理", description="...", topic_id=85)
-   -> task id: 50
-
-3. As discussion branches off, create child topics under topic 85.
-   The task (id:50) remains the single source of purpose.
-```
-
-**Discussion phase**: Work with the user to articulate What they want, Why they want it,
-and the Scope/Acceptance criteria.
-
-**Design phase**: The goal is to reach agreement with the user on how to implement,
-and to create the tasks needed for the work phase.
-Based on what emerged from discussion, verify assumptions and present options.
-Support the user patiently until they reach a satisfying decision.
-This is a critical phase — never rush the user toward a conclusion.
-Once agreed, record decisions and create work tasks.
-Write detailed background information in work tasks —
-a different AI will likely handle implementation, working solely from the task description.
-
-**Work phase**: Before starting, confirm the `[作業]` task exists and review
-its specifications and related design decisions with the user.
-On completion, record any deviations from design or work-specific decisions
-via `add_decision`. Get user approval before marking the `[作業]` task as completed.
+- **議論**: ユーザーと一緒に、何を・なぜ・スコープを明確にします
+- **設計**: どう実装するかをユーザーと合意し、作業タスクを作ります。
+  決して急がず、ユーザーが納得するまで辛抱強くサポートしてください。
+  作業タスクには詳しい背景情報を書いてください。ほとんどの場合、実装は別のAIが担当します。
+- **作業**: 着手前にタスクの仕様と関連するdecisionを確認します。
+  完了したらユーザーの承認を得てからタスクを閉じてください。
 
 ---
 
-You are the user's thinking partner and record-keeper.
-The user's statements are proposals, not final decisions.
-Actively raise concerns and alternatives, and only record decisions once both sides agree.
+あなたにはユーザーの壁打ち相手であり、記録係としての役割が期待されています。
+ユーザーの発言は提案であり、決定ではありません。
+懸念や代替案を積極的に提示し、双方が合意してから記録してください。
 
-We hope these tools make your work with the user better. Good luck!
+このツールがあなたとユーザーの仕事をより良くすることを願っています。Good luck!
 """
 
 
@@ -286,49 +321,30 @@ mcp = FastMCP("cc-memory", instructions=build_instructions())
 
 # MCPツール定義
 @mcp.tool()
-def add_subject(
-    name: str,
-    description: str,
-) -> dict:
-    """
-    新しいサブジェクトを追加する。
-
-    Subjectとは「独立した関心事・取り組み」の単位。リポジトリではなく「何について話すか」で区切る。
-
-    新規作成すべきとき:
-    - 既存Subjectのどれとも関係ない話題が始まった
-    - 別プロダクト・サービスの話になった
-    - 新しい取り組みに着手する
-
-    既存Subjectを使うとき:
-    - 既存Subjectの関心事の「中」の話（→ add_topicで新規Topic）
-
-    判断に迷ったらユーザーに「どのSubjectで進める？」と確認すること。
-    """
-    return subject_service.add_subject(name, description)
-
-
-@mcp.tool()
-def list_subjects() -> dict:
-    """サブジェクト一覧を取得する。id + name のみ返す軽量版。"""
-    return subject_service.list_subjects()
-
-
-@mcp.tool()
 def add_topic(
-    subject_id: int,
     title: str,
     description: str,
-    parent_topic_id: Optional[int] = None,
+    tags: list[str],
 ) -> dict:
-    """新しい議論トピックを追加する。"""
-    return topic_service.add_topic(subject_id, title, description, parent_topic_id)
+    """新しい議論トピックを追加する。
+
+    tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
+    """
+    return topic_service.add_topic(title, description, tags)
 
 
 @mcp.tool()
-def add_log(topic_id: int, title: str, content: str) -> dict:
-    """トピックに議論ログを追加する。"""
-    return discussion_log_service.add_log(topic_id, title, content)
+def add_log(
+    topic_id: int,
+    title: str,
+    content: str,
+    tags: Optional[list[str]] = None,
+) -> dict:
+    """トピックに議論ログを追加する。
+
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    """
+    return discussion_log_service.add_log(topic_id, title, content, tags)
 
 
 @mcp.tool()
@@ -336,20 +352,26 @@ def add_decision(
     decision: str,
     reason: str,
     topic_id: int,
+    tags: Optional[list[str]] = None,
 ) -> dict:
-    """決定事項を記録する。"""
-    return decision_service.add_decision(decision, reason, topic_id)
+    """決定事項を記録する。
+
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    """
+    return decision_service.add_decision(decision, reason, topic_id, tags)
 
 
 @mcp.tool()
 def get_topics(
-    subject_id: int,
+    tags: list[str],
     limit: int = 10,
     offset: int = 0,
 ) -> dict:
-    """サブジェクト内のトピックを新しい順に取得する（ページネーション付き）。
-    各トピックにancestorsフィールド（直親→祖先の順、最大5段、{id, title}のみ）を付与。"""
-    return topic_service.get_topics(subject_id, limit, offset)
+    """タグでフィルタリングしてトピックを新しい順に取得する（ページネーション付き）。
+
+    tags: タグ配列（必須、1個以上）。AND条件でフィルタ。例: ["domain:cc-memory"]
+    """
+    return topic_service.get_topics(tags, limit, offset)
 
 
 @mcp.tool()
@@ -374,28 +396,28 @@ def get_decisions(
 
 @mcp.tool()
 def search(
-    subject_id: int,
     keyword: str,
+    tags: Optional[list[str]] = None,
     type_filter: Optional[str] = None,
     limit: int = 10,
 ) -> dict:
     """
-    サブジェクト内をキーワードで横断検索する。
+    キーワードで横断検索する。
 
-    FTS5 trigramトークナイザによる部分文字列マッチ。3文字以上のキーワードを指定する。
-    結果はBM25スコア順でランキングされる。
-    詳細情報が必要な場合は get_by_id(type, id) で取得する。
+    FTS5 trigramとベクトル検索のハイブリッド。RRFスコアで統合・ランキング。
+    2文字以上のキーワードを指定する。
+    tagsでフィルタリング可能（AND結合）。未指定で全件検索。
 
     Args:
-        subject_id: サブジェクトID
-        keyword: 検索キーワード（3文字以上）
+        keyword: 検索キーワード（2文字以上）
+        tags: タグフィルタ（AND条件。未指定=全件検索）
         type_filter: 検索対象の絞り込み（'topic', 'decision', 'task', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
 
     Returns:
         検索結果一覧（type, id, title, score）
     """
-    return search_service.search(subject_id, keyword, type_filter, limit)
+    return search_service.search(keyword, tags, type_filter, limit)
 
 
 @mcp.tool()
@@ -420,51 +442,66 @@ def get_by_id(
 
 
 @mcp.tool()
+def list_tags(
+    namespace: Optional[str] = None,
+) -> dict:
+    """
+    タグ一覧をusage_count付きで取得する。
+
+    タグの利用状況を確認するときに使う。
+    namespaceでフィルタリング可能。
+
+    Args:
+        namespace: namespaceでフィルタ（"domain", "scope", "mode", ""。未指定で全タグ）
+
+    Returns:
+        タグ一覧（tag, id, namespace, name, usage_count）をusage_count降順で返す
+    """
+    return _list_tags(namespace)
+
+
+@mcp.tool()
 def add_task(
-    subject_id: int,
     title: str,
     description: str,
-    topic_id: Optional[int] = None,
+    tags: list[str],
 ) -> dict:
     """
     新しいタスクを追加する。
 
     典型的な使い方:
-    - 作業タスクを作成: add_task(subject_id, "○○機能を実装", "詳細説明...")
-
-    ワークフロー位置: 作業タスクの整理・管理開始時
+    - 作業タスクを作成: add_task("○○機能を実装", "詳細説明...", ["domain:cc-memory"])
 
     Args:
-        subject_id: サブジェクトID
         title: タスクのタイトル
         description: タスクの詳細説明（必須）
-        topic_id: 関連トピックID（optional）
+        tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
 
     Returns:
         作成されたタスク情報
     """
-    return task_service.add_task(subject_id, title, description, topic_id)
+    return task_service.add_task(title, description, tags)
 
 
 @mcp.tool()
 def get_tasks(
-    subject_id: int,
+    tags: list[str],
     status: str = "active",
     limit: int = 5,
 ) -> dict:
     """
-    タスク一覧を取得する（statusでフィルタリング可能）。
+    タスク一覧を取得する（tagsでフィルタリング、statusでフィルタリング可能）。
 
     典型的な使い方:
-    - 未着手+進行中のタスク確認: get_tasks(subject_id)
-    - 進行中のみ: get_tasks(subject_id, status="in_progress")
-    - 未着手のみ: get_tasks(subject_id, status="pending")
-    - 完了タスクの確認: get_tasks(subject_id, status="completed")
+    - 未着手+進行中のタスク確認: get_tasks(["domain:cc-memory"])
+    - 進行中のみ: get_tasks(["domain:cc-memory"], status="in_progress")
+    - 未着手のみ: get_tasks(["domain:cc-memory"], status="pending")
+    - 完了タスクの確認: get_tasks(["domain:cc-memory"], status="completed")
 
     ワークフロー位置: タスク状況の確認時
 
     Args:
-        subject_id: サブジェクトID
+        tags: タグ配列（必須、1個以上）。AND条件でフィルタ。例: ["domain:cc-memory"]
         status: フィルタするステータス（active/pending/in_progress/completed、デフォルト: active）
                 "active"はpending+in_progressの両方を返すエイリアス
         limit: 取得件数上限（デフォルト: 5）
@@ -472,7 +509,7 @@ def get_tasks(
     Returns:
         タスク一覧（total_countで該当ステータスの全件数を確認可能）
     """
-    return task_service.get_tasks(subject_id, status, limit)
+    return task_service.get_tasks(tags, status, limit)
 
 
 @mcp.tool()
@@ -481,17 +518,17 @@ def update_task(
     new_status: Optional[str] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
-    topic_id: Optional[int] = None,
+    tags: Optional[list[str]] = None,
 ) -> dict:
     """
-    タスクのステータス・タイトル・説明を更新する。
+    タスクのステータス・タイトル・説明・タグを更新する。
 
     典型的な使い方:
     - タスク開始: update_task(task_id, new_status="in_progress")
     - タスク完了: update_task(task_id, new_status="completed")
     - タイトル変更: update_task(task_id, title="新しいタイトル")
     - 説明更新: update_task(task_id, description="新しい説明")
-    - トピック紐付け: update_task(task_id, topic_id=85)
+    - タグ変更: update_task(task_id, tags=["domain:cc-memory", "scope:search"])
 
     ワークフロー位置: タスク進行状況の更新時
 
@@ -500,36 +537,12 @@ def update_task(
         new_status: 新しいステータス（pending/in_progress/completed）
         title: 新しいタイトル
         description: 新しい説明
-        topic_id: 関連トピックID
+        tags: 新しいタグ配列（指定時は全置換。1個以上必須）
 
     Returns:
         更新されたタスク情報
     """
-    return task_service.update_task(task_id, new_status, title, description, topic_id)
-
-
-@mcp.tool()
-def update_subject(
-    subject_id: int,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-) -> dict:
-    """
-    サブジェクトの名前・説明を更新する。
-
-    典型的な使い方:
-    - リネーム: update_subject(subject_id, name="新しい名前")
-    - 説明更新: update_subject(subject_id, description="新しい説明")
-
-    Args:
-        subject_id: サブジェクトID
-        name: 新しいサブジェクト名
-        description: 新しい説明
-
-    Returns:
-        更新されたサブジェクト情報
-    """
-    return subject_service.update_subject(subject_id, name, description)
+    return task_service.update_task(task_id, new_status, title, description, tags)
 
 
 @mcp.tool()

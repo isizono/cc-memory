@@ -3,8 +3,10 @@ import os
 import tempfile
 import pytest
 from src.db import init_database
-from src.services.subject_service import add_subject
 from src.services.task_service import add_task, update_task
+
+
+DEFAULT_TAGS = ["domain:test"]
 
 
 @pytest.fixture
@@ -20,19 +22,12 @@ def temp_db():
 
 
 @pytest.fixture
-def test_subject(temp_db):
-    """テスト用サブジェクトを作成する"""
-    result = add_subject(name="test-subject", description="Test subject")
-    return result["subject_id"]
-
-
-@pytest.fixture
-def test_task(test_subject):
+def test_task(temp_db):
     """テスト用タスクを作成する"""
     result = add_task(
-        subject_id=test_subject,
         title="Original Title",
         description="Original Description",
+        tags=DEFAULT_TAGS,
     )
     return result
 
@@ -85,6 +80,14 @@ class TestUpdateTaskSuccess:
         assert result["status"] == "in_progress"
         assert result["title"] == "Updated Title"
         assert result["description"] == "Updated Description"
+
+    def test_update_preserves_tags(self, test_task):
+        """update_taskでタグが保持される"""
+        result = update_task(test_task["task_id"], new_status="in_progress")
+
+        assert "error" not in result
+        assert "tags" in result
+        assert "domain:test" in result["tags"]
 
 
 # ========================================
@@ -161,3 +164,38 @@ class TestUpdateTaskError:
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
+
+
+# ========================================
+# タグ更新テスト
+# ========================================
+
+
+class TestUpdateTaskTags:
+    """update_taskのタグ更新テスト"""
+
+    def test_update_tags(self, test_task):
+        """タグ全置換"""
+        result = update_task(test_task["task_id"], tags=["scope:search", "domain:cc-memory"])
+
+        assert "error" not in result
+        assert "tags" in result
+        assert "scope:search" in result["tags"]
+        assert "domain:cc-memory" in result["tags"]
+        # 旧タグは除去されている
+        assert "domain:test" not in result["tags"]
+
+    def test_update_tags_empty_list(self, test_task):
+        """tags=[]でTAGS_REQUIREDエラー"""
+        result = update_task(test_task["task_id"], tags=[])
+
+        assert "error" in result
+        assert result["error"]["code"] == "TAGS_REQUIRED"
+
+    def test_update_tags_none(self, test_task):
+        """tags=None（未指定）ではタグ変更なし"""
+        # まずステータスだけ変更
+        result = update_task(test_task["task_id"], new_status="in_progress")
+
+        assert "error" not in result
+        assert result["tags"] == ["domain:test"]  # 元のタグが保持される

@@ -48,43 +48,48 @@ def test_init_database(temp_db):
         )
         tables = [row[0] for row in cursor.fetchall()]
 
-        assert "subjects" in tables
         assert "discussion_topics" in tables
         assert "discussion_logs" in tables
         assert "decisions" in tables
+        assert "tags" in tables
+        assert "topic_tags" in tables
+        assert "task_tags" in tables
+        assert "decision_tags" in tables
+        assert "log_tags" in tables
     finally:
         conn.close()
 
 
 def test_execute_insert_and_query(temp_db):
     """INSERT と SELECT が正しく動作する"""
-    # サブジェクトを追加
-    subject_id = execute_insert(
-        "INSERT INTO subjects (name, description) VALUES (?, ?)",
-        ("test-subject", "テストサブジェクト"),
+    # トピックを追加（subjects廃止後）
+    topic_id = execute_insert(
+        "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+        ("test-topic", "テストトピック"),
     )
-    assert subject_id > 0
+    assert topic_id > 0
 
-    # 追加したサブジェクトを取得
-    rows = execute_query("SELECT * FROM subjects WHERE id = ?", (subject_id,))
+    # 追加したトピックを取得
+    rows = execute_query("SELECT * FROM discussion_topics WHERE id = ?", (topic_id,))
     assert len(rows) == 1
-    assert rows[0]["name"] == "test-subject"
-    assert rows[0]["description"] == "テストサブジェクト"
+    assert rows[0]["title"] == "test-topic"
+    assert rows[0]["description"] == "テストトピック"
 
 
 def test_get_connection_returns_row_factory(temp_db):
     """接続が Row factory を使用している"""
     conn = get_connection()
     try:
-        # サブジェクトを追加
+        # トピックを追加
         conn.execute(
-            "INSERT INTO subjects (name, description) VALUES (?, ?)", ("test-subject", "Test description")
+            "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+            ("test-topic", "Test description"),
         )
         conn.commit()
 
-        # Row として取得できることを確認（追加したサブジェクトを名前で検索）
-        cursor = conn.execute("SELECT * FROM subjects WHERE name = 'test-subject'")
+        # Row として取得できることを確認
+        cursor = conn.execute("SELECT * FROM discussion_topics WHERE title = 'test-topic'")
         row = cursor.fetchone()
-        assert row["name"] == "test-subject"  # 辞書ライクなアクセス
+        assert row["title"] == "test-topic"  # 辞書ライクなアクセス
     finally:
         conn.close()

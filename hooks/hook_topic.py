@@ -7,6 +7,20 @@ import sys
 from pathlib import Path
 
 
+def check_topic_has_tags(topic_id: int) -> bool:
+    """指定topic_idにタグが1つ以上付いているかチェック。"""
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from src.db import execute_query
+
+    rows = execute_query(
+        "SELECT COUNT(*) as cnt FROM topic_tags WHERE topic_id = ?",
+        (topic_id,),
+    )
+    return rows[0]["cnt"] > 0
+
+
 def check_topic_exists(topic_id: int, topic_name: str | None = None) -> dict:
     """指定topic_idがDBに存在し、topic名が一致するかチェックする。
 

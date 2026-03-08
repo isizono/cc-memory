@@ -4,8 +4,13 @@ from typing import Optional
 
 from sqlite_vec import serialize_float32
 
-from src.db import execute_query, row_to_dict
+from src.db import execute_query, get_connection, row_to_dict
 from src.services import embedding_service
+from src.services.tag_service import (
+    get_entity_tags,
+    get_effective_tags,
+    parse_tag,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +36,122 @@ def _escape_fts5_query(keyword: str) -> str:
     return f'"{escaped}"'
 
 
+def _resolve_tag_ids_readonly(conn, tag_strings: list[str]) -> list[int]:
+    """タグ文字列からtag_idを取得（SELECT ONLY、新規作成しない）。
+
+    存在しないタグが含まれる場合、そのタグは無視される。
+    全タグが存在しない場合は空リストを返す。
+    """
+    tag_ids = []
+    for tag_str in tag_strings:
+        ns, name = parse_tag(tag_str)
+        row = conn.execute(
+            "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+            (ns, name)
+        ).fetchone()
+        if row:
+            tag_ids.append(row[0])
+    return tag_ids
+
+
+def _build_tag_filter_cte(tag_ids: list[int]) -> tuple[str, list]:
+    """タグフィルタ用のCTE SQLとパラメータを構築する。
+
+    Returns:
+        (cte_sql, params) のタプル。cte_sqlは "WITH tag_filtered AS (...)" の形式。
+    """
+    n_tags = len(tag_ids)
+    placeholders = ",".join("?" * n_tags)
+
+    cte_sql = f"""
+    WITH tag_filtered AS (
+        -- topic (直接タグ)
+        SELECT 'topic' AS source_type, topic_id AS source_id FROM (
+            SELECT tt.topic_id, tt.tag_id
+            FROM topic_tags tt
+            WHERE tt.tag_id IN ({placeholders})
+        ) GROUP BY topic_id HAVING COUNT(DISTINCT tag_id) = ?
+
+        UNION ALL
+        -- task (直接タグ)
+        SELECT 'task', task_id FROM (
+            SELECT tkt.task_id, tkt.tag_id
+            FROM task_tags tkt
+            WHERE tkt.tag_id IN ({placeholders})
+        ) GROUP BY task_id HAVING COUNT(DISTINCT tag_id) = ?
+
+        UNION ALL
+        -- decision (UNION継承)
+        SELECT 'decision', decision_id FROM (
+            SELECT d.id AS decision_id, tt.tag_id
+            FROM decisions d JOIN topic_tags tt ON tt.topic_id = d.topic_id
+            WHERE tt.tag_id IN ({placeholders})
+            UNION
+            SELECT dt.decision_id, dt.tag_id
+            FROM decision_tags dt WHERE dt.tag_id IN ({placeholders})
+        ) GROUP BY decision_id HAVING COUNT(DISTINCT tag_id) = ?
+
+        UNION ALL
+        -- log (UNION継承)
+        SELECT 'log', log_id FROM (
+            SELECT dl.id AS log_id, tt.tag_id
+            FROM discussion_logs dl JOIN topic_tags tt ON tt.topic_id = dl.topic_id
+            WHERE tt.tag_id IN ({placeholders})
+            UNION
+            SELECT lt.log_id, lt.tag_id
+            FROM log_tags lt WHERE lt.tag_id IN ({placeholders})
+        ) GROUP BY log_id HAVING COUNT(DISTINCT tag_id) = ?
+    )
+    """
+
+    # パラメータ: 各セクションに tag_ids + n_tags を渡す
+    params: list = []
+    # topic
+    params.extend(tag_ids)
+    params.append(n_tags)
+    # task
+    params.extend(tag_ids)
+    params.append(n_tags)
+    # decision (2つのIN句)
+    params.extend(tag_ids)
+    params.extend(tag_ids)
+    params.append(n_tags)
+    # log (2つのIN句)
+    params.extend(tag_ids)
+    params.extend(tag_ids)
+    params.append(n_tags)
+
+    return cte_sql, params
+
+
 def _fts_search(
     keyword: str,
-    subject_id: int,
+    tag_ids: Optional[list[int]],
     type_filter: Optional[str],
     limit: int,
 ) -> list[dict]:
     """FTS5検索。結果はBM25ランク順のリスト。"""
     escaped_keyword = _escape_fts5_query(keyword)
-    rows = execute_query(
+
+    if tag_ids:
+        cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
+        query = f"""
+        {cte_sql}
+        SELECT
+          si.source_type AS type,
+          si.source_id AS id,
+          si.title
+        FROM search_index_fts
+        JOIN search_index si ON si.id = search_index_fts.rowid
+        JOIN tag_filtered tf ON tf.source_type = si.source_type AND tf.source_id = si.source_id
+        WHERE search_index_fts MATCH ?
+          AND (? IS NULL OR si.source_type = ?)
+        ORDER BY bm25(search_index_fts, 5.0, 1.0)
+        LIMIT ?
         """
+        params = (*cte_params, escaped_keyword, type_filter, type_filter, limit)
+    else:
+        query = """
         SELECT
           si.source_type AS type,
           si.source_id AS id,
@@ -48,14 +159,13 @@ def _fts_search(
         FROM search_index_fts
         JOIN search_index si ON si.id = search_index_fts.rowid
         WHERE search_index_fts MATCH ?
-          AND si.subject_id = ?
           AND (? IS NULL OR si.source_type = ?)
-        -- bm25() returns negative values; ascending = most relevant first
         ORDER BY bm25(search_index_fts, 5.0, 1.0)
         LIMIT ?
-        """,
-        (escaped_keyword, subject_id, type_filter, type_filter, limit),
-    )
+        """
+        params = (escaped_keyword, type_filter, type_filter, limit)
+
+    rows = execute_query(query, params)
     results = []
     for row in rows:
         r = row_to_dict(row)
@@ -69,7 +179,7 @@ def _fts_search(
 
 def _vector_search(
     keyword: str,
-    subject_id: int,
+    tag_ids: Optional[list[int]],
     type_filter: Optional[str],
     limit: int,
 ) -> Optional[list[dict]]:
@@ -81,7 +191,8 @@ def _vector_search(
 
         blob = serialize_float32(query_embedding)
 
-        # vec_indexからKNN取得
+        # vec_indexからKNN取得（タグフィルタ不可なので多めに取得）
+        # limitはsearch()側でlimit*5に拡大済み
         vec_rows = execute_query(
             "SELECT rowid, distance FROM vec_index WHERE embedding MATCH ? AND k = ?",
             (blob, limit),
@@ -90,25 +201,39 @@ def _vector_search(
         if not vec_rows:
             return []
 
-        # search_indexと突き合わせてsubject_id/type_filterでフィルタリング
         vec_data = {}
         for row in vec_rows:
             r = row_to_dict(row)
             vec_data[r["rowid"]] = r["distance"]
 
         rowids = list(vec_data.keys())
-        placeholders = ",".join("?" * len(rowids))
+        rowid_placeholders = ",".join("?" * len(rowids))
 
-        filter_rows = execute_query(
-            f"""
+        if tag_ids:
+            cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
+            query = f"""
+            {cte_sql}
             SELECT id, source_type, source_id, title
             FROM search_index
-            WHERE id IN ({placeholders})
-              AND subject_id = ?
+            WHERE id IN ({rowid_placeholders})
               AND (? IS NULL OR source_type = ?)
-            """,
-            (*rowids, subject_id, type_filter, type_filter),
-        )
+              AND EXISTS (
+                SELECT 1 FROM tag_filtered tf
+                WHERE tf.source_type = search_index.source_type
+                  AND tf.source_id = search_index.source_id
+              )
+            """
+            params = (*cte_params, *rowids, type_filter, type_filter)
+        else:
+            query = f"""
+            SELECT id, source_type, source_id, title
+            FROM search_index
+            WHERE id IN ({rowid_placeholders})
+              AND (? IS NULL OR source_type = ?)
+            """
+            params = (*rowids, type_filter, type_filter)
+
+        filter_rows = execute_query(query, params)
 
         results = []
         for row in filter_rows:
@@ -122,7 +247,7 @@ def _vector_search(
 
         # distance順でソート（小さいほど類似度が高い）
         results.sort(key=lambda x: x["distance"])
-        return results
+        return results[:limit]
 
     except (ValueError, RuntimeError, OSError):
         logger.warning("Vector search failed, falling back to FTS-only", exc_info=True)
@@ -167,23 +292,24 @@ def _rrf_merge(
 
 
 def search(
-    subject_id: int,
     keyword: str,
+    tags: Optional[list[str]] = None,
     type_filter: Optional[str] = None,
     limit: int = 10,
 ) -> dict:
     """
-    サブジェクト内をキーワードで横断検索する。
+    キーワードで横断検索する。
 
     FTS5 trigramとベクトル検索のハイブリッド。RRFスコアで統合・ランキング。
     2文字以上のキーワードを指定する。
     3文字以上: FTS5 + ベクトル検索のハイブリッド。
     2文字: ベクトル検索のみ（ベクトル検索無効時はエラー）。
+    tagsでフィルタリング可能（AND結合）。未指定で全件検索。
     詳細情報が必要な場合は get_by_id(type, id) で取得する。
 
     Args:
-        subject_id: サブジェクトID
         keyword: 検索キーワード（2文字以上）
+        tags: タグフィルタ（AND条件。未指定=全件検索）
         type_filter: 検索対象の絞り込み（'topic', 'decision', 'task', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
 
@@ -211,16 +337,28 @@ def search(
     limit = max(1, min(limit, 50))
 
     try:
+        # タグフィルタの解決
+        tag_ids = None
+        if tags:
+            conn = get_connection()
+            try:
+                tag_ids = _resolve_tag_ids_readonly(conn, tags)
+                # 指定タグの一部でもDBに存在しない場合、ANDフィルタは必ず空結果
+                if len(tag_ids) < len(tags):
+                    return {"results": [], "total_count": 0}
+            finally:
+                conn.close()
+
         # RRFで両ソースをマージした後にlimitで切るため、各ソースからlimitより多めに取得する
         fetch_limit = limit * 5
 
         # FTS5検索: 3文字以上の場合のみ
         fts_results = []
         if len(keyword) >= 3:
-            fts_results = _fts_search(keyword, subject_id, type_filter, fetch_limit)
+            fts_results = _fts_search(keyword, tag_ids, type_filter, fetch_limit)
 
         # ベクトル検索
-        vec_results = _vector_search(keyword, subject_id, type_filter, fetch_limit)
+        vec_results = _vector_search(keyword, tag_ids, type_filter, fetch_limit)
 
         # 2文字キーワード + ベクトル検索無効 → エラー
         if len(keyword) < 3 and vec_results is None:
@@ -257,15 +395,14 @@ def search(
         }
 
 
-def _format_row(type_name: str, data: dict) -> dict:
+def _format_row(type_name: str, data: dict, tags: list[str]) -> dict:
     """typeに応じたレスポンス整形"""
     if type_name == 'topic':
         return {
             "id": data["id"],
-            "subject_id": data["subject_id"],
             "title": data["title"],
             "description": data["description"],
-            "parent_topic_id": data["parent_topic_id"],
+            "tags": tags,
             "created_at": data["created_at"],
         }
     elif type_name == 'decision':
@@ -274,16 +411,16 @@ def _format_row(type_name: str, data: dict) -> dict:
             "topic_id": data["topic_id"],
             "decision": data["decision"],
             "reason": data["reason"],
+            "tags": tags,
             "created_at": data["created_at"],
         }
     elif type_name == 'task':
         return {
             "id": data["id"],
-            "subject_id": data["subject_id"],
             "title": data["title"],
             "description": data["description"],
             "status": data["status"],
-            "topic_id": data["topic_id"],
+            "tags": tags,
             "created_at": data["created_at"],
             "updated_at": data["updated_at"],
         }
@@ -296,6 +433,7 @@ def _format_row(type_name: str, data: dict) -> dict:
             "topic_id": data["topic_id"],
             "title": title,
             "content": data["content"],
+            "tags": tags,
             "created_at": data["created_at"],
         }
     return data
@@ -325,9 +463,10 @@ def get_by_id(type: str, id: int) -> dict:
 
     table = TYPE_TO_TABLE[type]
 
+    conn = get_connection()
     try:
-        rows = execute_query(f"SELECT * FROM {table} WHERE id = ?", (id,))
-        if not rows:
+        row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (id,)).fetchone()
+        if not row:
             return {
                 "error": {
                     "code": "NOT_FOUND",
@@ -335,7 +474,19 @@ def get_by_id(type: str, id: int) -> dict:
                 }
             }
 
-        return {"type": type, "data": _format_row(type, row_to_dict(rows[0]))}
+        # タグ取得: topic/taskはget_entity_tags、decision/logはget_effective_tags
+        if type == 'topic':
+            tags = get_entity_tags(conn, "topic_tags", "topic_id", id)
+        elif type == 'task':
+            tags = get_entity_tags(conn, "task_tags", "task_id", id)
+        elif type == 'decision':
+            tags = get_effective_tags(conn, "decision", id)
+        elif type == 'log':
+            tags = get_effective_tags(conn, "log", id)
+        else:
+            tags = []
+
+        return {"type": type, "data": _format_row(type, row_to_dict(row), tags)}
 
     except Exception as e:
         return {
@@ -344,3 +495,5 @@ def get_by_id(type: str, id: int) -> dict:
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()

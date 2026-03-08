@@ -1,15 +1,21 @@
-"""トピック管理API（読み取り系）のテスト"""
+"""トピック管理API（読み取り系）のテスト
+
+get_topicsはtags引数でフィルタリングする。
+get_logs/get_decisionsは各アイテムにtagsフィールドを含む。
+"""
 import os
 import tempfile
 import pytest
 from src.db import init_database
-from src.services.subject_service import add_subject
 from src.services.topic_service import (
     add_topic,
     get_topics,
 )
 from src.services.discussion_log_service import add_log, get_logs
 from src.services.decision_service import add_decision, get_decisions
+
+
+DEFAULT_TAGS = ["domain:test"]
 
 
 @pytest.fixture
@@ -25,138 +31,141 @@ def temp_db():
             del os.environ["DISCUSSION_DB_PATH"]
 
 
-@pytest.fixture
-def test_subject(temp_db):
-    """テスト用サブジェクトを作成する"""
-    result = add_subject(name="test-subject", description="Test subject")
-    return result["subject_id"]
-
-
 # ========================================
 # get-topics のテスト
 # ========================================
 
 
-def test_get_topics_empty(test_subject):
-    """トピックが存在しない場合、空の配列が返る"""
-    result = get_topics(subject_id=test_subject)
+def test_get_topics_empty(temp_db):
+    """tags指定だがマッチするtopicが0件"""
+    result = get_topics(tags=["domain:nonexistent"])
 
     assert "error" not in result
     assert result["topics"] == []
     assert result["total_count"] == 0
 
 
-def test_get_topics_desc_order(test_subject):
-    """新しいトピックが先頭に来る（DESC順）"""
-    topic1 = add_topic(subject_id=test_subject, title="Topic 1", description="Desc 1")
-    topic2 = add_topic(subject_id=test_subject, title="Topic 2", description="Desc 2")
-    topic3 = add_topic(subject_id=test_subject, title="Topic 3", description="Desc 3")
+def test_get_topics_desc_order(temp_db):
+    """複数topic作成、降順確認"""
+    add_topic(title="Topic A", description="First", tags=DEFAULT_TAGS)
+    add_topic(title="Topic B", description="Second", tags=DEFAULT_TAGS)
+    add_topic(title="Topic C", description="Third", tags=DEFAULT_TAGS)
 
-    result = get_topics(subject_id=test_subject)
+    result = get_topics(tags=DEFAULT_TAGS)
 
     assert "error" not in result
+    # init_databaseで作成されるfirst_topicは"domain:default"なのでDEFAULT_TAGSには含まれない
     assert len(result["topics"]) == 3
-    # DESC順: 新しいものが先頭
-    assert result["topics"][0]["id"] == topic3["topic_id"]
-    assert result["topics"][1]["id"] == topic2["topic_id"]
-    assert result["topics"][2]["id"] == topic1["topic_id"]
-    assert result["total_count"] == 3
+    # 降順（新しい順）
+    assert result["topics"][0]["title"] == "Topic C"
+    assert result["topics"][1]["title"] == "Topic B"
+    assert result["topics"][2]["title"] == "Topic A"
 
 
-def test_get_topics_pagination(test_subject):
-    """ページネーションで取得できる"""
-    topics = []
+def test_get_topics_pagination(temp_db):
+    """offset/limit動作確認"""
     for i in range(5):
-        t = add_topic(subject_id=test_subject, title=f"Topic {i}", description=f"Desc {i}")
-        topics.append(t)
+        add_topic(title=f"Topic {i}", description=f"Desc {i}", tags=DEFAULT_TAGS)
 
-    # limit=3, offset=0 で最新3件
-    result1 = get_topics(subject_id=test_subject, limit=3, offset=0)
-    assert len(result1["topics"]) == 3
-    assert result1["topics"][0]["id"] == topics[4]["topic_id"]
-    assert result1["topics"][1]["id"] == topics[3]["topic_id"]
-    assert result1["topics"][2]["id"] == topics[2]["topic_id"]
-    assert result1["total_count"] == 5
+    result = get_topics(tags=DEFAULT_TAGS, limit=2, offset=0)
 
-    # offset=3 で次の2件
-    result2 = get_topics(subject_id=test_subject, limit=3, offset=3)
+    assert "error" not in result
+    assert len(result["topics"]) == 2
+    assert result["total_count"] == 5
+
+    result2 = get_topics(tags=DEFAULT_TAGS, limit=2, offset=2)
     assert len(result2["topics"]) == 2
-    assert result2["topics"][0]["id"] == topics[1]["topic_id"]
-    assert result2["topics"][1]["id"] == topics[0]["topic_id"]
-    assert result2["total_count"] == 5
+
+    result3 = get_topics(tags=DEFAULT_TAGS, limit=2, offset=4)
+    assert len(result3["topics"]) == 1
 
 
-def test_get_topics_offset_beyond_total(test_subject):
-    """offset >= total_count の場合、空配列でtotal_countは正確な値"""
-    add_topic(subject_id=test_subject, title="Topic 1", description="Desc")
+def test_get_topics_offset_beyond_total(temp_db):
+    """offset超過で空配列"""
+    add_topic(title="Only One", description="Desc", tags=DEFAULT_TAGS)
 
-    result = get_topics(subject_id=test_subject, offset=100)
+    result = get_topics(tags=DEFAULT_TAGS, offset=100)
+
+    assert "error" not in result
     assert result["topics"] == []
     assert result["total_count"] == 1
 
 
-def test_get_topics_invalid_limit(test_subject):
-    """limit < 1 の場合、エラーを返す"""
-    result = get_topics(subject_id=test_subject, limit=0)
+def test_get_topics_invalid_limit(temp_db):
+    """limit=0でINVALID_PARAMETERエラー"""
+    result = get_topics(tags=DEFAULT_TAGS, limit=0)
+
     assert "error" in result
     assert result["error"]["code"] == "INVALID_PARAMETER"
 
 
-def test_get_topics_invalid_offset(test_subject):
-    """offset < 0 の場合、エラーを返す"""
-    result = get_topics(subject_id=test_subject, offset=-1)
+def test_get_topics_invalid_offset(temp_db):
+    """offset=-1でINVALID_PARAMETERエラー"""
+    result = get_topics(tags=DEFAULT_TAGS, offset=-1)
+
     assert "error" in result
     assert result["error"]["code"] == "INVALID_PARAMETER"
 
 
-def test_get_topics_ancestors_root(test_subject):
-    """ルートトピックのancestorsは空配列"""
-    add_topic(subject_id=test_subject, title="Root", description="Root topic")
+def test_get_topics_tags_required(temp_db):
+    """tags=[]でTAGS_REQUIREDエラー"""
+    result = get_topics(tags=[])
 
-    result = get_topics(subject_id=test_subject)
-    assert result["topics"][0]["ancestors"] == []
-
-
-def test_get_topics_ancestors_3_levels(test_subject):
-    """親子3段のトピックでancestorsが[{親}, {祖父}]になる"""
-    grandparent = add_topic(subject_id=test_subject, title="Grandparent", description="GP")
-    parent = add_topic(
-        subject_id=test_subject, title="Parent", description="P",
-        parent_topic_id=grandparent["topic_id"],
-    )
-    child = add_topic(
-        subject_id=test_subject, title="Child", description="C",
-        parent_topic_id=parent["topic_id"],
-    )
-
-    result = get_topics(subject_id=test_subject)
-
-    # 各トピックを取得
-    child_topic = next(t for t in result["topics"] if t["id"] == child["topic_id"])
-    parent_topic = next(t for t in result["topics"] if t["id"] == parent["topic_id"])
-    gp_topic = next(t for t in result["topics"] if t["id"] == grandparent["topic_id"])
-
-    # childのancestors: [親, 祖父]
-    assert len(child_topic["ancestors"]) == 2
-    assert child_topic["ancestors"][0]["id"] == parent["topic_id"]
-    assert child_topic["ancestors"][0]["title"] == "Parent"
-    assert child_topic["ancestors"][1]["id"] == grandparent["topic_id"]
-    assert child_topic["ancestors"][1]["title"] == "Grandparent"
-
-    # parentのancestors: [祖父]
-    assert len(parent_topic["ancestors"]) == 1
-    assert parent_topic["ancestors"][0]["id"] == grandparent["topic_id"]
-
-    # grandparentのancestors: []
-    assert gp_topic["ancestors"] == []
+    assert "error" in result
+    assert result["error"]["code"] == "TAGS_REQUIRED"
 
 
-def test_get_topics_no_parent_topic_id_field(test_subject):
-    """レスポンスにparent_topic_idフィールドが含まれない"""
-    add_topic(subject_id=test_subject, title="Topic", description="Desc")
+def test_get_topics_nonexistent_tag(temp_db):
+    """存在しないタグで空配列"""
+    add_topic(title="Topic", description="Desc", tags=DEFAULT_TAGS)
 
-    result = get_topics(subject_id=test_subject)
-    assert "parent_topic_id" not in result["topics"][0]
+    result = get_topics(tags=["domain:does-not-exist"])
+
+    assert "error" not in result
+    assert result["topics"] == []
+    assert result["total_count"] == 0
+
+
+def test_get_topics_partial_nonexistent_tags(temp_db):
+    """存在するタグと存在しないタグの混在で空配列が返る"""
+    add_topic(title="Topic", description="Desc", tags=["domain:test"])
+
+    result = get_topics(tags=["domain:test", "domain:nonexistent"])
+
+    assert "error" not in result
+    assert result["topics"] == []
+    assert result["total_count"] == 0
+
+
+def test_get_topics_and_filter(temp_db):
+    """複数タグAND条件"""
+    add_topic(title="Both Tags", description="Desc", tags=["domain:test", "scope:search"])
+    add_topic(title="Only domain", description="Desc", tags=["domain:test"])
+    add_topic(title="Only scope", description="Desc", tags=["scope:search"])
+
+    result = get_topics(tags=["domain:test", "scope:search"])
+
+    assert "error" not in result
+    assert result["total_count"] == 1
+    assert result["topics"][0]["title"] == "Both Tags"
+
+
+def test_get_topics_has_tags_field(temp_db):
+    """各topicにtags付き"""
+    add_topic(title="Tagged Topic", description="Desc", tags=["domain:test", "scope:search"])
+
+    result = get_topics(tags=["domain:test"])
+
+    assert "error" not in result
+    assert len(result["topics"]) == 1
+    topic = result["topics"][0]
+    assert "tags" in topic
+    assert "domain:test" in topic["tags"]
+    assert "scope:search" in topic["tags"]
+    # 旧フィールドが除去されている
+    assert "subject_id" not in topic
+    assert "parent_topic_id" not in topic
+    assert "ancestors" not in topic
 
 
 # ========================================
@@ -164,18 +173,18 @@ def test_get_topics_no_parent_topic_id_field(test_subject):
 # ========================================
 
 
-def test_get_logs_empty(test_subject):
+def test_get_logs_empty(temp_db):
     """ログが存在しない場合、空の配列が返る"""
-    topic = add_topic(subject_id=test_subject, title="Topic", description="Test description")
+    topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
     result = get_logs(topic_id=topic["topic_id"])
 
     assert "error" not in result
     assert result["logs"] == []
 
 
-def test_get_logs_multiple(test_subject):
+def test_get_logs_multiple(temp_db):
     """複数のログを取得できる"""
-    topic = add_topic(subject_id=test_subject, title="Topic", description="Test description")
+    topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
 
     # 3つのログを追加
     log1 = add_log(topic_id=topic["topic_id"], title="Title 1", content="Log 1")
@@ -192,9 +201,9 @@ def test_get_logs_multiple(test_subject):
     assert result["logs"][2]["id"] == log3["log_id"]
 
 
-def test_get_logs_with_pagination(test_subject):
+def test_get_logs_with_pagination(temp_db):
     """ページネーションで取得できる"""
-    topic = add_topic(subject_id=test_subject, title="Topic", description="Test description")
+    topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
 
     # 5つのログを追加
     logs = []
@@ -216,14 +225,28 @@ def test_get_logs_with_pagination(test_subject):
     assert result2["logs"][0]["id"] == logs[3]["log_id"]
 
 
+def test_get_logs_with_tags(temp_db):
+    """各logにtags含む（topicタグ継承）"""
+    topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
+    add_log(topic_id=topic["topic_id"], title="Log 1", content="Content 1")
+
+    result = get_logs(topic_id=topic["topic_id"])
+
+    assert "error" not in result
+    assert len(result["logs"]) == 1
+    log = result["logs"][0]
+    assert "tags" in log
+    assert "domain:test" in log["tags"]
+
+
 # ========================================
 # get-decisions のテスト
 # ========================================
 
 
-def test_get_decisions_empty(test_subject):
+def test_get_decisions_empty(temp_db):
     """決定事項が存在しない場合、空の配列が返る"""
-    topic = add_topic(subject_id=test_subject, title="Topic", description="Test description")
+    topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
     result = get_decisions(topic_id=topic["topic_id"])
 
     assert "error" not in result
@@ -232,9 +255,9 @@ def test_get_decisions_empty(test_subject):
     assert result["decisions"] == []
 
 
-def test_get_decisions_topic_name_included(test_subject):
+def test_get_decisions_topic_name_included(temp_db):
     """topic_nameがトップレベルに含まれる"""
-    topic = add_topic(subject_id=test_subject, title="テスト用トピック", description="Test")
+    topic = add_topic(title="テスト用トピック", description="Test", tags=DEFAULT_TAGS)
     add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason 1")
 
     result = get_decisions(topic_id=topic["topic_id"])
@@ -245,7 +268,7 @@ def test_get_decisions_topic_name_included(test_subject):
     assert "topic_id" not in result["decisions"][0]
 
 
-def test_get_decisions_nonexistent_topic(test_subject):
+def test_get_decisions_nonexistent_topic(temp_db):
     """存在しないtopic_idの場合、topic_name=nullで空配列"""
     result = get_decisions(topic_id=999999)
 
@@ -255,9 +278,9 @@ def test_get_decisions_nonexistent_topic(test_subject):
     assert result["decisions"] == []
 
 
-def test_get_decisions_multiple(test_subject):
+def test_get_decisions_multiple(temp_db):
     """複数の決定事項を取得できる"""
-    topic = add_topic(subject_id=test_subject, title="Topic", description="Test description")
+    topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
 
     # 3つの決定事項を追加
     dec1 = add_decision(
@@ -286,9 +309,9 @@ def test_get_decisions_multiple(test_subject):
     assert result["decisions"][2]["id"] == dec3["decision_id"]
 
 
-def test_get_decisions_with_pagination(test_subject):
+def test_get_decisions_with_pagination(temp_db):
     """ページネーションで取得できる"""
-    topic = add_topic(subject_id=test_subject, title="Topic", description="Test description")
+    topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
 
     # 5つの決定事項を追加
     decisions = []
@@ -312,3 +335,39 @@ def test_get_decisions_with_pagination(test_subject):
     )
     assert len(result2["decisions"]) == 2
     assert result2["decisions"][0]["id"] == decisions[3]["decision_id"]
+
+
+def test_get_decisions_with_tags(temp_db):
+    """各decisionにtags含む（topicタグ継承）"""
+    topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
+    add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason 1")
+
+    result = get_decisions(topic_id=topic["topic_id"])
+
+    assert "error" not in result
+    assert len(result["decisions"]) == 1
+    dec = result["decisions"][0]
+    assert "tags" in dec
+    assert "domain:test" in dec["tags"]
+
+
+def test_get_decisions_with_extra_tags(temp_db):
+    """decision個別タグ+topic継承"""
+    topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
+    add_decision(
+        topic_id=topic["topic_id"],
+        decision="Dec with extra tags",
+        reason="Reason",
+        tags=["scope:search"],
+    )
+
+    result = get_decisions(topic_id=topic["topic_id"])
+
+    assert "error" not in result
+    assert len(result["decisions"]) == 1
+    dec = result["decisions"][0]
+    assert "tags" in dec
+    # topicのタグを継承
+    assert "domain:test" in dec["tags"]
+    # decision個別のタグも含む
+    assert "scope:search" in dec["tags"]
