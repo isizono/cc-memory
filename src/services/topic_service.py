@@ -8,6 +8,8 @@ from src.services.tag_service import (
     ensure_tag_ids,
     link_tags,
     get_entity_tags,
+    get_entity_tags_batch,
+    resolve_tag_ids,
 )
 
 
@@ -130,8 +132,10 @@ def get_topics(
 
         conn = get_connection()
         try:
-            # タグIDを取得（ensure_tag_idsは INSERT OR IGNORE するので、存在しないタグも安全）
-            tag_ids = ensure_tag_ids(conn, parsed_tags)
+            # タグIDを取得（読み取り専用、INSERTしない）
+            tag_ids = resolve_tag_ids(conn, parsed_tags)
+            if not tag_ids:
+                return {"topics": [], "total_count": 0}
             placeholders = ",".join("?" * len(tag_ids))
 
             # AND結合: 全タグを持つtopicのみ
@@ -164,16 +168,18 @@ def get_topics(
                 (*topic_ids, limit, offset),
             ).fetchall()
 
+            # バッチでタグ取得
+            fetched_ids = [row["id"] for row in rows]
+            tags_map = get_entity_tags_batch(conn, "topic_tags", "topic_id", fetched_ids)
+
             topics = []
             for row in rows:
                 topic = row_to_dict(row)
-                # 各topicのタグを取得
-                topic_tags = get_entity_tags(conn, "topic_tags", "topic_id", topic["id"])
                 topics.append({
                     "id": topic["id"],
                     "title": topic["title"],
                     "description": topic["description"],
-                    "tags": topic_tags,
+                    "tags": tags_map.get(topic["id"], []),
                     "created_at": topic["created_at"],
                 })
 

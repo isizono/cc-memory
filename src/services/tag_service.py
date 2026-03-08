@@ -101,6 +101,25 @@ def ensure_tag_ids(conn: sqlite3.Connection, parsed_tags: list[tuple[str, str]])
     return [id_map[(ns, name)] for ns, name in parsed_tags]
 
 
+def resolve_tag_ids(conn: sqlite3.Connection, parsed_tags: list[tuple[str, str]]) -> list[int]:
+    """既存タグのidのリストを返す（読み取り専用、INSERTしない）。
+
+    存在しないタグは無視され、結果に含まれない。
+    """
+    if not parsed_tags:
+        return []
+    placeholders = " OR ".join(
+        "(namespace = ? AND name = ?)" for _ in parsed_tags
+    )
+    flat_params = [v for pair in parsed_tags for v in pair]
+    rows = conn.execute(
+        f"SELECT id, namespace, name FROM tags WHERE {placeholders}",
+        flat_params,
+    ).fetchall()
+    id_map = {(row["namespace"], row["name"]): row["id"] for row in rows}
+    return [id_map[(ns, name)] for ns, name in parsed_tags if (ns, name) in id_map]
+
+
 def link_tags(
     conn: sqlite3.Connection,
     junction_table: str,
@@ -151,6 +170,39 @@ def get_entity_tags(
         (entity_id,),
     ).fetchall()
     return format_tags(rows)
+
+
+def get_entity_tags_batch(
+    conn: sqlite3.Connection,
+    junction_table: str,
+    entity_column: str,
+    entity_ids: list[int],
+) -> dict[int, list[str]]:
+    """複数エンティティに紐づくタグ文字列リストを一括取得する。
+
+    Returns: {entity_id: ["tag1", "tag2", ...], ...}
+    """
+    if not entity_ids:
+        return {}
+    placeholders = ",".join("?" * len(entity_ids))
+    rows = conn.execute(
+        f"""
+        SELECT jt.{entity_column} AS entity_id, t.namespace, t.name
+        FROM tags t
+        JOIN {junction_table} jt ON t.id = jt.tag_id
+        WHERE jt.{entity_column} IN ({placeholders})
+        """,
+        tuple(entity_ids),
+    ).fetchall()
+
+    groups: dict[int, list] = {}
+    for row in rows:
+        eid = row["entity_id"]
+        if eid not in groups:
+            groups[eid] = []
+        groups[eid].append(row)
+
+    return {eid: format_tags(tag_rows) for eid, tag_rows in groups.items()}
 
 
 def get_effective_tags_batch(

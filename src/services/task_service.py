@@ -10,6 +10,8 @@ from src.services.tag_service import (
     ensure_tag_ids,
     link_tags,
     get_entity_tags,
+    get_entity_tags_batch,
+    resolve_tag_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -139,8 +141,10 @@ def get_tasks(tags: list[str], status: str = "active", limit: int = 5) -> dict:
 
     conn = get_connection()
     try:
-        # タグIDを取得
-        tag_ids = ensure_tag_ids(conn, parsed_tags)
+        # タグIDを取得（読み取り専用、INSERTしない）
+        tag_ids = resolve_tag_ids(conn, parsed_tags)
+        if not tag_ids:
+            return {"tasks": [], "total_count": 0}
         tag_placeholders = ",".join("?" * len(tag_ids))
 
         # AND結合: 全タグを持つtaskのみ
@@ -190,17 +194,19 @@ def get_tasks(tags: list[str], status: str = "active", limit: int = 5) -> dict:
             (*where_params, limit),
         ).fetchall()
 
+        # バッチでタグ取得
+        fetched_ids = [row["id"] for row in rows]
+        tags_map = get_entity_tags_batch(conn, "task_tags", "task_id", fetched_ids)
+
         tasks = []
         for row in rows:
             task = row_to_dict(row)
-            # 各taskのタグを取得
-            task_tags = get_entity_tags(conn, "task_tags", "task_id", task["id"])
             tasks.append({
                 "id": task["id"],
                 "title": task["title"],
                 "description": (task["description"] or "")[:100],
                 "status": task["status"],
-                "tags": task_tags,
+                "tags": tags_map.get(task["id"], []),
                 "created_at": task["created_at"],
                 "updated_at": task["updated_at"],
             })
