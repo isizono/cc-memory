@@ -11,13 +11,190 @@ from src.services import (
     knowledge_service,
 )
 from src.services.tag_service import list_tags as _list_tags
+from src.db import execute_query, row_to_dict
 
 logger = logging.getLogger(__name__)
 
+# アクティブコンテキスト用の定数
+ACTIVE_DAYS = 7
+RECENT_TOPICS_LIMIT = 3
+DESC_MAX_LEN = 30
+
+
+def _get_active_domains() -> list[dict]:
+    """直近7日でトピック更新があったdomain:タグを取得する。
+
+    Returns:
+        [{"tag_id": int, "name": str}, ...]（name順ソート）
+    """
+    rows = execute_query(
+        """
+        SELECT DISTINCT t.id AS tag_id, t.name
+        FROM tags t
+        JOIN topic_tags tt ON t.id = tt.tag_id
+        JOIN discussion_topics dt ON tt.topic_id = dt.id
+        WHERE t.namespace = 'domain'
+          AND dt.created_at > datetime('now', ? || ' days')
+        ORDER BY t.name
+        """,
+        (f"-{ACTIVE_DAYS}",),
+    )
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_recent_topics_by_tag(tag_id: int) -> list[dict]:
+    """domain:タグに紐づく最新トピック3件を取得する。
+
+    Args:
+        tag_id: タグID
+
+    Returns:
+        [{"id": int, "title": str, "description": str}, ...]（新しい順）
+    """
+    rows = execute_query(
+        """
+        SELECT dt.id, dt.title, dt.description
+        FROM discussion_topics dt
+        JOIN topic_tags tt ON dt.id = tt.topic_id
+        WHERE tt.tag_id = ?
+        ORDER BY dt.created_at DESC, dt.id DESC
+        LIMIT ?
+        """,
+        (tag_id, RECENT_TOPICS_LIMIT),
+    )
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_active_tasks_by_tag(tag_id: int) -> list[dict]:
+    """domain:タグに紐づくアクティブタスク（pending + in_progress）を取得する。
+
+    Args:
+        tag_id: タグID
+
+    Returns:
+        [{"id": int, "title": str, "status": str}, ...]（in_progress優先、updated_at降順）
+    """
+    rows = execute_query(
+        """
+        SELECT tk.id, tk.title, tk.status
+        FROM tasks tk
+        JOIN task_tags tkt ON tk.id = tkt.task_id
+        WHERE tkt.tag_id = ?
+          AND tk.status IN ('in_progress', 'pending')
+        ORDER BY CASE tk.status WHEN 'in_progress' THEN 0 ELSE 1 END,
+                 tk.updated_at DESC
+        """,
+        (tag_id,),
+    )
+    return [row_to_dict(r) for r in rows]
+
+
+def _get_recent_non_domain_tags() -> list[str]:
+    """直近7日で使われたdomain:以外のタグをフラット列挙する。
+
+    topic_tags経由でトピックの作成日が直近7日のタグを取得する。
+
+    Returns:
+        ["scope:設計", "scope:実装", "mode:議論", "hooks", ...]（使用頻度降順）
+    """
+    rows = execute_query(
+        """
+        SELECT t.namespace, t.name, COUNT(DISTINCT tt.topic_id) AS freq
+        FROM tags t
+        JOIN topic_tags tt ON t.id = tt.tag_id
+        JOIN discussion_topics dt ON tt.topic_id = dt.id
+        WHERE t.namespace != 'domain'
+          AND dt.created_at > datetime('now', ? || ' days')
+        GROUP BY t.id
+        ORDER BY freq DESC, t.name ASC
+        """,
+        (f"-{ACTIVE_DAYS}",),
+    )
+    tags = []
+    for row in rows:
+        r = row_to_dict(row)
+        ns = r["namespace"]
+        name = r["name"]
+        if ns:
+            tags.append(f"{ns}:{name}")
+        else:
+            tags.append(name)
+    return tags
+
+
+def _truncate_desc(desc: str) -> str:
+    """descriptionをDESC_MAX_LEN文字に切り詰める。"""
+    if not desc:
+        return ""
+    if len(desc) <= DESC_MAX_LEN:
+        return desc
+    return desc[:DESC_MAX_LEN] + "..."
+
 
 def _build_active_context() -> str:
-    """アクティブコンテキスト文字列を組み立てる"""
-    return ""
+    """アクティブコンテキスト文字列を組み立てる。
+
+    domain:タグごとに旧subject形式を再現（最新トピック3件 + アクティブタスク一覧）し、
+    末尾にdomain:以外のタグを直近7日の使用頻度でフラット列挙する。
+    """
+    try:
+        # domain:タグのセクション
+        domains = _get_active_domains()
+        domain_sections = []
+
+        for domain in domains:
+            tag_id = domain["tag_id"]
+            name = domain["name"]
+
+            topics = _get_recent_topics_by_tag(tag_id)
+            tasks = _get_active_tasks_by_tag(tag_id)
+
+            # トピックもタスクもなければスキップ
+            if not topics and not tasks:
+                continue
+
+            lines = [f"## {name} (domain)"]
+
+            if topics:
+                lines.append("最新トピック:")
+                for t in topics:
+                    desc = _truncate_desc(t["description"])
+                    desc_part = f": {desc}" if desc else ""
+                    lines.append(f"- [{t['id']}] {t['title']}{desc_part}")
+
+            if tasks:
+                lines.append("アクティブタスク:")
+                for t in tasks:
+                    lines.append(f"- [{t['id']}] {t['title']} ({t['status']})")
+
+            domain_sections.append("\n".join(lines))
+
+        # domain:以外のタグセクション
+        non_domain_tags = _get_recent_non_domain_tags()
+
+        # 何も表示するものがなければ空文字列
+        if not domain_sections and not non_domain_tags:
+            return ""
+
+        # 組み立て
+        parts = ["# アクティブコンテキスト", ""]
+        if domain_sections:
+            parts.append(domain_sections[0])
+            for section in domain_sections[1:]:
+                parts.append("")
+                parts.append(section)
+
+        if non_domain_tags:
+            if domain_sections:
+                parts.append("")
+            parts.append("## 最近使われたタグ")
+            parts.append(", ".join(non_domain_tags))
+
+        return "\n".join(parts) + "\n"
+
+    except Exception:
+        logger.exception("Failed to build active context")
+        return ""
 
 
 # Instructions injected into the MCP server
