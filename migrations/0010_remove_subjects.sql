@@ -51,7 +51,7 @@ ALTER TABLE search_index DROP COLUMN subject_id;
 -- Step 4: subjectsテーブル削除
 -- ============================================
 
-DROP TABLE subjects;
+DROP TABLE IF EXISTS subjects;
 
 -- ============================================
 -- Step 5: 新トリガー12個を作成
