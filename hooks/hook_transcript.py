@@ -92,23 +92,21 @@ def parse_meta_tag(text: str) -> dict | None:
     """テキストからメタタグをパースする。
 
     フォーマット:
-    <!-- [meta] subject: xxx (id: N) | topic: yyy (id: M) -->
+    <!-- [meta] topic: xxx (id: N) -->
 
     Returns:
-        {"found": True, "subject_name": ..., "subject_id": ..., "topic_name": ..., "topic_id": ...}
+        {"found": True, "topic_name": ..., "topic_id": ...}
         or None
     """
     # HTMLコメント形式のメタタグを探す
-    pattern = r'<!--\s*\[meta\]\s*subject:\s*(.+?)\s*\(id:\s*(\d+)\)\s*\|\s*topic:\s*(.+?)\s*\(id:\s*(\d+)\)\s*-->'
+    pattern = r'<!--\s*\[meta\]\s*topic:\s*(.+?)\s*\(id:\s*(\d+)\)\s*-->'
     match = re.search(pattern, text)
 
     if match:
         return {
             "found": True,
-            "subject_name": match.group(1).strip(),
-            "subject_id": int(match.group(2)),
-            "topic_name": match.group(3).strip(),
-            "topic_id": int(match.group(4)),
+            "topic_name": match.group(1).strip(),
+            "topic_id": int(match.group(2)),
         }
 
     return None
