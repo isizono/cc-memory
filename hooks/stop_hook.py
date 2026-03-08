@@ -121,14 +121,12 @@ def main() -> None:
             )
             return
 
-        # 5.5 タグ存在チェック
+        # 5.5 タグ存在チェック（warning only、blockしない）
         if not check_topic_has_tags(current_topic_id):
-            state.increment_block_count()
-            _output(
-                "block",
-                "このトピックにタグがありません。add_topicまたはタグ付けツールでタグを付与してください",
+            print(
+                f"stop_hook.py warning: topic_id={current_topic_id} にタグがありません",
+                file=sys.stderr,
             )
-            return
 
         # 6. トピック名一致チェック（blockしない）
         if topic_result.get("name_match") is False:

@@ -58,8 +58,13 @@ def _run_stop_hook(
     session_id: str,
     env_override: dict | None = None,
     last_assistant_message: str = "",
-) -> dict:
-    """stop_hook.py を subprocess で実行し、出力 JSON を返す"""
+    return_stderr: bool = False,
+) -> dict | tuple[dict, str]:
+    """stop_hook.py を subprocess で実行し、出力 JSON を返す
+
+    Args:
+        return_stderr: True の場合、(json_result, stderr_text) のタプルを返す
+    """
     input_data = json.dumps({
         "transcript_path": transcript_path,
         "session_id": session_id,
@@ -82,7 +87,11 @@ def _run_stop_hook(
     # 標準出力からJSONをパース
     stdout = result.stdout.strip()
     assert stdout, f"stop_hook.py produced no output. stderr: {result.stderr}"
-    return json.loads(stdout)
+    parsed = json.loads(stdout)
+
+    if return_stderr:
+        return parsed, result.stderr
+    return parsed
 
 
 # --- Fixtures ---
@@ -730,8 +739,8 @@ class TestTopicToolCallCheck:
 class TestTopicTagsCheck:
     """topic_tagsタグ存在チェック（ステップ5.5）"""
 
-    def test_topic_without_tags_blocks(self, env_setup):
-        """タグなしトピック → block"""
+    def test_topic_without_tags_approves(self, env_setup):
+        """タグなしトピック → approve（stderrにwarning出力）"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -742,12 +751,14 @@ class TestTopicTagsCheck:
             transcript,
         )
 
-        result = _run_stop_hook(
+        result, stderr = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
             last_assistant_message=f"response\n{META_TAG_NO_TAGS}",
+            return_stderr=True,
         )
-        assert result["decision"] == "block"
-        assert "タグがありません" in result["reason"]
+        assert result["decision"] == "approve"
+        assert "topic_id=300" in stderr
+        assert "タグがありません" in stderr
 
     def test_topic_with_tags_approves(self, env_setup):
         """タグありトピック → approve"""
