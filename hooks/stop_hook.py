@@ -89,7 +89,7 @@ def main() -> None:
             state.increment_block_count()
             _output(
                 "block",
-                "応答の最初にメタタグを出力してください。フォーマット: "
+                "応答の最後にメタタグを出力してください。フォーマット: "
                 "<!-- [meta] topic: xxx (id: N) -->",
             )
             return
