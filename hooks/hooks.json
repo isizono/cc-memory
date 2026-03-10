@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "cd ${CLAUDE_PLUGIN_ROOT} && uv run python hooks/hook_state.py clear"
+          },
+          {
+            "type": "command",
+            "command": "cd ${CLAUDE_PLUGIN_ROOT} && uv run python hooks/session_start_hook.py"
           }
         ]
       }

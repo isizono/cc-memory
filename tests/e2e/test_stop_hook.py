@@ -1,7 +1,7 @@
 """hooks/stop_hook.py の E2E テスト
 
 subprocess.run で stop_hook.py を呼び出し、stdin→stdout の入出力をテスト。
-テスト用に tmpdir の DB と state を使う（DISCUSSION_DB_PATH, HOOK_STATE_DIR 環境変数）。
+テスト用に tmpdir の state を使う（HOOK_STATE_DIR 環境変数）。
 """
 import json
 import os
@@ -43,12 +43,9 @@ def _make_user_entry(text: str = "hello") -> dict:
     return {"type": "human", "message": {"content": [{"type": "text", "text": text}]}}
 
 
-META_TAG = '<!-- [meta] topic: test-topic (id: 100) -->'
-META_TAG_TOPIC_200 = '<!-- [meta] topic: another-topic (id: 200) -->'
-META_TAG_WRONG_NAME = '<!-- [meta] topic: wrong-name (id: 100) -->'
-META_TAG_NONEXISTENT = '<!-- [meta] topic: ghost (id: 99999) -->'
-META_TAG_NO_TAGS = '<!-- [meta] topic: no-tags-topic (id: 300) -->'
-TOPIC_LOOKUP_ENTRY = _make_assistant_entry(
+META_TAG = '<!-- [meta] topic: test-topic -->'
+META_TAG_TOPIC_B = '<!-- [meta] topic: another-topic -->'
+CONTEXT_RETRIEVAL_ENTRY = _make_assistant_entry(
     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_topics"],
 )
 
@@ -100,43 +97,10 @@ def _run_stop_hook(
 @pytest.fixture
 def env_setup(tmp_path):
     """テスト用環境をセットアップし、env_override dict を返す"""
-    from src.db import get_connection, init_database
-
-    db_path = str(tmp_path / "test.db")
     state_dir = str(tmp_path / "state")
     os.makedirs(state_dir, exist_ok=True)
 
-    # DB初期化
-    old_db = os.environ.get("DISCUSSION_DB_PATH")
-    os.environ["DISCUSSION_DB_PATH"] = db_path
-    init_database()
-
-    # テスト用トピックを追加（subjects廃止後: subject_idなしでINSERT）
-    conn = get_connection()
-    try:
-        conn.execute(
-            "INSERT INTO discussion_topics (id, title, description) "
-            "VALUES (100, 'test-topic', 'Description')",
-        )
-        conn.execute(
-            "INSERT INTO discussion_topics (id, title, description) "
-            "VALUES (200, 'another-topic', 'Description')",
-        )
-        # タグなしトピック
-        conn.execute(
-            "INSERT INTO discussion_topics (id, title, description) "
-            "VALUES (300, 'no-tags-topic', 'Description')"
-        )
-        # テスト用タグを追加
-        conn.execute("INSERT OR IGNORE INTO tags (id, namespace, name) VALUES (1, 'domain', 'test')")
-        conn.execute("INSERT INTO topic_tags (topic_id, tag_id) VALUES (100, 1)")
-        conn.execute("INSERT INTO topic_tags (topic_id, tag_id) VALUES (200, 1)")
-        conn.commit()
-    finally:
-        conn.close()
-
     env_override = {
-        "DISCUSSION_DB_PATH": db_path,
         "HOOK_STATE_DIR": state_dir,
     }
 
@@ -144,14 +108,7 @@ def env_setup(tmp_path):
         "env_override": env_override,
         "tmp_path": tmp_path,
         "state_dir": state_dir,
-        "db_path": db_path,
     }
-
-    # クリーンアップ
-    if old_db is not None:
-        os.environ["DISCUSSION_DB_PATH"] = old_db
-    elif "DISCUSSION_DB_PATH" in os.environ:
-        del os.environ["DISCUSSION_DB_PATH"]
 
 
 # --- テストケース ---
@@ -177,15 +134,15 @@ class TestNoMetaTag:
         assert "メタタグ" in result["reason"]
 
 
-class TestMetaTagWithExistingTopic:
-    """2. メタタグあり + トピック存在 + タグあり → approve"""
+class TestMetaTagApproves:
+    """2. メタタグあり + コンテキスト取得済み → approve"""
 
-    def test_meta_tag_with_existing_topic_approves(self, env_setup):
+    def test_meta_tag_with_context_retrieval_approves(self, env_setup):
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -198,131 +155,82 @@ class TestMetaTagWithExistingTopic:
         assert result["decision"] == "approve"
 
 
-class TestTopicNotExists:
-    """3. トピック不存在 → block"""
-
-    def test_nonexistent_topic_blocks(self, env_setup):
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG_NONEXISTENT}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG_NONEXISTENT}",
-        )
-        assert result["decision"] == "block"
-        assert "topic_id=99999" in result["reason"]
-        assert "存在しません" in result["reason"]
-
-
-class TestTopicNameMismatch:
-    """4. トピック名不一致 → approve（nudgeフラグ確認）"""
-
-    def test_name_mismatch_approves_with_nudge(self, env_setup):
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG_WRONG_NAME}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG_WRONG_NAME}",
-        )
-        assert result["decision"] == "approve"
-
-        # nudge_topic_name ファイルが作られている
-        state_dir = Path(env_setup["state_dir"])
-        nudge_file = state_dir / "nudge_topic_name_test-session"
-        assert nudge_file.exists()
-
-        nudge_data = json.loads(nudge_file.read_text())
-        assert nudge_data["topic_id"] == 100
-        assert nudge_data["actual_name"] == "test-topic"
-
-
 class TestTopicChangeNoRecord:
-    """5. トピック変更 + 記録なし → block"""
+    """3. トピック変更 + 記録なし → block"""
 
     def test_topic_change_without_record_blocks(self, env_setup):
         state_dir = Path(env_setup["state_dir"])
 
-        # prev_topic を 100 にセット（first_topic=1 ではない）
+        # prev_topic をトピック名で設定
         prev_file = state_dir / "prev_topic_test-session"
-        prev_file.write_text("100")
+        prev_file.write_text("test-topic")
 
-        # トピック200に変更するtranscript（100への記録なし）
+        # context_retrieved フラグを設定（既にコンテキスト取得済み）
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+
+        # 別トピックに変更するtranscript（記録なし）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG_TOPIC_200}\nresponse"),
+                _make_assistant_entry(text=f"{META_TAG_TOPIC_B}\nresponse"),
             ],
             transcript,
         )
 
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG_TOPIC_200}",
+            last_assistant_message=f"response\n{META_TAG_TOPIC_B}",
         )
         assert result["decision"] == "block"
-        assert "id=100" in result["reason"]
-        assert "記録してから" in result["reason"]
+        assert "トピックが変わりました" in result["reason"]
 
 
 class TestTopicChangeWithRecord:
-    """6. トピック変更 + 記録あり → approve"""
+    """4. トピック変更 + 記録あり → approve"""
 
     def test_topic_change_with_record_approves(self, env_setup):
         state_dir = Path(env_setup["state_dir"])
 
-        # prev_topic を 100 にセット
+        # prev_topic をトピック名で設定
         prev_file = state_dir / "prev_topic_test-session"
-        prev_file.write_text("100")
+        prev_file.write_text("test-topic")
 
-        # トピック200に変更するtranscript（100へのadd_decision記録あり）
+        # context_retrieved フラグを設定
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+
+        # 別トピックに変更するtranscript（add_decision記録あり）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
-                    tool_inputs=[{"topic_id": 100}],
                 ),
                 _make_user_entry("continue"),
-                _make_assistant_entry(text=f"{META_TAG_TOPIC_200}\nresponse"),
+                _make_assistant_entry(text=f"{META_TAG_TOPIC_B}\nresponse"),
             ],
             transcript,
         )
 
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG_TOPIC_200}",
+            last_assistant_message=f"response\n{META_TAG_TOPIC_B}",
         )
         assert result["decision"] == "approve"
 
 
 class TestBlockLimitForceApprove:
-    """7. ブロック上限3回 → force approve"""
+    """5. ブロック上限2回 → force approve"""
 
     def test_block_limit_force_approves(self, env_setup):
         state_dir = Path(env_setup["state_dir"])
 
-        # block_count を 3 にセット（上限到達）
+        # block_count を 2 にセット（上限到達）
         block_file = state_dir / "block_count_test-session"
-        block_file.write_text("3")
+        block_file.write_text("2")
 
         # メタタグなしtranscript（通常ならblock）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
@@ -345,22 +253,21 @@ class TestBlockLimitForceApprove:
 
 
 class TestExceptionFailOpen:
-    """8. 例外発生時 → approve（フェイルオープン）"""
+    """6. 例外発生時 → approve（フェイルオープン）"""
 
     def test_exception_causes_approve(self, env_setup):
-        # 存在しないtranscriptパスを渡す（メタタグなし → block になるが、
-        # それは正常動作。真の例外テストには不正なDBパスを使う）
+        # state_dir をファイルにして HookState.__init__ の mkdir を失敗させる
+        state_as_file = env_setup["tmp_path"] / "state_as_file"
+        state_as_file.write_text("not a directory")
+
         env_override = {
-            **env_setup["env_override"],
-            "DISCUSSION_DB_PATH": "/nonexistent/path/to/db.sqlite",
+            "HOOK_STATE_DIR": str(state_as_file),
         }
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
-                # DBが壊れていてもメタタグなしでblockされるので、メタタグありにする
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -370,56 +277,29 @@ class TestExceptionFailOpen:
             str(transcript), "test-session", env_override,
             last_assistant_message=f"response\n{META_TAG}",
         )
-        # DB接続エラーが発生しても approve
         assert result["decision"] == "approve"
         assert "error" in result.get("reason", "").lower()
-
-
-class TestFirstTopicSkip:
-    """first_topic(id=1)からの移動はblockしない"""
-
-    def test_first_topic_skip(self, env_setup):
-        state_dir = Path(env_setup["state_dir"])
-
-        # prev_topic を 1（first_topic）にセット
-        prev_file = state_dir / "prev_topic_test-session"
-        prev_file.write_text("1")
-
-        # トピック100に変更するtranscript（1への記録なし）
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        # first_topicからの移動はスキップ → approve
-        assert result["decision"] == "approve"
 
 
 class TestNudgeCounter:
     """nudgeカウンターの動作確認"""
 
-    def test_nudge_pending_set_on_3rd_turn_without_recording(self, env_setup):
-        """3ターン目で記録なし → nudge_pending が設定される"""
+    def test_nudge_pending_set_on_interval_without_recording(self, env_setup):
+        """インターバル到達で記録なし → nudge_pending が設定される"""
         state_dir = Path(env_setup["state_dir"])
 
-        # nudge_counter を 2 にセット（次が3の倍数）
+        # nudge_counter を 1 にセット（次が2の倍数）
         counter_file = state_dir / "nudge_counter_test-session"
-        counter_file.write_text("2")
+        counter_file.write_text("1")
+
+        # context_retrieved フラグを設定
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -436,21 +316,23 @@ class TestNudgeCounter:
         assert pending_file.exists()
 
     def test_nudge_counter_resets_on_recent_recording(self, env_setup):
-        """3ターン目で記録あり → nudge_counter がリセットされる"""
+        """インターバル到達で記録あり → nudge_counter がリセットされる"""
         state_dir = Path(env_setup["state_dir"])
 
-        # nudge_counter を 2 にセット
+        # nudge_counter を 1 にセット
         counter_file = state_dir / "nudge_counter_test-session"
-        counter_file.write_text("2")
+        counter_file.write_text("1")
+
+        # context_retrieved フラグを設定
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
-                    tool_inputs=[{"topic_id": 100}],
                     text=f"{META_TAG}\nrecorded",
                 ),
             ],
@@ -467,20 +349,22 @@ class TestNudgeCounter:
         assert not counter_file.exists()
 
     def test_nudge_counter_resets_on_add_log(self, env_setup):
-        """3ターン目でadd_log記録あり → nudge_counter がリセットされる（Bug #3検証）"""
+        """インターバル到達でadd_log記録あり → nudge_counter がリセットされる"""
         state_dir = Path(env_setup["state_dir"])
 
         counter_file = state_dir / "nudge_counter_test-session"
-        counter_file.write_text("2")
+        counter_file.write_text("1")
+
+        # context_retrieved フラグを設定
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_log"],
-                    tool_inputs=[{"topic_id": 100}],
                     text=f"logged\n{META_TAG}",
                 ),
             ],
@@ -508,7 +392,7 @@ class TestStateUpdatedOnApprove:
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -521,7 +405,7 @@ class TestStateUpdatedOnApprove:
 
         prev_file = state_dir / "prev_topic_test-session"
         assert prev_file.exists()
-        assert prev_file.read_text().strip() == "100"
+        assert prev_file.read_text().strip() == "test-topic"
 
     def test_block_count_reset_on_approve(self, env_setup):
         """approve後に block_count がリセットされる"""
@@ -535,7 +419,7 @@ class TestStateUpdatedOnApprove:
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -560,7 +444,7 @@ class TestSplitEntries:
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),  # textのみ
                 _make_assistant_entry(tool_calls=["Bash"]),  # tool_useのみ
             ],
@@ -579,7 +463,7 @@ class TestSplitEntries:
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
                 _make_assistant_entry(tool_calls=["Bash"]),
             ],
@@ -587,7 +471,6 @@ class TestSplitEntries:
         )
 
         # last_assistant_message なし → transcriptフォールバック
-        # get_last_assistant_entryがtextブロック付きエントリを返すはず
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
         )
@@ -601,11 +484,11 @@ class TestLastAssistantMessage:
         """last_assistant_messageからメタタグを検出（レースコンディション模擬）"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         # transcriptにはメタタグなし（レースコンディション模擬）だが
-        # topic参照ツールの呼び出しは含める
+        # コンテキスト取得ツールの呼び出しは含める
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
             ],
             transcript,
         )
@@ -622,7 +505,7 @@ class TestLastAssistantMessage:
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"response\n{META_TAG}"),
             ],
             transcript,
@@ -635,11 +518,11 @@ class TestLastAssistantMessage:
         assert result["decision"] == "approve"
 
 
-class TestTopicToolCallCheck:
-    """topic_id根拠チェック（間接的バリデーション）"""
+class TestContextRetrievalCheck:
+    """コンテキスト取得ツール呼び出しチェック"""
 
-    def test_no_topic_tool_call_blocks(self, env_setup):
-        """topic参照ツール未呼出 + メタタグあり → block"""
+    def test_no_context_retrieval_blocks(self, env_setup):
+        """コンテキスト取得ツール未呼出 + メタタグあり → block"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -654,8 +537,7 @@ class TestTopicToolCallCheck:
             last_assistant_message=f"response\n{META_TAG}",
         )
         assert result["decision"] == "block"
-        assert "get_topics" in result["reason"]
-        assert "確認してください" in result["reason"]
+        assert "コンテキスト" in result["reason"]
 
     def test_get_topics_call_approves(self, env_setup):
         """get_topics呼出済み + メタタグあり → approve"""
@@ -663,7 +545,7 @@ class TestTopicToolCallCheck:
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
+                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -695,14 +577,14 @@ class TestTopicToolCallCheck:
         )
         assert result["decision"] == "approve"
 
-    def test_get_by_id_call_approves(self, env_setup):
-        """get_by_id呼出済み + メタタグあり → approve"""
+    def test_get_by_ids_call_approves(self, env_setup):
+        """get_by_ids呼出済み + メタタグあり → approve"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
                 _make_assistant_entry(
-                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_by_id"],
+                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_by_ids"],
                 ),
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
@@ -715,8 +597,8 @@ class TestTopicToolCallCheck:
         )
         assert result["decision"] == "approve"
 
-    def test_add_topic_call_approves(self, env_setup):
-        """add_topic呼出済み + メタタグあり → approve"""
+    def test_add_topic_does_not_count_as_retrieval(self, env_setup):
+        """add_topicは記録ツールでありコンテキスト取得とみなさない → block"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -733,39 +615,22 @@ class TestTopicToolCallCheck:
             str(transcript), "test-session", env_setup["env_override"],
             last_assistant_message=f"response\n{META_TAG}",
         )
-        assert result["decision"] == "approve"
-
-
-class TestTopicTagsCheck:
-    """topic_tagsタグ存在チェック（ステップ6）"""
-
-    def test_topic_without_tags_blocks(self, env_setup):
-        """タグなしトピック → block"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG_NO_TAGS}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG_NO_TAGS}",
-        )
         assert result["decision"] == "block"
-        assert "タグがありません" in result["reason"]
-        assert "add_topic" in result["reason"]
+        assert "コンテキスト" in result["reason"]
 
-    def test_topic_with_tags_approves(self, env_setup):
-        """タグありトピック → approve"""
+    def test_context_retrieval_flag_persists(self, env_setup):
+        """一度コンテキスト取得したらフラグで記憶される"""
+        state_dir = Path(env_setup["state_dir"])
+
+        # context_retrieved フラグを事前設定
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+
+        # transcriptにはコンテキスト取得ツールなし
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                TOPIC_LOOKUP_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -775,4 +640,5 @@ class TestTopicTagsCheck:
             str(transcript), "test-session", env_setup["env_override"],
             last_assistant_message=f"response\n{META_TAG}",
         )
+        # フラグがあるのでblockされない
         assert result["decision"] == "approve"

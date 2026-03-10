@@ -1,9 +1,8 @@
 """hook共通: 状態ファイル管理クラス HookState
 
 hookが利用する状態ファイル（prev_topic, block_count, nudge_counter, nudge_pending,
-nudge_topic_name）の読み書きを一元管理する。標準ライブラリのみに依存。
+context_retrieved）の読み書きを一元管理する。標準ライブラリのみに依存。
 """
-import json
 from pathlib import Path
 
 
@@ -40,20 +39,14 @@ class HookState:
 
     # --- prev_topic ---
 
-    def get_prev_topic(self) -> int | None:
+    def get_prev_topic(self) -> str | None:
         """state/prev_topic_{session_id_safe} を読む。
-        ファイルなし or 内容が不正 -> None"""
-        val = self._read_str(self._path("prev_topic"))
-        if val is None:
-            return None
-        try:
-            return int(val)
-        except ValueError:
-            return None
+        ファイルなし -> None"""
+        return self._read_str(self._path("prev_topic"))
 
-    def set_prev_topic(self, topic_id: int) -> None:
+    def set_prev_topic(self, topic_name: str) -> None:
         """state/prev_topic_{session_id_safe} に書き込む"""
-        self._write(self._path("prev_topic"), str(topic_id))
+        self._write(self._path("prev_topic"), topic_name)
 
     # --- block_count ---
 
@@ -103,27 +96,16 @@ class HookState:
         except FileNotFoundError:
             return False
 
-    # --- nudge_topic_name ---
+    # --- context_retrieved ---
 
-    def set_nudge_topic_name(self, topic_id: int, actual_name: str) -> None:
-        """state/nudge_topic_name_{session_id_safe} に JSON書き込み
-        {"topic_id": topic_id, "actual_name": actual_name}"""
-        data = {"topic_id": topic_id, "actual_name": actual_name}
-        self._write(self._path("nudge_topic_name"), json.dumps(data))
+    def has_context_retrieval(self) -> bool:
+        """context_retrieved フラグファイルが存在するかチェック。
+        セッション中に一度でもget系APIを呼んだらTrue。"""
+        return self._path("context_retrieved").exists()
 
-    def pop_nudge_topic_name(self) -> dict | None:
-        """ファイルが存在すればJSON読み込み -> 削除 -> dict返却
-        なければ None。JSONパース失敗 -> ファイル削除して None"""
-        path = self._path("nudge_topic_name")
-        try:
-            data = json.loads(path.read_text())
-            path.unlink()
-            return data
-        except FileNotFoundError:
-            return None
-        except (json.JSONDecodeError, ValueError):
-            path.unlink(missing_ok=True)
-            return None
+    def set_context_retrieved(self) -> None:
+        """context_retrieved フラグファイルを作成する。"""
+        self._write(self._path("context_retrieved"), "1")
 
     # --- clear_session ---
 
@@ -138,6 +120,7 @@ class HookState:
 
 
 if __name__ == "__main__":
+    import json
     import os
     import sys
 

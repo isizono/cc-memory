@@ -45,50 +45,6 @@ class TestNoFlags:
         assert json.loads(result.stdout) == {}
 
 
-class TestTopicNameNudge:
-    """topic名nudgeフラグあり → system-reminder注入 + フラグ消去確認"""
-
-    def test_topic_name_nudge_injection(self, state_dir):
-        # フラグをセット
-        state = HookState(_SESSION_ID)
-        state.set_nudge_topic_name(42, "Correct Topic Name")
-
-        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
-        assert result.returncode == 0
-
-        output = json.loads(result.stdout)
-        assert "hookSpecificOutput" in output
-        assert output["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-
-        ctx = output["hookSpecificOutput"]["additionalContext"]
-        assert "<system-reminder>" in ctx
-        assert "Topic #42" in ctx
-        assert "Correct Topic Name" in ctx
-
-    def test_topic_name_flag_cleared_after_nudge(self, state_dir):
-        state = HookState(_SESSION_ID)
-        state.set_nudge_topic_name(42, "Correct Topic Name")
-
-        _run_hook({"session_id": _SESSION_ID}, state_dir)
-
-        # フラグが消去されていることを確認
-        assert state.pop_nudge_topic_name() is None
-
-    def test_topic_name_sanitized(self, state_dir):
-        """<>" がサニタイズされること"""
-        state = HookState(_SESSION_ID)
-        state.set_nudge_topic_name(99, '<script>"alert</script>')
-
-        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
-        output = json.loads(result.stdout)
-        ctx = output["hookSpecificOutput"]["additionalContext"]
-
-        # <>" が除去されている
-        assert "<script>" not in ctx
-        assert '"alert' not in ctx
-        assert "scriptalert/script" in ctx
-
-
 class TestNudgePending:
     """nudge_pendingフラグあり → system-reminder注入 + フラグ消去確認"""
 
@@ -116,29 +72,6 @@ class TestNudgePending:
 
         # フラグが消去されていることを確認
         assert state.pop_nudge_pending() is False
-
-
-class TestBothFlags:
-    """両方あり → topic名nudge優先"""
-
-    def test_topic_name_takes_priority(self, state_dir):
-        state = HookState(_SESSION_ID)
-        state.set_nudge_topic_name(10, "Priority Topic")
-        state.set_nudge_pending()
-
-        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
-        output = json.loads(result.stdout)
-        ctx = output["hookSpecificOutput"]["additionalContext"]
-
-        # topic名nudgeが出力される
-        assert "Topic #10" in ctx
-        assert "Priority Topic" in ctx
-
-        # topic名フラグは消去されている
-        assert state.pop_nudge_topic_name() is None
-
-        # pending フラグは残っている（次ターンで処理される）
-        assert state.pop_nudge_pending() is True
 
 
 class TestEmptySessionId:

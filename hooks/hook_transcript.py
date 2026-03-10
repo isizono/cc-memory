@@ -92,77 +92,28 @@ def parse_meta_tag(text: str) -> dict | None:
     """テキストからメタタグをパースする。
 
     フォーマット:
-    <!-- [meta] topic: xxx (id: N) -->
+    <!-- [meta] topic: xxx -->
 
     Returns:
-        {"found": True, "topic_name": ..., "topic_id": ...}
+        {"found": True, "topic_name": ...}
         or None
     """
-    # HTMLコメント形式のメタタグを探す
-    pattern = r'<!--\s*\[meta\]\s*topic:\s*(.+?)\s*\(id:\s*(\d+)\)\s*-->'
+    pattern = r'<!--\s*\[meta\]\s*topic:\s*(.+?)\s*-->'
     match = re.search(pattern, text)
 
     if match:
         return {
             "found": True,
             "topic_name": match.group(1).strip(),
-            "topic_id": int(match.group(2)),
         }
 
     return None
-
-
-def find_tool_calls_for_topic(entries: list[dict], topic_id: int) -> bool:
-    """entriesからadd_decision/add_logのツール呼び出しを探し、
-    指定topic_idに対する呼び出しがあるかチェックする。"""
-    target_tools = [
-        "mcp__plugin_claude-code-memory_cc-memory__add_decision",
-        "mcp__plugin_claude-code-memory_cc-memory__add_log",
-    ]
-
-    for entry in entries:
-        message = entry.get("message", {})
-        content = message.get("content", [])
-
-        if isinstance(content, str):
-            continue
-
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-
-            if block.get("type") != "tool_use":
-                continue
-
-            tool_name = block.get("name", "")
-            if tool_name not in target_tools:
-                continue
-
-            # ツール呼び出しの引数をチェック
-            tool_input = block.get("input", {})
-            called_topic_id = tool_input.get("topic_id")
-
-            if called_topic_id is not None:
-                try:
-                    if int(called_topic_id) == topic_id:
-                        return True
-                except (ValueError, TypeError):
-                    continue
-
-    return False
 
 
 _RECORDING_TOOLS = [
     "mcp__plugin_claude-code-memory_cc-memory__add_decision",
     "mcp__plugin_claude-code-memory_cc-memory__add_topic",
     "mcp__plugin_claude-code-memory_cc-memory__add_log",
-]
-
-_TOPIC_TOOLS = [
-    "mcp__plugin_claude-code-memory_cc-memory__get_topics",
-    "mcp__plugin_claude-code-memory_cc-memory__search",
-    "mcp__plugin_claude-code-memory_cc-memory__get_by_ids",
-    "mcp__plugin_claude-code-memory_cc-memory__add_topic",
 ]
 
 
@@ -191,6 +142,16 @@ def has_recent_recording(entries: list[dict]) -> bool:
     return _has_tool_calls(entries, _RECORDING_TOOLS)
 
 
-def has_topic_tool_calls(entries: list[dict]) -> bool:
-    """entriesにtopic_idを返すツールの呼び出しがあるかチェック。"""
-    return _has_tool_calls(entries, _TOPIC_TOOLS)
+_CONTEXT_RETRIEVAL_TOOLS = [
+    "mcp__plugin_claude-code-memory_cc-memory__search",
+    "mcp__plugin_claude-code-memory_cc-memory__get_topics",
+    "mcp__plugin_claude-code-memory_cc-memory__get_decisions",
+    "mcp__plugin_claude-code-memory_cc-memory__get_logs",
+    "mcp__plugin_claude-code-memory_cc-memory__get_tasks",
+    "mcp__plugin_claude-code-memory_cc-memory__get_by_ids",
+]
+
+
+def has_context_retrieval_calls(entries: list[dict]) -> bool:
+    """entriesにget系APIの呼び出しがあるかチェック。"""
+    return _has_tool_calls(entries, _CONTEXT_RETRIEVAL_TOOLS)

@@ -6,9 +6,9 @@ import pytest
 
 from hooks.hook_transcript import (
     extract_text_from_entry,
-    find_tool_calls_for_topic,
     get_assistant_entries,
     get_last_assistant_entry,
+    has_context_retrieval_calls,
     has_recent_recording,
     parse_meta_tag,
 )
@@ -45,25 +45,25 @@ def _make_user_entry(text: str = "hello") -> dict:
 class TestParseMetaTag:
     """parse_meta_tag関数のテスト"""
 
-    def test_valid_meta_tag(self):
-        """正常なメタタグをパースできる"""
-        text = '<!-- [meta] topic: Stopフック実装 (id: 55) -->'
+    def test_valid_meta_tag_new_format(self):
+        """新形式（idなし）のメタタグをパースできる"""
+        text = '<!-- [meta] topic: Stopフック実装 -->'
         result = parse_meta_tag(text)
-        assert result == {"found": True, "topic_name": "Stopフック実装", "topic_id": 55}
+        assert result == {"found": True, "topic_name": "Stopフック実装"}
 
     def test_meta_tag_with_surrounding_text(self):
         """前後にテキストがあってもパースできる"""
         text = """これは応答の本文です。
 
-<!-- [meta] topic: テストトピック (id: 100) -->"""
+<!-- [meta] topic: テストトピック -->"""
         result = parse_meta_tag(text)
-        assert result == {"found": True, "topic_name": "テストトピック", "topic_id": 100}
+        assert result == {"found": True, "topic_name": "テストトピック"}
 
     def test_meta_tag_with_japanese(self):
         """日本語のトピック名をパースできる"""
-        text = '<!-- [meta] topic: 日本語トピック (id: 99) -->'
+        text = '<!-- [meta] topic: 日本語トピック -->'
         result = parse_meta_tag(text)
-        assert result == {"found": True, "topic_name": "日本語トピック", "topic_id": 99}
+        assert result == {"found": True, "topic_name": "日本語トピック"}
 
     def test_no_meta_tag(self):
         """メタタグがない場合はNoneを返す"""
@@ -76,34 +76,21 @@ class TestParseMetaTag:
         result = parse_meta_tag("")
         assert result is None
 
-    def test_malformed_meta_tag(self):
-        """不正なフォーマットはNoneを返す"""
-        # idがない
-        text = '<!-- [meta] topic: test -->'
-        result = parse_meta_tag(text)
-        assert result is None
-
-    def test_large_ids(self):
-        """大きなID値もパースできる"""
-        text = '<!-- [meta] topic: numbers (id: 888888) -->'
-        result = parse_meta_tag(text)
-        assert result == {"found": True, "topic_name": "numbers", "topic_id": 888888}
-
     def test_name_with_parentheses(self):
         """名前に括弧が含まれていてもパースできる"""
-        text = '<!-- [meta] topic: 機能追加(v2) (id: 55) -->'
+        text = '<!-- [meta] topic: 機能追加(v2) -->'
         result = parse_meta_tag(text)
-        assert result == {"found": True, "topic_name": "機能追加(v2)", "topic_id": 55}
+        assert result == {"found": True, "topic_name": "機能追加(v2)"}
 
     def test_old_subject_format_not_matched(self):
         """旧フォーマット（subject:付き）はマッチしない"""
-        text = '<!-- [meta] subject: old-format (id: 1) | topic: some topic (id: 2) -->'
+        text = '<!-- [meta] subject: old-format | topic: some topic -->'
         result = parse_meta_tag(text)
         assert result is None
 
     def test_old_project_format_not_matched(self):
         """旧フォーマット（project:）はマッチしない"""
-        text = '<!-- [meta] project: old-format (id: 1) | topic: some topic (id: 2) -->'
+        text = '<!-- [meta] project: old-format | topic: some topic -->'
         result = parse_meta_tag(text)
         assert result is None
 
@@ -249,40 +236,6 @@ class TestGetAssistantEntries:
         assert get_assistant_entries(str(path)) == []
 
 
-# --- find_tool_calls_for_topic ---
-
-
-class TestFindToolCallsForTopic:
-    def test_add_decision_for_matching_topic(self):
-        """add_decisionが指定topic_idで呼ばれた -> True"""
-        entries = [_make_assistant_entry(
-            tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
-            tool_inputs=[{"topic_id": 42}],
-        )]
-        assert find_tool_calls_for_topic(entries, 42) is True
-
-    def test_add_log_for_matching_topic(self):
-        """add_logが指定topic_idで呼ばれた -> True"""
-        entries = [_make_assistant_entry(
-            tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_log"],
-            tool_inputs=[{"topic_id": 42}],
-        )]
-        assert find_tool_calls_for_topic(entries, 42) is True
-
-    def test_different_topic_id(self):
-        """別のtopic_id -> False"""
-        entries = [_make_assistant_entry(
-            tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
-            tool_inputs=[{"topic_id": 99}],
-        )]
-        assert find_tool_calls_for_topic(entries, 42) is False
-
-    def test_no_tool_calls(self):
-        """ツール呼び出しなし -> False"""
-        entries = [_make_assistant_entry(text="just text")]
-        assert find_tool_calls_for_topic(entries, 42) is False
-
-
 # --- has_recent_recording ---
 
 
@@ -314,3 +267,29 @@ class TestHasRecentRecording:
     def test_string_content(self):
         entry = {"type": "assistant", "message": {"content": "just a string"}}
         assert has_recent_recording([entry]) is False
+
+
+# --- has_context_retrieval_calls ---
+
+
+class TestHasContextRetrievalCalls:
+    def test_no_tool_calls(self):
+        entries = [_make_assistant_entry(text="hello")]
+        assert has_context_retrieval_calls(entries) is False
+
+    def test_get_topics_detected(self):
+        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_topics"])]
+        assert has_context_retrieval_calls(entries) is True
+
+    def test_search_detected(self):
+        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__search"])]
+        assert has_context_retrieval_calls(entries) is True
+
+    def test_get_by_ids_detected(self):
+        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_by_ids"])]
+        assert has_context_retrieval_calls(entries) is True
+
+    def test_recording_tool_not_detected(self):
+        """記録ツールはコンテキスト取得とみなさない"""
+        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"])]
+        assert has_context_retrieval_calls(entries) is False

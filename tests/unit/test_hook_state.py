@@ -21,12 +21,12 @@ class TestPrevTopic:
         assert hook_state.get_prev_topic() is None
 
     def test_set_then_get(self, hook_state):
-        hook_state.set_prev_topic(42)
-        assert hook_state.get_prev_topic() == 42
+        hook_state.set_prev_topic("test-topic")
+        assert hook_state.get_prev_topic() == "test-topic"
 
-    def test_corrupted_file_returns_none(self, hook_state):
+    def test_empty_file_returns_none(self, hook_state):
         path = hook_state._path("prev_topic")
-        path.write_text("not-a-number")
+        path.write_text("")
         assert hook_state.get_prev_topic() is None
 
 
@@ -83,39 +83,16 @@ class TestNudgePending:
         assert hook_state.pop_nudge_pending() is False
 
 
-class TestNudgeTopicName:
-    def test_pop_returns_none_when_no_file(self, hook_state):
-        assert hook_state.pop_nudge_topic_name() is None
-
-    def test_set_then_pop(self, hook_state):
-        hook_state.set_nudge_topic_name(55, "Test Topic")
-        result = hook_state.pop_nudge_topic_name()
-        assert result == {"topic_id": 55, "actual_name": "Test Topic"}
-
-    def test_pop_after_pop_returns_none(self, hook_state):
-        hook_state.set_nudge_topic_name(55, "Test Topic")
-        hook_state.pop_nudge_topic_name()
-        assert hook_state.pop_nudge_topic_name() is None
-
-    def test_corrupted_json_returns_none(self, hook_state):
-        path = hook_state._path("nudge_topic_name")
-        path.write_text("{invalid json")
-        assert hook_state.pop_nudge_topic_name() is None
-        # ファイルも削除されている
-        assert not path.exists()
-
-
 class TestClearSession:
     def test_clears_all_state_files(self, tmp_path, monkeypatch):
         monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
         state = HookState("sess-abc")
 
         # 全種類の状態ファイルを作成
-        state.set_prev_topic(10)
+        state.set_prev_topic("topic-10")
         state.increment_block_count()
         state.increment_nudge_counter()
         state.set_nudge_pending()
-        state.set_nudge_topic_name(5, "name")
 
         # clear
         HookState.clear_session("sess-abc")
@@ -125,19 +102,18 @@ class TestClearSession:
         assert state.get_block_count() == 0
         assert state.get_nudge_counter() == 0
         assert state.pop_nudge_pending() is False
-        assert state.pop_nudge_topic_name() is None
 
 
 class TestSessionIdSlash:
     def test_slash_replaced_with_underscore(self, tmp_path, monkeypatch):
         monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
         state = HookState("user/session/123")
-        state.set_prev_topic(99)
+        state.set_prev_topic("topic-99")
 
         # ファイル名に '/' が含まれず '_' に置換されている
         expected_file = tmp_path / "prev_topic_user_session_123"
         assert expected_file.exists()
-        assert expected_file.read_text().strip() == "99"
+        assert expected_file.read_text().strip() == "topic-99"
 
 
 class TestMainCli:
@@ -146,11 +122,11 @@ class TestMainCli:
 
         # 状態ファイルを作成
         state = HookState("cli-test-sess")
-        state.set_prev_topic(1)
+        state.set_prev_topic("topic-1")
         state.increment_nudge_counter()
 
         # ファイルが存在する
-        assert state.get_prev_topic() == 1
+        assert state.get_prev_topic() == "topic-1"
 
         # CLIで clear を実行（HOOK_STATE_DIR環境変数でBASE_DIRをオーバーライド）
         project_root = Path(__file__).resolve().parents[2]

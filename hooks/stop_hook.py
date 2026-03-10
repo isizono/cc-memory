@@ -1,19 +1,15 @@
-"""Stop hook: メタタグ強制 + トピック管理 + nudgeカウンター
-
-stop_enforce_metatag.sh と stop_nudge_record.sh を統合した Python 実装。
-共通モジュール（hook_state, hook_topic, hook_transcript）を利用する。
+"""Stop hook: メタタグ強制 + コンテキスト取得チェック + 記録強制 + nudgeカウンター
 
 処理フロー:
 1. stdin読み込み → JSON parse
-2. ブロック上限チェック（3回で強制approve）
+2. ブロック上限チェック（2回で強制approve）
 3. メタタグparse（一次ソース: stdinのlast_assistant_message、フォールバック: transcript）
-4. topic_id根拠チェック（間接的バリデーション: topic参照ツールの呼び出し有無）
-5. トピック存在チェック
-6. タグ存在チェック
-7. トピック名一致チェック
-8. トピック変更チェック（前topicに記録があるか）
-9. nudgeカウンター管理
-10. 状態更新 → approve
+   → なければblock
+4. get系API呼び出しチェック（セッション中1回以上）
+   → なければblock
+5. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
+6. nudgeカウンター管理
+7. 状態更新 → approve
 """
 import json
 import os
@@ -26,20 +22,17 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from hooks.hook_state import HookState
-from hooks.hook_topic import check_topic_exists, check_topic_has_tags
 from hooks.hook_transcript import (
     extract_text_from_entry,
-    find_tool_calls_for_topic,
     get_assistant_entries,
     get_last_assistant_entry,
+    has_context_retrieval_calls,
     has_recent_recording,
-    has_topic_tool_calls,
     parse_meta_tag,
 )
 
-_BLOCK_LIMIT = 3
-_NUDGE_INTERVAL = 3
-_FIRST_TOPIC_ID = 1
+_BLOCK_LIMIT = 2
+_NUDGE_INTERVAL = 2
 
 
 def _output(decision: str, reason: str = "") -> None:
@@ -70,7 +63,7 @@ def main() -> None:
         # 2. ブロック上限チェック
         if state.get_block_count() >= _BLOCK_LIMIT:
             state.reset_block_count()
-            _output("approve", "ブロック上限（3回）に達しました。強制的に通します。")
+            _output("approve", "ブロック上限（2回）に達しました。強制的に通します。")
             return
 
         # 3. メタタグparse
@@ -90,71 +83,42 @@ def main() -> None:
             _output(
                 "block",
                 "応答の最後にメタタグを出力してください。フォーマット: "
-                "<!-- [meta] topic: xxx (id: N) -->",
+                "<!-- [meta] topic: xxx -->",
             )
             return
 
-        current_topic_id = meta["topic_id"]
         current_topic_name = meta["topic_name"]
 
-        # transcript全体を1回だけ読み込み、以降のステップで再利用
+        # 4. get系API呼び出しチェック（セッション中1回以上）
         all_entries = get_assistant_entries(transcript_path)
 
-        # 4. topic_id根拠チェック（間接的バリデーション）
-        if not has_topic_tool_calls(all_entries):
-            state.increment_block_count()
-            _output(
-                "block",
-                "topic_idを指定する前に、get_topics/search/add_topic等で"
-                "トピック情報を確認してください",
-            )
-            return
-
-        # 5. トピック存在チェック
-        topic_result = check_topic_exists(current_topic_id, current_topic_name)
-
-        if not topic_result["exists"]:
-            state.increment_block_count()
-            _output(
-                "block",
-                f"topic_id={current_topic_id} は存在しません。"
-                "get_topics で正しいtopic_idを確認してください",
-            )
-            return
-
-        # 6. タグ存在チェック
-        if not check_topic_has_tags(current_topic_id):
-            state.increment_block_count()
-            _output(
-                "block",
-                "このトピックにタグがありません。"
-                "add_topicでタグ付きトピックを作成してください。",
-            )
-            return
-
-        # 7. トピック名一致チェック（blockしない）
-        if topic_result.get("name_match") is False:
-            actual_name = topic_result.get("actual_name", "")
-            state.set_nudge_topic_name(current_topic_id, actual_name)
-
-        # 8. トピック変更チェック
-        prev_topic = state.get_prev_topic()
-
-        if (
-            prev_topic is not None
-            and prev_topic != current_topic_id
-            and prev_topic != _FIRST_TOPIC_ID
-        ):
-            if not find_tool_calls_for_topic(all_entries, prev_topic):
+        if not state.has_context_retrieval():
+            if has_context_retrieval_calls(all_entries):
+                state.set_context_retrieved()
+            else:
                 state.increment_block_count()
                 _output(
                     "block",
-                    f"トピックが変わりました。前のトピック(id={prev_topic})に"
-                    "決定事項(add_decision)またはログ(add_log)を記録してから移動してください",
+                    "応答の前に過去のコンテキストを取得してください。"
+                    "search / get_topics / get_decisions / get_logs / get_tasks / get_by_ids "
+                    "のいずれかを使ってください。",
                 )
                 return
 
-        # 9. nudgeカウンター
+        # 5. トピック変更チェック → 記録がなければblock
+        prev_topic = state.get_prev_topic()
+        if prev_topic is not None and prev_topic != current_topic_name:
+            recent_entries = all_entries[-5:] if all_entries else []
+            if not has_recent_recording(recent_entries):
+                state.increment_block_count()
+                _output(
+                    "block",
+                    "トピックが変わりました。移動前に記録（add_decision / add_log / add_topic）を"
+                    "行ってください。",
+                )
+                return
+
+        # 6. nudgeカウンター
         nudge_count = state.increment_nudge_counter()
 
         if nudge_count % _NUDGE_INTERVAL == 0:
@@ -164,8 +128,8 @@ def main() -> None:
             else:
                 state.set_nudge_pending()
 
-        # 10. 状態更新 + approve
-        state.set_prev_topic(current_topic_id)
+        # 7. 状態更新 + approve
+        state.set_prev_topic(current_topic_name)
         state.reset_block_count()
         _output("approve")
 
