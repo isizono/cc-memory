@@ -105,12 +105,12 @@ def add_task(title: str, description: str, tags: list[str]) -> dict:
         conn.close()
 
 
-def get_tasks(tags: list[str], status: str = "active", limit: int = 5) -> dict:
+def get_tasks(tags: list[str] | None = None, status: str = "active", limit: int = 5) -> dict:
     """
     タスク一覧を取得（tagsでフィルタリング、statusでフィルタリング）
 
     Args:
-        tags: タグ配列（必須、1個以上。AND条件でフィルタ）
+        tags: タグ配列（optional。指定時はAND条件でフィルタ、未指定時は全件）
         status: フィルタするステータス（active/pending/in_progress/completed、デフォルト: active）
                 "active"はpending+in_progressの両方を返すエイリアス
         limit: 取得件数上限（デフォルト: 5）
@@ -118,10 +118,12 @@ def get_tasks(tags: list[str], status: str = "active", limit: int = 5) -> dict:
     Returns:
         タスク一覧とtotal_count
     """
-    # タグのバリデーション
-    parsed_tags = validate_and_parse_tags(tags, required=True)
-    if isinstance(parsed_tags, dict):
-        return parsed_tags
+    # タグのバリデーション（tags指定時のみ）
+    parsed_tags = None
+    if tags is not None:
+        parsed_tags = validate_and_parse_tags(tags, required=True)
+        if isinstance(parsed_tags, dict):
+            return parsed_tags
 
     if limit < 1:
         return {
@@ -141,44 +143,56 @@ def get_tasks(tags: list[str], status: str = "active", limit: int = 5) -> dict:
 
     conn = get_connection()
     try:
-        # タグIDを取得（読み取り専用、INSERTしない）
-        tag_ids = resolve_tag_ids(conn, parsed_tags)
-        if not tag_ids or len(tag_ids) < len(parsed_tags):
-            return {"tasks": [], "total_count": 0}
-        tag_placeholders = ",".join("?" * len(tag_ids))
+        # タグフィルタでtask_idsを絞り込む（tags指定時のみ）
+        task_ids = None
+        if parsed_tags is not None:
+            tag_ids = resolve_tag_ids(conn, parsed_tags)
+            if not tag_ids or len(tag_ids) < len(parsed_tags):
+                return {"tasks": [], "total_count": 0}
+            tag_placeholders = ",".join("?" * len(tag_ids))
 
-        # AND結合: 全タグを持つtaskのみ
-        task_ids_rows = conn.execute(
-            f"""
-            SELECT task_id FROM task_tags
-            WHERE tag_id IN ({tag_placeholders})
-            GROUP BY task_id
-            HAVING COUNT(DISTINCT tag_id) = ?
-            """,
-            (*tag_ids, len(tag_ids)),
-        ).fetchall()
+            task_ids_rows = conn.execute(
+                f"""
+                SELECT task_id FROM task_tags
+                WHERE tag_id IN ({tag_placeholders})
+                GROUP BY task_id
+                HAVING COUNT(DISTINCT tag_id) = ?
+                """,
+                (*tag_ids, len(tag_ids)),
+            ).fetchall()
 
-        task_ids = [row["task_id"] for row in task_ids_rows]
+            task_ids = [row["task_id"] for row in task_ids_rows]
 
-        if not task_ids:
-            return {"tasks": [], "total_count": 0}
+            if not task_ids:
+                return {"tasks": [], "total_count": 0}
 
-        id_placeholders = ",".join("?" * len(task_ids))
+        # WHERE句・ORDER BY句・パラメータを組み立て
+        conditions = []
+        where_params = []
 
-        # WHERE句・ORDER BY句・パラメータをステータスに応じて組み立て
+        if task_ids is not None:
+            id_placeholders = ",".join("?" * len(task_ids))
+            conditions.append(f"id IN ({id_placeholders})")
+            where_params.extend(task_ids)
+
         if status == "active":
             status_placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
-            where_clause = f"id IN ({id_placeholders}) AND status IN ({status_placeholders})"
-            where_params = (*task_ids, *ACTIVE_STATUSES)
+            conditions.append(f"status IN ({status_placeholders})")
+            where_params.extend(ACTIVE_STATUSES)
             order_clause = "CASE status WHEN 'in_progress' THEN 0 ELSE 1 END, updated_at DESC"
         else:
-            where_clause = f"id IN ({id_placeholders}) AND status = ?"
-            where_params = (*task_ids, status)
+            conditions.append("status = ?")
+            where_params.append(status)
             order_clause = "created_at ASC, id ASC"
+
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+        else:
+            where_clause = ""
 
         # 1. total_count取得（LIMITなし）
         count_row = conn.execute(
-            f"SELECT COUNT(*) as count FROM tasks WHERE {where_clause}",
+            f"SELECT COUNT(*) as count FROM tasks {where_clause}",
             where_params,
         ).fetchone()
         total_count = count_row["count"]
@@ -187,7 +201,7 @@ def get_tasks(tags: list[str], status: str = "active", limit: int = 5) -> dict:
         rows = conn.execute(
             f"""
             SELECT * FROM tasks
-            WHERE {where_clause}
+            {where_clause}
             ORDER BY {order_clause}
             LIMIT ?
             """,

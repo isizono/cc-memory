@@ -107,7 +107,35 @@ def test_get_topics_invalid_offset(temp_db):
     assert result["error"]["code"] == "INVALID_PARAMETER"
 
 
-def test_get_topics_tags_required(temp_db):
+def test_get_topics_no_tags_returns_all(temp_db):
+    """tags未指定で全トピックを返す（init_databaseのfirst_topic含む）"""
+    add_topic(title="Topic A", description="Desc A", tags=["domain:test"])
+    add_topic(title="Topic B", description="Desc B", tags=["domain:other"])
+
+    result = get_topics()
+
+    assert "error" not in result
+    # init_databaseで作成されるfirst_topicも含む
+    assert result["total_count"] >= 3
+    titles = {t["title"] for t in result["topics"]}
+    assert "Topic A" in titles
+    assert "Topic B" in titles
+
+
+def test_get_topics_no_tags_with_pagination(temp_db):
+    """tags未指定 + ページネーション"""
+    for i in range(5):
+        add_topic(title=f"Topic {i}", description=f"Desc {i}", tags=["domain:test"])
+
+    result = get_topics(limit=2, offset=0)
+
+    assert "error" not in result
+    assert len(result["topics"]) == 2
+    # first_topicも含むので6件以上
+    assert result["total_count"] >= 6
+
+
+def test_get_topics_tags_empty_list_error(temp_db):
     """tags=[]でTAGS_REQUIREDエラー"""
     result = get_topics(tags=[])
 

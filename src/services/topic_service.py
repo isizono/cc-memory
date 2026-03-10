@@ -94,25 +94,27 @@ def add_topic(
 
 
 def get_topics(
-    tags: list[str],
+    tags: list[str] | None = None,
     limit: int = 10,
     offset: int = 0,
 ) -> dict:
     """
-    タグでフィルタリングしてトピックを新しい順に取得する（ページネーション付き）。
+    トピックを新しい順に取得する（ページネーション付き）。
 
     Args:
-        tags: タグ配列（必須、1個以上。AND条件でフィルタ）
+        tags: タグ配列（optional。指定時はAND条件でフィルタ、未指定時は全件）
         limit: 取得件数（デフォルト10）
         offset: スキップ件数（デフォルト0）
 
     Returns:
         トピック一覧（total_count付き）
     """
-    # タグのバリデーション
-    parsed_tags = validate_and_parse_tags(tags, required=True)
-    if isinstance(parsed_tags, dict):
-        return parsed_tags
+    # タグのバリデーション（tags指定時のみ）
+    parsed_tags = None
+    if tags is not None:
+        parsed_tags = validate_and_parse_tags(tags, required=True)
+        if isinstance(parsed_tags, dict):
+            return parsed_tags
 
     try:
         if limit < 1:
@@ -132,40 +134,52 @@ def get_topics(
 
         conn = get_connection()
         try:
-            # タグIDを取得（読み取り専用、INSERTしない）
-            tag_ids = resolve_tag_ids(conn, parsed_tags)
-            if not tag_ids or len(tag_ids) < len(parsed_tags):
-                return {"topics": [], "total_count": 0}
-            placeholders = ",".join("?" * len(tag_ids))
+            # タグフィルタでtopic_idsを絞り込む（tags指定時のみ）
+            topic_ids = None
+            if parsed_tags is not None:
+                tag_ids = resolve_tag_ids(conn, parsed_tags)
+                if not tag_ids or len(tag_ids) < len(parsed_tags):
+                    return {"topics": [], "total_count": 0}
+                placeholders = ",".join("?" * len(tag_ids))
 
-            # AND結合: 全タグを持つtopicのみ
-            topic_ids_rows = conn.execute(
-                f"""
-                SELECT topic_id FROM topic_tags
-                WHERE tag_id IN ({placeholders})
-                GROUP BY topic_id
-                HAVING COUNT(DISTINCT tag_id) = ?
-                """,
-                (*tag_ids, len(tag_ids)),
-            ).fetchall()
+                topic_ids_rows = conn.execute(
+                    f"""
+                    SELECT topic_id FROM topic_tags
+                    WHERE tag_id IN ({placeholders})
+                    GROUP BY topic_id
+                    HAVING COUNT(DISTINCT tag_id) = ?
+                    """,
+                    (*tag_ids, len(tag_ids)),
+                ).fetchall()
 
-            topic_ids = [row["topic_id"] for row in topic_ids_rows]
+                topic_ids = [row["topic_id"] for row in topic_ids_rows]
 
-            if not topic_ids:
-                return {"topics": [], "total_count": 0}
+                if not topic_ids:
+                    return {"topics": [], "total_count": 0}
 
-            total_count = len(topic_ids)
+            # クエリ組み立て
+            if topic_ids is not None:
+                id_placeholders = ",".join("?" * len(topic_ids))
+                where_clause = f"WHERE id IN ({id_placeholders})"
+                where_params = list(topic_ids)
+            else:
+                where_clause = ""
+                where_params = []
 
-            # トピック取得（新しい順）
-            id_placeholders = ",".join("?" * len(topic_ids))
+            count_row = conn.execute(
+                f"SELECT COUNT(*) as count FROM discussion_topics {where_clause}",
+                where_params,
+            ).fetchone()
+            total_count = count_row["count"]
+
             rows = conn.execute(
                 f"""
                 SELECT * FROM discussion_topics
-                WHERE id IN ({id_placeholders})
+                {where_clause}
                 ORDER BY created_at DESC, id DESC
                 LIMIT ? OFFSET ?
                 """,
-                (*topic_ids, limit, offset),
+                (*where_params, limit, offset),
             ).fetchall()
 
             # バッチでタグ取得

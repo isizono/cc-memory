@@ -98,6 +98,30 @@ class TestGetTasks:
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
 
+    def test_get_tasks_no_tags_returns_all(self, temp_db):
+        """tags未指定で全タスクを返す"""
+        add_task(title="Task A", description="Desc A", tags=["domain:test"])
+        add_task(title="Task B", description="Desc B", tags=["domain:other"])
+
+        result = get_tasks()
+
+        assert "error" not in result
+        assert result["total_count"] == 2
+        titles = {t["title"] for t in result["tasks"]}
+        assert titles == {"Task A", "Task B"}
+
+    def test_get_tasks_no_tags_with_status_filter(self, temp_db):
+        """tags未指定 + status指定で全ドメインからフィルタ"""
+        task_a = add_task(title="Task A", description="Desc", tags=["domain:test"])
+        add_task(title="Task B", description="Desc", tags=["domain:other"])
+        update_task(task_a["task_id"], new_status="completed")
+
+        result = get_tasks(status="completed")
+
+        assert "error" not in result
+        assert result["total_count"] == 1
+        assert result["tasks"][0]["title"] == "Task A"
+
 
 
 class TestUpdateTask:
