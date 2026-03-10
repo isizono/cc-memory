@@ -161,7 +161,7 @@ _RECORDING_TOOLS = [
 _TOPIC_TOOLS = [
     "mcp__plugin_claude-code-memory_cc-memory__get_topics",
     "mcp__plugin_claude-code-memory_cc-memory__search",
-    "mcp__plugin_claude-code-memory_cc-memory__get_by_id",
+    "mcp__plugin_claude-code-memory_cc-memory__get_by_ids",
     "mcp__plugin_claude-code-memory_cc-memory__add_topic",
 ]
 
