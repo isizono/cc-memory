@@ -448,35 +448,14 @@ def search(
 
 
 @mcp.tool()
-def get_by_id(
-    type: str,
-    id: int,
-) -> dict:
-    """
-    search結果の詳細情報を取得する。
-
-    searchツールで得られたtype + idの組み合わせを指定して、
-    元データの完全な情報を取得する。
-
-    Args:
-        type: データ種別（'topic', 'decision', 'activity', 'log'）
-        id: データのID
-
-    Returns:
-        指定した種別に応じた詳細情報
-    """
-    return search_service.get_by_id(type, id)
-
-
-@mcp.tool()
 def get_by_ids(
     items: list[dict],
 ) -> dict:
     """
-    複数のsearch結果の詳細情報を一括取得する。
+    search結果の詳細情報を取得する。
 
-    searchツールで得られた複数のtype + idペアを1回で取得し、
-    各アイテムの全文を返す。
+    searchツールで得られたtype + idペアを指定して、
+    各アイテムの全文を返す。1件でも複数件でも使える。
 
     Args:
         items: 取得対象のリスト。各要素は {type: str, id: int}（最大20件）
@@ -484,7 +463,7 @@ def get_by_ids(
                id: データのID
 
     Returns:
-        一括取得結果（各アイテムはget_by_idと同じ形式）
+        取得結果（各アイテムの詳細情報）
     """
     result = search_service.get_by_ids(items)
     if "error" not in result:
