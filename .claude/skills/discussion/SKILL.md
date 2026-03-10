@@ -1,6 +1,6 @@
 ---
 name: discussion
-description: This skill clarifies user requirements and removes ambiguity before design/work phases. Use when What/Why/Scope are not yet defined, or when working on a cc-memory task with [議論] prefix or mode:discuss tag.
+description: This skill clarifies user requirements and removes ambiguity before design/work phases. Use when What/Why/Scope are not yet defined, or when working on a cc-memory task with [議論] prefix or mode:discussion tag.
 ---
 
 # Discussion Skill
@@ -11,8 +11,8 @@ description: This skill clarifies user requirements and removes ambiguity before
 
 ## 開始時のアクション
 
-1. 関連する `[議論]` タスクがなければ作成する
-2. タスクのtitleには `[議論]` プレフィックスをつける
+1. mode:discussion タグ付きタスクで起動された場合、そのタスクを対象とする
+2. それ以外の場合、関連する `[議論]` タスクがなければ作成する（titleには `[議論]` プレフィックスをつける）
 
 ```
 例: [議論] 「トピック検索機能」の要件整理
