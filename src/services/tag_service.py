@@ -2,7 +2,7 @@
 import sqlite3
 from typing import Optional, Union
 
-from src.db import execute_query, row_to_dict
+from src.db import execute_query, get_connection, row_to_dict
 
 
 VALID_NAMESPACES = {'', 'domain', 'scope', 'mode'}
@@ -290,12 +290,12 @@ def list_tags(namespace: Optional[str] = None) -> dict:
                    namespace=""で素タグ（namespaceなし）のみフィルタ。
 
     Returns:
-        タグ一覧（id, namespace, name, tag, usage_count）をusage_count降順で返す
+        タグ一覧（id, namespace, name, tag, usage_count, notes）をusage_count降順で返す
     """
     try:
         rows = execute_query(
             """
-            SELECT t.id, t.namespace, t.name,
+            SELECT t.id, t.namespace, t.name, t.notes,
               (SELECT COUNT(*) FROM topic_tags WHERE tag_id = t.id) +
               (SELECT COUNT(*) FROM activity_tags WHERE tag_id = t.id) +
               (SELECT COUNT(*) FROM decision_tags WHERE tag_id = t.id) +
@@ -318,6 +318,7 @@ def list_tags(namespace: Optional[str] = None) -> dict:
                 "namespace": ns,
                 "name": name,
                 "usage_count": r["usage_count"],
+                "notes": r["notes"],
             })
         return {"tags": tags}
 
@@ -328,3 +329,102 @@ def list_tags(namespace: Optional[str] = None) -> dict:
                 "message": str(e),
             }
         }
+
+
+def update_tag(tag: str, notes: str) -> dict:
+    """既存タグの notes（教訓・運用ルール）を更新する。
+
+    Args:
+        tag: タグ文字列（例: "domain:cc-memory", "hooks"）
+        notes: 教訓・運用ルールのテキスト（全文置換）
+
+    Returns:
+        成功時: {"tag": str, "notes": str, "updated": True}
+        失敗時: {"error": {"code": ..., "message": ...}}
+    """
+    parsed = validate_and_parse_tags([tag])
+    if isinstance(parsed, dict):
+        return parsed
+    namespace, name = parsed[0]
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+            (namespace, name),
+        ).fetchone()
+
+        if not row:
+            tag_display = f"{namespace}:{name}" if namespace else name
+            return {
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": f"Tag '{tag_display}' not found",
+                }
+            }
+
+        conn.execute(
+            "UPDATE tags SET notes = ? WHERE id = ?",
+            (notes, row["id"]),
+        )
+        conn.commit()
+
+        tag_str = f"{namespace}:{name}" if namespace else name
+        return {"tag": tag_str, "notes": notes, "updated": True}
+
+    except Exception as e:
+        conn.rollback()
+        return {
+            "error": {
+                "code": "DATABASE_ERROR",
+                "message": str(e),
+            }
+        }
+    finally:
+        conn.close()
+
+
+# ========================================
+# 遭遇時注入（Tag Notes Injection）
+# ========================================
+
+# モジュールレベルのグローバル変数（MCPサーバープロセスのライフサイクル = セッション）
+_injected_tags: set[str] = set()
+
+
+def collect_tag_notes_for_injection(conn: sqlite3.Connection, tag_strings: list[str]) -> list[dict] | None:
+    """未注入タグの notes を収集し、注入済みとしてマークする。
+
+    Args:
+        conn: DB接続
+        tag_strings: タグ文字列リスト（例: ["domain:cc-memory", "scope:design"]）
+
+    Returns:
+        notes があるタグの一覧。なければ None
+        [{"tag": "domain:cc-memory", "notes": "..."}, ...]
+    """
+    new_tags = [t for t in tag_strings if t not in _injected_tags]
+    if not new_tags:
+        return None
+
+    # 新規遭遇タグをすべてマーク（notes の有無に関わらず）
+    _injected_tags.update(new_tags)
+
+    # notes がある分だけ取得（バッチクエリ）
+    parsed = [parse_tag(t) for t in new_tags]
+    placeholders = " OR ".join(["(namespace = ? AND name = ?)"] * len(parsed))
+    params = [v for pair in parsed for v in pair]
+    rows = conn.execute(
+        f"SELECT namespace, name, notes FROM tags WHERE ({placeholders}) AND notes IS NOT NULL",
+        params
+    ).fetchall()
+
+    if not rows:
+        return None
+
+    results = []
+    for row in rows:
+        tag_str = f"{row['namespace']}:{row['name']}" if row["namespace"] else row["name"]
+        results.append({"tag": tag_str, "notes": row["notes"]})
+
+    return results if results else None

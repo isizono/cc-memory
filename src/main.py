@@ -10,8 +10,8 @@ from src.services import (
     activity_service,
     knowledge_service,
 )
-from src.services.tag_service import list_tags as _list_tags
-from src.db import execute_query, row_to_dict
+from src.services.tag_service import list_tags as _list_tags, update_tag as _update_tag, collect_tag_notes_for_injection
+from src.db import execute_query, get_connection, row_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +315,18 @@ def build_instructions() -> str:
     return RULES
 
 
+def _maybe_inject_tag_notes(result: dict, tag_strings: list[str]) -> dict:
+    """結果dictにtag_notesを注入する（notes があれば）"""
+    conn = get_connection()
+    try:
+        notes = collect_tag_notes_for_injection(conn, tag_strings)
+    finally:
+        conn.close()
+    if notes:
+        result["tag_notes"] = notes
+    return result
+
+
 # MCPサーバーを作成
 mcp = FastMCP("cc-memory", instructions=build_instructions())
 
@@ -330,7 +342,10 @@ def add_topic(
 
     tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["domain:cc-memory", "scope:hook-system", "error-handling", "validation", "stdin"]
     """
-    return topic_service.add_topic(title, description, tags)
+    result = topic_service.add_topic(title, description, tags)
+    if "error" not in result:
+        _maybe_inject_tag_notes(result, tags)
+    return result
 
 
 @mcp.tool()
@@ -344,7 +359,10 @@ def add_log(
 
     tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["mode:discussion", "migration", "breaking-change", "schema"]
     """
-    return discussion_log_service.add_log(topic_id, title, content, tags)
+    result = discussion_log_service.add_log(topic_id, title, content, tags)
+    if "error" not in result and tags:
+        _maybe_inject_tag_notes(result, tags)
+    return result
 
 
 @mcp.tool()
@@ -358,7 +376,10 @@ def add_decision(
 
     tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["scope:data-model", "naming-convention", "backward-compat"]
     """
-    return decision_service.add_decision(decision, reason, topic_id, tags)
+    result = decision_service.add_decision(decision, reason, topic_id, tags)
+    if "error" not in result and tags:
+        _maybe_inject_tag_notes(result, tags)
+    return result
 
 
 @mcp.tool()
@@ -371,7 +392,10 @@ def get_topics(
 
     tags: タグ配列（optional）。指定時はAND条件でフィルタ。未指定時は全件返す。例: ["domain:cc-memory"]
     """
-    return topic_service.get_topics(tags, limit, offset)
+    result = topic_service.get_topics(tags, limit, offset)
+    if "error" not in result and tags:
+        _maybe_inject_tag_notes(result, tags)
+    return result
 
 
 @mcp.tool()
@@ -419,7 +443,10 @@ def search(
         検索結果一覧（type, id, title, score, snippet）
         snippetは各typeの対応するソースカラムの先頭200文字。
     """
-    return search_service.search(keyword, tags, type_filter, limit)
+    result = search_service.search(keyword, tags, type_filter, limit)
+    if "error" not in result and tags:
+        _maybe_inject_tag_notes(result, tags)
+    return result
 
 
 @mcp.tool()
@@ -461,7 +488,15 @@ def get_by_ids(
     Returns:
         一括取得結果（各アイテムはget_by_idと同じ形式）
     """
-    return search_service.get_by_ids(items)
+    result = search_service.get_by_ids(items)
+    if "error" not in result:
+        all_tags = []
+        for item in result.get("results", []):
+            if "data" in item:
+                all_tags.extend(item["data"].get("tags", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags)
+    return result
 
 
 @mcp.tool()
@@ -478,9 +513,27 @@ def list_tags(
         namespace: namespaceでフィルタ（"domain", "scope", "mode", ""。未指定で全タグ）
 
     Returns:
-        タグ一覧（tag, id, namespace, name, usage_count）をusage_count降順で返す
+        タグ一覧（tag, id, namespace, name, usage_count, notes）をusage_count降順で返す
     """
     return _list_tags(namespace)
+
+
+@mcp.tool()
+def update_tag(tag: str, notes: str) -> dict:
+    """
+    既存タグの notes（教訓・運用ルール）を更新する。上書き方式（全文置換）。
+
+    タグに紐づく教訓や運用ルールを記録する。CLAUDE.mdのタグ版として機能し、
+    そのタグの文脈で作業するときに自動的にAIに注入される。
+
+    Args:
+        tag: 対象タグ（例: "domain:cc-memory", "hooks"）
+        notes: 教訓・運用ルールのテキスト（全文置換）
+
+    Returns:
+        更新結果
+    """
+    return _update_tag(tag, notes)
 
 
 @mcp.tool()
@@ -503,7 +556,10 @@ def add_activity(
     Returns:
         作成されたアクティビティ情報
     """
-    return activity_service.add_activity(title, description, tags)
+    result = activity_service.add_activity(title, description, tags)
+    if "error" not in result:
+        _maybe_inject_tag_notes(result, tags)
+    return result
 
 
 @mcp.tool()
@@ -532,7 +588,10 @@ def get_activities(
     Returns:
         アクティビティ一覧（total_countで該当ステータスの全件数を確認可能）
     """
-    return activity_service.get_activities(tags, status, limit)
+    result = activity_service.get_activities(tags, status, limit)
+    if "error" not in result and tags:
+        _maybe_inject_tag_notes(result, tags)
+    return result
 
 
 @mcp.tool()

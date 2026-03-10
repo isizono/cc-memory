@@ -151,6 +151,7 @@ def test_list_tags_response_format(temp_db):
     assert "namespace" in tag
     assert "name" in tag
     assert "usage_count" in tag
+    assert "notes" in tag
     assert isinstance(tag["id"], int)
     assert isinstance(tag["usage_count"], int)
 
