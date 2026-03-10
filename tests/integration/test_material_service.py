@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database
 from src.services.activity_service import add_activity
-from src.services.material_service import add_material, get_material
+from src.services.material_service import add_material, get_material, list_materials
 from src.services.search_service import get_by_id, get_by_ids
 
 
@@ -177,7 +177,7 @@ class TestGetByIdMaterial:
         assert result["data"]["material_id"] == material_id
         assert result["data"]["activity_id"] == activity_id
         assert result["data"]["title"] == "ById Test"
-        assert result["data"]["content"] == "ById content"
+        assert "content" not in result["data"]  # カタログ形式: 全文なし
         assert result["data"]["tags"] == []
 
     def test_get_by_id_material_not_found(self, temp_db):
@@ -225,3 +225,40 @@ class TestGetByIdMaterial:
         # activity
         assert result["results"][1]["type"] == "activity"
         assert result["results"][1]["data"]["id"] == activity_id
+
+
+class TestListMaterials:
+    """list_materialsの統合テスト"""
+
+    def test_list_materials_success(self, activity_id):
+        """アクティビティに紐づく資材一覧を取得できる"""
+        add_material(activity_id=activity_id, title="Mat 1", content="Content 1")
+        add_material(activity_id=activity_id, title="Mat 2", content="Content 2")
+
+        result = list_materials(activity_id)
+
+        assert "error" not in result
+        assert result["activity_id"] == activity_id
+        assert result["total_count"] == 2
+        assert len(result["materials"]) == 2
+        # カタログ形式: contentなし
+        for m in result["materials"]:
+            assert "material_id" in m
+            assert "title" in m
+            assert "created_at" in m
+            assert "content" not in m
+
+    def test_list_materials_empty(self, activity_id):
+        """資材がないアクティビティでは空リストが返る"""
+        result = list_materials(activity_id)
+
+        assert "error" not in result
+        assert result["total_count"] == 0
+        assert result["materials"] == []
+
+    def test_list_materials_invalid_activity_id(self, temp_db):
+        """存在しないactivity_idでNOT_FOUNDエラーになる"""
+        result = list_materials(9999)
+
+        assert "error" in result
+        assert result["error"]["code"] == "NOT_FOUND"

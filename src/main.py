@@ -651,6 +651,24 @@ def get_material(
 
 
 @mcp.tool()
+def list_materials(
+    activity_id: int,
+) -> dict:
+    """
+    アクティビティに紐づく資材のカタログ一覧を取得する。
+
+    全文は含まない。詳細はget_materialで取得する（2段階リード設計）。
+
+    Args:
+        activity_id: アクティビティのID
+
+    Returns:
+        資材カタログ一覧（activity_id, materials[{material_id, activity_id, title, created_at}], total_count）
+    """
+    return material_service.list_materials(activity_id)
+
+
+@mcp.tool()
 def add_knowledge(
     title: str,
     content: str,

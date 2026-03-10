@@ -503,7 +503,6 @@ def _format_row(type_name: str, data: dict, tags: list[str]) -> dict:
             "material_id": data["id"],
             "activity_id": data["activity_id"],
             "title": data["title"],
-            "content": data["content"],
             "tags": tags,
             "created_at": data["created_at"],
         }
@@ -518,7 +517,7 @@ def get_by_id(type: str, id: int, conn=None) -> dict:
     元データの完全な情報を取得する。
 
     Args:
-        type: データ種別（'topic', 'decision', 'activity', 'log'）
+        type: データ種別（'topic', 'decision', 'activity', 'log', 'material'）
         id: データのID
         conn: 既存のDB接続（省略時は内部で新規作成・クローズ）
 

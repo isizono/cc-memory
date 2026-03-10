@@ -8,12 +8,22 @@ logger = logging.getLogger(__name__)
 
 
 def _material_to_response(material: dict) -> dict:
-    """資材データをAPIレスポンス形式に変換"""
+    """資材データをAPIレスポンス形式に変換（全文含む）"""
     return {
         "material_id": material["id"],
         "activity_id": material["activity_id"],
         "title": material["title"],
         "content": material["content"],
+        "created_at": material["created_at"],
+    }
+
+
+def _material_to_catalog(material: dict) -> dict:
+    """資材データをカタログ形式に変換（全文なし）"""
+    return {
+        "material_id": material["id"],
+        "activity_id": material["activity_id"],
+        "title": material["title"],
         "created_at": material["created_at"],
     }
 
@@ -65,14 +75,20 @@ def add_material(activity_id: int, title: str, content: str) -> dict:
             (activity_id, title, content),
         )
         material_id = cursor.lastrowid
-        conn.commit()
 
         row = conn.execute(
             "SELECT * FROM materials WHERE id = ?", (material_id,)
         ).fetchone()
         if not row:
-            raise Exception("Failed to retrieve created material")
+            conn.rollback()
+            return {
+                "error": {
+                    "code": "DATABASE_ERROR",
+                    "message": "Failed to retrieve created material",
+                }
+            }
 
+        conn.commit()
         return _material_to_response(row_to_dict(row))
 
     except sqlite3.IntegrityError as e:
@@ -119,6 +135,52 @@ def get_material(material_id: int) -> dict:
             }
 
         return _material_to_response(row_to_dict(row))
+
+    except Exception as e:
+        return {
+            "error": {
+                "code": "DATABASE_ERROR",
+                "message": str(e),
+            }
+        }
+    finally:
+        conn.close()
+
+
+def list_materials(activity_id: int) -> dict:
+    """
+    アクティビティに紐づく資材のカタログ一覧を取得する
+
+    Args:
+        activity_id: アクティビティのID
+
+    Returns:
+        資材カタログ一覧（全文なし）
+    """
+    conn = get_connection()
+    try:
+        # activity_idの存在チェック
+        row = conn.execute(
+            "SELECT id FROM activities WHERE id = ?", (activity_id,)
+        ).fetchone()
+        if not row:
+            return {
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": f"Activity with id {activity_id} not found",
+                }
+            }
+
+        rows = conn.execute(
+            "SELECT * FROM materials WHERE activity_id = ? ORDER BY created_at",
+            (activity_id,),
+        ).fetchall()
+
+        return {
+            "activity_id": activity_id,
+            "materials": [_material_to_catalog(row_to_dict(r)) for r in rows],
+            "total_count": len(rows),
+        }
 
     except Exception as e:
         return {
