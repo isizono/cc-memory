@@ -470,7 +470,7 @@ def add_task(
     新しいタスクを追加する。
 
     典型的な使い方:
-    - 作業タスクを作成: add_task("○○機能を実装", "詳細説明...", ["domain:cc-memory"])
+    - 作業タスクを作成: add_task("○○機能を実装", "詳細説明...", ["domain:cc-memory", "mode:implementation", "scope:api-design"])
 
     Args:
         title: タスクのタイトル
