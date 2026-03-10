@@ -187,12 +187,12 @@ def test_add_knowledge_multiple_tags(temp_knowledge_root):
     result = add_knowledge(
         title="複数タグナレッジ",
         content="content",
-        tags=["tag1", "tag2", "tag3", "日本語タグ"],
+        tags=["tag1", "tag2", "tag3", "unicode-tag"],
         category="references",
     )
 
     assert "error" not in result
-    assert result["tags"] == ["tag1", "tag2", "tag3", "日本語タグ"]
+    assert result["tags"] == ["tag1", "tag2", "tag3", "unicode-tag"]
 
     # ファイル内容を確認
     filepath = Path(result["file_path"])
@@ -200,7 +200,7 @@ def test_add_knowledge_multiple_tags(temp_knowledge_root):
     assert "- tag1" in content
     assert "- tag2" in content
     assert "- tag3" in content
-    assert "- 日本語タグ" in content
+    assert "- unicode-tag" in content
 
 
 def test_add_knowledge_markdown_content(temp_knowledge_root):

@@ -95,7 +95,7 @@ def _get_recent_non_domain_tags() -> list[str]:
     topic_tags経由でトピックの作成日が直近7日のタグを取得する。
 
     Returns:
-        ["scope:設計", "scope:実装", "mode:議論", "hooks", ...]（使用頻度降順）
+        ["scope:design", "scope:implementation", "mode:discuss", "hooks", ...]（使用頻度降順）
     """
     rows = execute_query(
         """
