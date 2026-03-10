@@ -7,7 +7,6 @@ _SESSION_START_MESSAGE = (
     "Session started. Before composing your first response, retrieve past context. "
     "Steps: (1) Use get_topics to review the topic list. "
     "(2) If a relevant topic exists, use get_by_ids to fetch details. "
-    "Otherwise, create a new topic with add_topic. "
     "(3) Use get_decisions / get_logs as needed for further details. "
     "Skipping this will cause the stop hook to block you."
     "</system-reminder>"
