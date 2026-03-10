@@ -1,6 +1,6 @@
 ---
 name: design
-description: This skill determines implementation approach and technical decisions. Use when How/Interface/Edge cases need decisions, or when working on a cc-memory task with [設計] prefix or mode:design tag.
+description: This skill determines implementation approach and technical decisions. Use when How/Interface/Edge cases need decisions, or when working on a cc-memory activity with [設計] prefix or mode:design tag.
 ---
 
 # 設計フェーズ Skill
