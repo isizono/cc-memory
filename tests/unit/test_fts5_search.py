@@ -379,3 +379,54 @@ def test_add_log_empty_title_error(temp_db):
     assert "error" in result
     assert result["error"]["code"] == "VALIDATION_ERROR"
     assert "title must not be empty" in result["error"]["message"]
+
+
+# ========================================
+# keyword配列（AND検索）のテスト
+# ========================================
+
+
+def test_search_keyword_array_and(temp_db):
+    """配列keyword: AND検索で両キーワードを含む結果のみ返す"""
+    add_topic(title="メモリ管理の検索テスト", description="検索機能のテスト", tags=DEFAULT_TAGS)
+    add_topic(title="メモリ管理の設計ドキュメント", description="設計の詳細", tags=DEFAULT_TAGS)
+    add_topic(title="検索機能の改善提案", description="改善案", tags=DEFAULT_TAGS)
+    # "メモリ" AND "検索" → 両方含む最初のトピックのみヒット
+    result = search_service.search(keyword=["メモリ管理", "検索テスト"])
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    titles = [r["title"] for r in result["results"]]
+    assert any("メモリ管理の検索テスト" in t for t in titles)
+    # "メモリ管理の設計ドキュメント" は "検索テスト" を含まないのでヒットしない
+    assert all("メモリ管理の設計ドキュメント" not in t for t in titles)
+
+
+def test_search_keyword_array_element_too_short(temp_db):
+    """配列内に2文字未満の要素があるとKEYWORD_TOO_SHORTエラー"""
+    result = search_service.search(keyword=["テスト", "あ"])
+    assert "error" in result
+    assert result["error"]["code"] == "KEYWORD_TOO_SHORT"
+
+
+def test_search_keyword_empty_array(temp_db):
+    """空配列でKEYWORD_TOO_SHORTエラー"""
+    result = search_service.search(keyword=[])
+    assert "error" in result
+    assert result["error"]["code"] == "KEYWORD_TOO_SHORT"
+
+
+def test_search_keyword_single_string_backward_compat(temp_db):
+    """単一文字列の後方互換: 既存動作と同じ"""
+    add_topic(title="後方互換テスト用トピック検索", description="テスト", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword="後方互換テスト用トピック検索")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+
+
+def test_search_keyword_array_with_2char_fts_skipped(temp_db):
+    """配列内に2文字キーワードがある場合、FTS5検索はスキップされる（ベクトル無効時エラー）"""
+    # embedding無効（autouse fixture）なので、2文字キーワードがあるとベクトルのみ→エラー
+    result = search_service.search(keyword=["テスト", "設計"])
+    assert "error" in result
+    assert result["error"]["code"] == "KEYWORD_TOO_SHORT"
+    assert "vector search is unavailable" in result["error"]["message"]

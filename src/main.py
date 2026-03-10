@@ -396,7 +396,7 @@ def get_decisions(
 
 @mcp.tool()
 def search(
-    keyword: str,
+    keyword: str | list[str],
     tags: Optional[list[str]] = None,
     type_filter: Optional[str] = None,
     limit: int = 10,
@@ -406,10 +406,11 @@ def search(
 
     FTS5 trigramとベクトル検索のハイブリッド。RRFスコアで統合・ランキング。
     2文字以上のキーワードを指定する。
+    配列で複数キーワードを渡すとAND検索（すべてを含む結果のみ返す）。
     tagsでフィルタリング可能（AND結合）。未指定で全件検索。
 
     Args:
-        keyword: 検索キーワード（2文字以上）
+        keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
         type_filter: 検索対象の絞り込み（'topic', 'decision', 'task', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）

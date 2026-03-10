@@ -342,3 +342,57 @@ def test_hybrid_search_tag_isolation(temp_db, mock_embedding_model):
     assert "error" not in result
     for item in result["results"]:
         assert item["title"] != "分離テスト他タグトピック"
+
+
+# ========================================
+# keyword配列（AND検索）のテスト
+# ========================================
+
+
+def test_hybrid_keyword_array_and(temp_db, mock_embedding_model):
+    """配列keyword: ハイブリッド検索でAND動作"""
+    add_topic(
+        title="ハイブリッド配列検索テスト対象",
+        description="メモリ管理と検索機能の両方を扱うトピック",
+        tags=DEFAULT_TAGS,
+    )
+    add_topic(
+        title="ハイブリッド配列検索テスト対象外",
+        description="メモリ管理のみ",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword=["ハイブリッド配列検索", "テスト対象"])
+
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+
+
+def test_hybrid_keyword_array_vec_search(temp_db, mock_embedding_model):
+    """配列keyword: ベクトル検索が結果を返す"""
+    add_topic(
+        title="ベクトル配列検索テスト用トピック",
+        description="複数キーワードでのベクトル検索確認",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword=["ベクトル配列検索", "テスト用"])
+
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    assert isinstance(result["results"][0]["score"], float)
+
+
+def test_hybrid_keyword_array_2char_vec_only(temp_db, mock_embedding_model):
+    """配列内に2文字キーワード: ベクトル検索のみで動作"""
+    add_topic(
+        title="設計レビュー用ドキュメント",
+        description="設計の詳細レビュー",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword=["設計", "レビュー"])
+
+    assert "error" not in result
+    # ベクトル検索のみなので結果は返る（エラーにはならない）
+    assert "results" in result

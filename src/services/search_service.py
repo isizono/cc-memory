@@ -125,13 +125,15 @@ def _build_tag_filter_cte(tag_ids: list[int]) -> tuple[str, list]:
 
 
 def _fts_search(
-    keyword: str,
+    keywords: list[str],
     tag_ids: Optional[list[int]],
     type_filter: Optional[str],
     limit: int,
 ) -> list[dict]:
     """FTS5検索。結果はBM25ランク順のリスト。"""
-    escaped_keyword = _escape_fts5_query(keyword)
+    # 各キーワードをエスケープして AND 結合
+    escaped_parts = [_escape_fts5_query(kw) for kw in keywords]
+    escaped_keyword = " AND ".join(escaped_parts)
 
     if tag_ids:
         cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
@@ -178,14 +180,16 @@ def _fts_search(
 
 
 def _vector_search(
-    keyword: str,
+    keywords: list[str],
     tag_ids: Optional[list[int]],
     type_filter: Optional[str],
     limit: int,
 ) -> Optional[list[dict]]:
     """ベクトル検索。ベクトル検索無効時はNoneを返す。"""
     try:
-        query_embedding = embedding_service.encode_query(keyword)
+        # 配列をスペースで結合して1つのembeddingを生成
+        combined_keyword = " ".join(keywords)
+        query_embedding = embedding_service.encode_query(combined_keyword)
         if query_embedding is None:
             return None
 
@@ -292,7 +296,7 @@ def _rrf_merge(
 
 
 def search(
-    keyword: str,
+    keyword: str | list[str],
     tags: Optional[list[str]] = None,
     type_filter: Optional[str] = None,
     limit: int = 10,
@@ -302,13 +306,14 @@ def search(
 
     FTS5 trigramとベクトル検索のハイブリッド。RRFスコアで統合・ランキング。
     2文字以上のキーワードを指定する。
+    配列で複数キーワードを渡すとAND検索（すべてを含む結果のみ返す）。
     3文字以上: FTS5 + ベクトル検索のハイブリッド。
     2文字: ベクトル検索のみ（ベクトル検索無効時はエラー）。
     tagsでフィルタリング可能（AND結合）。未指定で全件検索。
     詳細情報が必要な場合は get_by_id(type, id) で取得する。
 
     Args:
-        keyword: 検索キーワード（2文字以上）
+        keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
         type_filter: 検索対象の絞り込み（'topic', 'decision', 'task', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
@@ -316,15 +321,30 @@ def search(
     Returns:
         検索結果一覧（type, id, title, score）
     """
-    # バリデーション
-    keyword = keyword.strip()
-    if len(keyword) < 2:
+    # 正規化: str → list[str]
+    if isinstance(keyword, str):
+        keywords = [keyword.strip()]
+    else:
+        keywords = [k.strip() for k in keyword]
+
+    # 空配列チェック
+    if not keywords:
         return {
             "error": {
                 "code": "KEYWORD_TOO_SHORT",
                 "message": "keyword must be at least 2 characters"
             }
         }
+
+    # バリデーション: 各要素2文字以上
+    for kw in keywords:
+        if len(kw) < 2:
+            return {
+                "error": {
+                    "code": "KEYWORD_TOO_SHORT",
+                    "message": "keyword must be at least 2 characters"
+                }
+            }
 
     if type_filter is not None and type_filter not in VALID_TYPES:
         return {
@@ -352,16 +372,17 @@ def search(
         # RRFで両ソースをマージした後にlimitで切るため、各ソースからlimitより多めに取得する
         fetch_limit = limit * 5
 
-        # FTS5検索: 3文字以上の場合のみ
+        # FTS5検索: 全キーワードが3文字以上の場合のみ
+        min_len = min(len(kw) for kw in keywords)
         fts_results = []
-        if len(keyword) >= 3:
-            fts_results = _fts_search(keyword, tag_ids, type_filter, fetch_limit)
+        if min_len >= 3:
+            fts_results = _fts_search(keywords, tag_ids, type_filter, fetch_limit)
 
         # ベクトル検索
-        vec_results = _vector_search(keyword, tag_ids, type_filter, fetch_limit)
+        vec_results = _vector_search(keywords, tag_ids, type_filter, fetch_limit)
 
         # 2文字キーワード + ベクトル検索無効 → エラー
-        if len(keyword) < 3 and vec_results is None:
+        if min_len < 3 and vec_results is None:
             return {
                 "error": {
                     "code": "KEYWORD_TOO_SHORT",
