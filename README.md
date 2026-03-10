@@ -45,17 +45,16 @@ claude --plugin-dir /path/to/claude-code-memory
 | トピック | `add_topic`, `get_topics` | 議論トピック管理 |
 | ログ | `add_log`, `get_logs` | 議論ログ記録 |
 | 決定 | `add_decision`, `get_decisions` | 決定事項管理 |
-| タスク | `add_task`, `get_tasks`, `update_task` | タスク管理 |
-| 検索 | `search`, `get_by_id` | FTS5横断検索 |
-| ナレッジ | `add_knowledge` | ナレッジファイル保存 |
+| アクティビティ | `add_activity`, `get_activities`, `update_activity` | アクティビティ管理 |
+| 検索 | `search`, `get_by_ids` | FTS5+ベクトル横断検索 |
 
 ## 提供されるスキル
 
 | スキル | 説明 |
 |--------|------|
 | `/research` | 調査タスクをサブエージェントに委譲 |
-| `/task-delegate` | 複数タスクをまとめて実装→レビュー |
-| `/task-iterate` | 探索的タスクを試行錯誤で実行 |
+| `/task-plan` | 作業タスクの実装計画を作成 |
+| `/task-execute` | plan.mdに基づいて実装を実行 |
 
 ## ディレクトリ構成
 
