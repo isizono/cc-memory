@@ -1,4 +1,4 @@
-"""Stop hook: メタタグ強制 + コンテキスト取得チェック + nudgeカウンター
+"""Stop hook: メタタグ強制 + コンテキスト取得チェック + 記録強制 + nudgeカウンター
 
 処理フロー:
 1. stdin読み込み → JSON parse
@@ -7,7 +7,7 @@
    → なければblock
 4. get系API呼び出しチェック（セッション中1回以上）
    → なければblock
-5. トピック変更チェック → nudge（blockしない）
+5. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
 6. nudgeカウンター管理
 7. 状態更新 → approve
 """
@@ -107,10 +107,18 @@ def main() -> None:
             # フラグ済みでもall_entriesは後続ステップで使う
             all_entries = get_assistant_entries(transcript_path)
 
-        # 5. トピック変更チェック → nudge
+        # 5. トピック変更チェック → 記録がなければblock
         prev_topic = state.get_prev_topic()
         if prev_topic is not None and prev_topic != current_topic_name:
-            state.set_nudge_pending()
+            recent_entries = all_entries[-10:] if all_entries else []
+            if not has_recent_recording(recent_entries):
+                state.increment_block_count()
+                _output(
+                    "block",
+                    "トピックが変わりました。移動前に記録（add_decision / add_log / add_topic）を"
+                    "行ってください。",
+                )
+                return
 
         # 6. nudgeカウンター
         nudge_count = state.increment_nudge_counter()
