@@ -24,7 +24,7 @@ trap 'echo "{\"decision\": \"approve\"}" >&1; exit 0' ERR
 INPUT=$(cat)
 
 # transcript_pathを抽出
-TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -c "import json,sys; data=json.load(sys.stdin); print(data.get('transcript_path',''))")
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 
 # ログ記録関数
 log() {
@@ -51,14 +51,19 @@ log "sync-memory not found in transcript. Launching claude -p for auto-sync."
 
 # claude -p をnohup &でバックグラウンド起動
 # stdout: /dev/null, stderr: ログファイルにリダイレクト
-nohup bash -c "
+#
+# unset CLAUDECODE: Claude Codeは起動時にCLAUDECODE=1を設定する。
+# 子プロセスのclaude -pがこの変数を継承すると、ネスト検出により
+# SessionEnd hookが再発火し無限ループになる可能性があるため、unsetする。
+export TRANSCRIPT_PATH SCRIPT_DIR LOG_FILE
+nohup bash -c '
     unset CLAUDECODE
-    cat \"$TRANSCRIPT_PATH\" | claude -p \
+    cat "$TRANSCRIPT_PATH" | claude -p \
         --model sonnet \
         --permission-mode dontAsk \
-        --system-prompt \"\$(cat '${SCRIPT_DIR}/auto_sync_prompt.txt')\" \
-        '以下はClaude Codeセッションのtranscriptです。sync-memory手順に従って解析・記録してください。'
-" > /dev/null 2>> "$LOG_FILE" &
+        --system-prompt "$(cat "${SCRIPT_DIR}/auto_sync_prompt.txt")" \
+        "以下はClaude Codeセッションのtranscriptです。sync-memory手順に従って解析・記録してください。"
+' > /dev/null 2>> "$LOG_FILE" &
 
 log "claude -p launched in background (pid=$!)."
 
