@@ -285,6 +285,10 @@ class TestHasContextRetrievalCalls:
         entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__search"])]
         assert has_context_retrieval_calls(entries) is True
 
+    def test_get_activities_detected(self):
+        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_activities"])]
+        assert has_context_retrieval_calls(entries) is True
+
     def test_get_by_ids_detected(self):
         entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_by_ids"])]
         assert has_context_retrieval_calls(entries) is True

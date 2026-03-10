@@ -100,7 +100,7 @@ def main() -> None:
                 _output(
                     "block",
                     "応答の前に過去のコンテキストを取得してください。"
-                    "search / get_topics / get_decisions / get_logs / get_tasks / get_by_ids "
+                    "search / get_topics / get_decisions / get_logs / get_activities / get_by_ids "
                     "のいずれかを使ってください。",
                 )
                 return

@@ -1,6 +1,6 @@
 ---
 name: discussion
-description: This skill clarifies user requirements and removes ambiguity before design/work phases. Use when What/Why/Scope are not yet defined, or when working on a cc-memory task with [議論] prefix or mode:discussion tag.
+description: This skill clarifies user requirements and removes ambiguity before design/work phases. Use when What/Why/Scope are not yet defined, or when working on a cc-memory activity with [議論] prefix or mode:discussion tag.
 ---
 
 # Discussion Skill

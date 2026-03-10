@@ -8,7 +8,7 @@
 Conventional Commits形式（scopeなし）。typeは英語、subjectは日本語。
 
 - `feat:` / `fix:` / `docs:` / `refactor:` / `test:` / `chore:`
-- 例: `feat: tasksテーブルのスキーマを実装`
+- 例: `feat: searchにrecency boost追加`
 - bodyは変更理由が自明でない場合のみ
 
 ## ブランチ戦略
