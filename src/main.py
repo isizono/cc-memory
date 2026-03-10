@@ -328,7 +328,7 @@ def add_topic(
 ) -> dict:
     """新しい議論トピックを追加する。
 
-    tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
+    tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:/scope:/mode:/素タグ。例: ["domain:cc-memory", "scope:議論", "search", "api-design"]
     """
     return topic_service.add_topic(title, description, tags)
 
@@ -342,7 +342,7 @@ def add_log(
 ) -> dict:
     """トピックに議論ログを追加する。
 
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:/scope:/mode:/素タグ。例: ["scope:議論", "search", "api-design"]
     """
     return discussion_log_service.add_log(topic_id, title, content, tags)
 
@@ -356,7 +356,7 @@ def add_decision(
 ) -> dict:
     """決定事項を記録する。
 
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:/scope:/mode:/素タグ。例: ["scope:議論", "search", "api-design"]
     """
     return decision_service.add_decision(decision, reason, topic_id, tags)
 
@@ -475,7 +475,7 @@ def add_task(
     Args:
         title: タスクのタイトル
         description: タスクの詳細説明（必須）
-        tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
+        tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:/scope:/mode:/素タグ。例: ["domain:cc-memory", "scope:議論", "search", "api-design"]
 
     Returns:
         作成されたタスク情報
