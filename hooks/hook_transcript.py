@@ -152,6 +152,8 @@ _CONTEXT_RETRIEVAL_TOOLS = [
     "mcp__plugin_claude-code-memory_cc-memory__get_decisions",
     "mcp__plugin_claude-code-memory_cc-memory__get_logs",
     "mcp__plugin_claude-code-memory_cc-memory__get_tasks",
+    "mcp__plugin_claude-code-memory_cc-memory__get_by_id",
+    "mcp__plugin_claude-code-memory_cc-memory__get_by_ids",
 ]
 
 

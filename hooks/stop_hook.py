@@ -90,8 +90,9 @@ def main() -> None:
         current_topic_name = meta["topic_name"]
 
         # 4. get系API呼び出しチェック（セッション中1回以上）
+        all_entries = get_assistant_entries(transcript_path)
+
         if not state.has_context_retrieval():
-            all_entries = get_assistant_entries(transcript_path)
             if has_context_retrieval_calls(all_entries):
                 state.set_context_retrieved()
             else:
@@ -99,13 +100,10 @@ def main() -> None:
                 _output(
                     "block",
                     "応答の前に過去のコンテキストを取得してください。"
-                    "search / get_topics / get_decisions / get_logs / get_tasks "
+                    "search / get_topics / get_decisions / get_logs / get_tasks / get_by_id "
                     "のいずれかを使ってください。",
                 )
                 return
-        else:
-            # フラグ済みでもall_entriesは後続ステップで使う
-            all_entries = get_assistant_entries(transcript_path)
 
         # 5. トピック変更チェック → 記録がなければblock
         prev_topic = state.get_prev_topic()
