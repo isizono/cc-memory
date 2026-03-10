@@ -9,6 +9,7 @@ from src.services import (
     search_service,
     activity_service,
     knowledge_service,
+    material_service,
 )
 from src.services.tag_service import list_tags as _list_tags, update_tag as _update_tag, collect_tag_notes_for_injection
 from src.db import execute_query, get_connection, row_to_dict
@@ -459,7 +460,7 @@ def get_by_ids(
 
     Args:
         items: 取得対象のリスト。各要素は {type: str, id: int}（最大20件）
-               type: データ種別（'topic', 'decision', 'activity', 'log'）
+               type: データ種別（'topic', 'decision', 'activity', 'log', 'material'）
                id: データのID
 
     Returns:
@@ -602,6 +603,69 @@ def update_activity(
         更新されたアクティビティ情報
     """
     return activity_service.update_activity(activity_id, new_status, title, description, tags)
+
+
+@mcp.tool()
+def add_material(
+    activity_id: int,
+    title: str,
+    content: str,
+) -> dict:
+    """
+    アクティビティに紐づく資材を追加する。
+
+    資材はアクティビティの成果物・ドキュメントをDB保存する仕組み。
+    check-inツールからカタログとして参照され、全文はget_materialで取得する2段階リード設計。
+
+    典型的な使い方:
+    - 設計ドキュメントを保存: add_material(123, "API設計書", "# API設計\n...")
+    - 調査結果を保存: add_material(123, "既存実装の調査結果", "## 調査結果\n...")
+
+    Args:
+        activity_id: 紐づくアクティビティのID（必須、存在するアクティビティIDを指定）
+        title: 資材のタイトル
+        content: 資材の本文（マークダウン形式推奨）
+
+    Returns:
+        作成された資材情報（material_id, activity_id, title, content, created_at）
+    """
+    return material_service.add_material(activity_id, title, content)
+
+
+@mcp.tool()
+def get_material(
+    material_id: int,
+) -> dict:
+    """
+    資材の全文を取得する。
+
+    get_by_idsで取得したmaterial概要の詳細を取得する際に使う（2段階リードの後半）。
+
+    Args:
+        material_id: 資材のID
+
+    Returns:
+        資材の全文情報（material_id, activity_id, title, content, created_at）
+    """
+    return material_service.get_material(material_id)
+
+
+@mcp.tool()
+def list_materials(
+    activity_id: int,
+) -> dict:
+    """
+    アクティビティに紐づく資材のカタログ一覧を取得する。
+
+    全文は含まない。詳細はget_materialで取得する（2段階リード設計）。
+
+    Args:
+        activity_id: アクティビティのID
+
+    Returns:
+        資材カタログ一覧（activity_id, materials[{material_id, activity_id, title, created_at}], total_count）
+    """
+    return material_service.list_materials(activity_id)
 
 
 @mcp.tool()

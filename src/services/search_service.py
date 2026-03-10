@@ -14,7 +14,8 @@ from src.services.tag_service import (
 
 logger = logging.getLogger(__name__)
 
-VALID_TYPES = {'topic', 'decision', 'activity', 'log'}
+SEARCHABLE_TYPES = {'topic', 'decision', 'activity', 'log'}
+VALID_TYPES = SEARCHABLE_TYPES | {'material'}
 
 GET_BY_IDS_MAX = 20
 
@@ -23,6 +24,7 @@ TYPE_TO_TABLE = {
     'decision': 'decisions',
     'activity': 'activities',
     'log': 'discussion_logs',
+    'material': 'materials',
 }
 
 # snippetソースの対応表: type → (テーブル名, カラム名)
@@ -394,11 +396,11 @@ def search(
                 }
             }
 
-    if type_filter is not None and type_filter not in VALID_TYPES:
+    if type_filter is not None and type_filter not in SEARCHABLE_TYPES:
         return {
             "error": {
                 "code": "INVALID_TYPE_FILTER",
-                "message": f"Invalid type_filter: {type_filter}. Must be one of {sorted(VALID_TYPES)}"
+                "message": f"Invalid type_filter: {type_filter}. Must be one of {sorted(SEARCHABLE_TYPES)}"
             }
         }
 
@@ -496,6 +498,14 @@ def _format_row(type_name: str, data: dict, tags: list[str]) -> dict:
             "tags": tags,
             "created_at": data["created_at"],
         }
+    elif type_name == 'material':
+        return {
+            "material_id": data["id"],
+            "activity_id": data["activity_id"],
+            "title": data["title"],
+            "tags": tags,
+            "created_at": data["created_at"],
+        }
     return data
 
 
@@ -507,7 +517,7 @@ def get_by_id(type: str, id: int, conn=None) -> dict:
     元データの完全な情報を取得する。
 
     Args:
-        type: データ種別（'topic', 'decision', 'activity', 'log'）
+        type: データ種別（'topic', 'decision', 'activity', 'log', 'material'）
         id: データのID
         conn: 既存のDB接続（省略時は内部で新規作成・クローズ）
 
@@ -537,7 +547,7 @@ def get_by_id(type: str, id: int, conn=None) -> dict:
                 }
             }
 
-        # タグ取得: topic/activityはget_entity_tags、decision/logはget_effective_tags
+        # タグ取得: topic/activityはget_entity_tags、decision/logはget_effective_tags、materialはタグなし
         if type == 'topic':
             tags = get_entity_tags(conn, "topic_tags", "topic_id", id)
         elif type == 'activity':
@@ -546,6 +556,8 @@ def get_by_id(type: str, id: int, conn=None) -> dict:
             tags = get_effective_tags(conn, "decision", id)
         elif type == 'log':
             tags = get_effective_tags(conn, "log", id)
+        elif type == 'material':
+            tags = []
         else:
             tags = []
 
