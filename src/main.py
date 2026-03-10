@@ -328,7 +328,7 @@ def add_topic(
 ) -> dict:
     """新しい議論トピックを追加する。
 
-    tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
+    tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["domain:cc-memory", "scope:search-improvement", "search", "api-design"]
     """
     return topic_service.add_topic(title, description, tags)
 
@@ -342,7 +342,7 @@ def add_log(
 ) -> dict:
     """トピックに議論ログを追加する。
 
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["scope:search-improvement", "search", "api-design"]
     """
     return discussion_log_service.add_log(topic_id, title, content, tags)
 
@@ -356,7 +356,7 @@ def add_decision(
 ) -> dict:
     """決定事項を記録する。
 
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["scope:search-improvement", "search", "api-design"]
     """
     return decision_service.add_decision(decision, reason, topic_id, tags)
 
@@ -471,12 +471,12 @@ def add_task(
     新しいタスクを追加する。
 
     典型的な使い方:
-    - 作業タスクを作成: add_task("○○機能を実装", "詳細説明...", ["domain:cc-memory"])
+    - 作業タスクを作成: add_task("○○機能を実装", "詳細説明...", ["domain:cc-memory", "mode:implementation", "scope:api-design"])
 
     Args:
         title: タスクのタイトル
         description: タスクの詳細説明（必須）
-        tags: タグ配列（必須、1個以上）。例: ["domain:cc-memory", "hooks"]
+        tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["domain:cc-memory", "scope:search-improvement", "mode:discuss", "search"]
 
     Returns:
         作成されたタスク情報
