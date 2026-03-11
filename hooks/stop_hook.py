@@ -1,4 +1,4 @@
-"""Stop hook: メタタグ強制 + コンテキスト取得チェック + 記録強制 + nudgeカウンター
+"""Stop hook: メタタグ強制 + コンテキスト取得チェック + activity check-in + 記録強制 + nudgeカウンター
 
 処理フロー:
 1. stdin読み込み → JSON parse
@@ -7,6 +7,8 @@
    → なければblock
 4. get系API呼び出しチェック（セッション中1回以上）
    → なければblock
+4.5. activity check-inチェック（最初の3ターン、one-shot block）
+     → 3ターン経過 + check-in/add_activity未呼出 → block
 5. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
 6. nudgeカウンター管理
 7. 状態更新 → approve
@@ -26,6 +28,7 @@ from hooks.hook_transcript import (
     extract_text_from_entry,
     get_assistant_entries,
     get_last_assistant_entry,
+    has_activity_checkin_calls,
     has_context_retrieval_calls,
     has_recent_recording,
     parse_meta_tag,
@@ -105,6 +108,19 @@ def main() -> None:
                 )
                 return
 
+        # 4.5. Activity check-in チェック（最初の3ターン）
+        if not state.has_activity_checkin():
+            if has_activity_checkin_calls(all_entries):
+                state.set_activity_checkin()
+            elif state.get_approved_turns() >= 2:
+                state.set_activity_checkin()  # one-shot: 次回はスキップ
+                state.increment_block_count()
+                _output(
+                    "block",
+                    "アクティビティにcheck-inしてください。",
+                )
+                return
+
         # 5. トピック変更チェック → 記録がなければblock
         prev_topic = state.get_prev_topic()
         if prev_topic is not None and prev_topic != current_topic_name:
@@ -131,6 +147,7 @@ def main() -> None:
         # 7. 状態更新 + approve
         state.set_prev_topic(current_topic_name)
         state.reset_block_count()
+        state.increment_approved_turns()
         _output("approve")
 
     except Exception as e:

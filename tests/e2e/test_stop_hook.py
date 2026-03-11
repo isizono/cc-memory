@@ -518,6 +518,136 @@ class TestLastAssistantMessage:
         assert result["decision"] == "approve"
 
 
+class TestActivityCheckinBlock:
+    """activity check-in チェック"""
+
+    def test_no_checkin_after_3_turns_blocks(self, env_setup):
+        """3ターン目でcheck-in未呼出 → block"""
+        state_dir = Path(env_setup["state_dir"])
+        # approved_turns を 2 にセット（3ターン目）
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("2")
+        # context_retrieved フラグを設定
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+        # transcript（check-in呼出なし）
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            CONTEXT_RETRIEVAL_ENTRY,
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+        ], transcript)
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "block"
+        assert "check-in" in result["reason"]
+        # block時にapproved_turnsがインクリメントされていないことを確認
+        assert turns_file.read_text().strip() == "2"
+
+    def test_checkin_called_approves(self, env_setup):
+        """check_in呼出済み → approve"""
+        state_dir = Path(env_setup["state_dir"])
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("2")
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            _make_assistant_entry(
+                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__check_in"],
+            ),
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+        ], transcript)
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_add_activity_called_approves(self, env_setup):
+        """add_activity呼出済み → approve"""
+        state_dir = Path(env_setup["state_dir"])
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("2")
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            _make_assistant_entry(
+                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_activity"],
+            ),
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+        ], transcript)
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_block_only_once(self, env_setup):
+        """activity_checkinフラグ設定済み → 2回目はblockしない"""
+        state_dir = Path(env_setup["state_dir"])
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("5")
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+        checkin_file = state_dir / "activity_checkin_test-session"
+        checkin_file.write_text("1")
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+        ], transcript)
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_before_3_turns_no_block(self, env_setup):
+        """2ターン目ではblockしない（approved_turns=1）"""
+        state_dir = Path(env_setup["state_dir"])
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("1")
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+        # check-in未呼出だが、まだ3ターン目未満
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+        ], transcript)
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_approved_turns_incremented_on_approve(self, env_setup):
+        """approve時にapproved_turnsがインクリメントされる"""
+        state_dir = Path(env_setup["state_dir"])
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+        ], transcript)
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+        # approved_turns が 1 にインクリメントされている
+        turns_file = state_dir / "approved_turns_test-session"
+        assert turns_file.exists()
+        assert turns_file.read_text().strip() == "1"
+
+
 class TestContextRetrievalCheck:
     """コンテキスト取得ツール呼び出しチェック"""
 

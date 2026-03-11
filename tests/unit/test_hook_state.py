@@ -83,6 +83,29 @@ class TestNudgePending:
         assert hook_state.pop_nudge_pending() is False
 
 
+class TestApprovedTurns:
+    def test_get_returns_zero_when_no_file(self, hook_state):
+        assert hook_state.get_approved_turns() == 0
+
+    def test_increment(self, hook_state):
+        assert hook_state.increment_approved_turns() == 1
+        assert hook_state.increment_approved_turns() == 2
+
+    def test_corrupted_file_returns_zero(self, hook_state):
+        path = hook_state._path("approved_turns")
+        path.write_text("abc")
+        assert hook_state.get_approved_turns() == 0
+
+
+class TestActivityCheckin:
+    def test_has_returns_false_when_no_file(self, hook_state):
+        assert hook_state.has_activity_checkin() is False
+
+    def test_set_then_has(self, hook_state):
+        hook_state.set_activity_checkin()
+        assert hook_state.has_activity_checkin() is True
+
+
 class TestClearSession:
     def test_clears_all_state_files(self, tmp_path, monkeypatch):
         monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
@@ -93,6 +116,8 @@ class TestClearSession:
         state.increment_block_count()
         state.increment_nudge_counter()
         state.set_nudge_pending()
+        state.increment_approved_turns()
+        state.set_activity_checkin()
 
         # clear
         HookState.clear_session("sess-abc")
@@ -102,6 +127,8 @@ class TestClearSession:
         assert state.get_block_count() == 0
         assert state.get_nudge_counter() == 0
         assert state.pop_nudge_pending() is False
+        assert state.get_approved_turns() == 0
+        assert state.has_activity_checkin() is False
 
 
 class TestSessionIdSlash:

@@ -1,7 +1,8 @@
 """hook共通: 状態ファイル管理クラス HookState
 
 hookが利用する状態ファイル（prev_topic, block_count, nudge_counter, nudge_pending,
-context_retrieved）の読み書きを一元管理する。標準ライブラリのみに依存。
+context_retrieved, approved_turns, activity_checkin）の読み書きを一元管理する。
+標準ライブラリのみに依存。
 """
 from pathlib import Path
 
@@ -95,6 +96,28 @@ class HookState:
             return True
         except FileNotFoundError:
             return False
+
+    # --- approved_turns ---
+
+    def get_approved_turns(self) -> int:
+        """approve済みターン数を取得。block時はインクリメントされない。"""
+        return self._read_int(self._path("approved_turns"), 0)
+
+    def increment_approved_turns(self) -> int:
+        """approve済みターン数を+1して返す。ステップ7(approve)でのみ呼ばれる。"""
+        new_val = self.get_approved_turns() + 1
+        self._write(self._path("approved_turns"), str(new_val))
+        return new_val
+
+    # --- activity_checkin ---
+
+    def has_activity_checkin(self) -> bool:
+        """activity check-in済みフラグを確認。one-shot block制御に使用。"""
+        return self._path("activity_checkin").exists()
+
+    def set_activity_checkin(self) -> None:
+        """activity check-in済みフラグを設定。以後のcheck-inチェックをスキップする。"""
+        self._write(self._path("activity_checkin"), "1")
 
     # --- context_retrieved ---
 
