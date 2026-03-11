@@ -52,13 +52,9 @@ class TestParseTag:
         """素タグをパースできる"""
         assert parse_tag("hooks") == ("", "hooks")
 
-    def test_mode_namespace(self):
-        """mode namespaceをパースできる"""
-        assert parse_tag("mode:design") == ("mode", "design")
-
-    def test_scope_namespace(self):
-        """scope namespaceをパースできる"""
-        assert parse_tag("scope:parent-topic") == ("scope", "parent-topic")
+    def test_intent_namespace(self):
+        """intent namespaceをパースできる"""
+        assert parse_tag("intent:design") == ("intent", "design")
 
     def test_colon_in_name(self):
         """nameにコロンが含まれる場合、最初のコロンで分割"""
@@ -79,12 +75,12 @@ class TestValidateAndParseTags:
 
     def test_valid_tags(self):
         """正常なタグ配列をパースできる"""
-        result = validate_and_parse_tags(["domain:cc-memory", "hooks", "mode:design"])
+        result = validate_and_parse_tags(["domain:cc-memory", "hooks", "intent:design"])
         assert isinstance(result, list)
         assert len(result) == 3
         assert ("domain", "cc-memory") in result
         assert ("", "hooks") in result
-        assert ("mode", "design") in result
+        assert ("intent", "design") in result
 
     def test_deduplicate(self):
         """重複タグを排除する"""
@@ -178,7 +174,7 @@ class TestEnsureTagIds:
         """入力順序が保持される"""
         conn = get_connection()
         try:
-            tags = [("mode", "design"), ("domain", "alpha"), ("", "zebra")]
+            tags = [("intent", "design"), ("domain", "alpha"), ("", "zebra")]
             tag_ids = ensure_tag_ids(conn, tags)
             conn.commit()
             assert len(tag_ids) == 3
@@ -289,10 +285,10 @@ class TestFormatTags:
         rows = [
             MockRow("domain", "cc-memory"),
             MockRow("", "hooks"),
-            MockRow("mode", "design"),
+            MockRow("intent", "design"),
         ]
         result = format_tags(rows)
-        assert result == ["domain:cc-memory", "hooks", "mode:design"]
+        assert result == ["domain:cc-memory", "hooks", "intent:design"]
 
     def test_sorted(self):
         """アルファベット順ソート"""
@@ -348,7 +344,7 @@ class TestGetEffectiveTagsBatch:
             topic_id=topic["topic_id"],
             decision="Dec 1",
             reason="Reason 1",
-            tags=["scope:search"],
+            tags=["intent:design"],
         )
 
         conn = get_connection()
@@ -357,7 +353,7 @@ class TestGetEffectiveTagsBatch:
             assert dec["decision_id"] in result
             tags = result[dec["decision_id"]]
             assert "domain:test" in tags
-            assert "scope:search" in tags
+            assert "intent:design" in tags
         finally:
             conn.close()
 
@@ -385,7 +381,7 @@ class TestGetEffectiveTagsBatch:
             topic_id=topic["topic_id"],
             title="Log 2",
             content="Content 2",
-            tags=["scope:extra"],
+            tags=["extra"],
         )
 
         conn = get_connection()
@@ -395,6 +391,6 @@ class TestGetEffectiveTagsBatch:
             assert log2["log_id"] in result
             assert "domain:test" in result[log1["log_id"]]
             assert "domain:test" in result[log2["log_id"]]
-            assert "scope:extra" in result[log2["log_id"]]
+            assert "extra" in result[log2["log_id"]]
         finally:
             conn.close()

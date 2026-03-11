@@ -46,11 +46,11 @@ def test_add_topic_tags_stored(temp_db):
     result = add_topic(
         title="タグテスト",
         description="タグの永続化テスト",
-        tags=["domain:cc-memory", "hooks", "scope:search"],
+        tags=["domain:cc-memory", "hooks", "intent:design"],
     )
 
     assert "error" not in result
-    assert sorted(result["tags"]) == ["domain:cc-memory", "hooks", "scope:search"]
+    assert sorted(result["tags"]) == ["domain:cc-memory", "hooks", "intent:design"]
 
     # DBで直接確認
     conn = get_connection()
@@ -249,7 +249,7 @@ def test_add_decision_with_tags(temp_db):
 
 def test_add_decision_without_tags(temp_db):
     """tags=NoneでtopicのタグのみがUNIONされる"""
-    topic = add_topic(title="テストトピック", description="Test description", tags=["domain:test", "scope:api"])
+    topic = add_topic(title="テストトピック", description="Test description", tags=["domain:test", "intent:design"])
 
     result = add_decision(
         topic_id=topic["topic_id"],

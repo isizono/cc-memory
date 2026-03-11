@@ -167,11 +167,11 @@ def test_get_topics_partial_nonexistent_tags(temp_db):
 
 def test_get_topics_and_filter(temp_db):
     """複数タグAND条件"""
-    add_topic(title="Both Tags", description="Desc", tags=["domain:test", "scope:search"])
+    add_topic(title="Both Tags", description="Desc", tags=["domain:test", "intent:design"])
     add_topic(title="Only domain", description="Desc", tags=["domain:test"])
-    add_topic(title="Only scope", description="Desc", tags=["scope:search"])
+    add_topic(title="Only intent", description="Desc", tags=["intent:design"])
 
-    result = get_topics(tags=["domain:test", "scope:search"])
+    result = get_topics(tags=["domain:test", "intent:design"])
 
     assert "error" not in result
     assert result["total_count"] == 1
@@ -180,7 +180,7 @@ def test_get_topics_and_filter(temp_db):
 
 def test_get_topics_has_tags_field(temp_db):
     """各topicにtags付き"""
-    add_topic(title="Tagged Topic", description="Desc", tags=["domain:test", "scope:search"])
+    add_topic(title="Tagged Topic", description="Desc", tags=["domain:test", "intent:design"])
 
     result = get_topics(tags=["domain:test"])
 
@@ -189,7 +189,7 @@ def test_get_topics_has_tags_field(temp_db):
     topic = result["topics"][0]
     assert "tags" in topic
     assert "domain:test" in topic["tags"]
-    assert "scope:search" in topic["tags"]
+    assert "intent:design" in topic["tags"]
     # 旧フィールドが除去されている
     assert "subject_id" not in topic
     assert "parent_topic_id" not in topic
@@ -386,7 +386,7 @@ def test_get_decisions_with_extra_tags(temp_db):
         topic_id=topic["topic_id"],
         decision="Dec with extra tags",
         reason="Reason",
-        tags=["scope:search"],
+        tags=["intent:design"],
     )
 
     result = get_decisions(topic_id=topic["topic_id"])
@@ -398,4 +398,4 @@ def test_get_decisions_with_extra_tags(temp_db):
     # topicのタグを継承
     assert "domain:test" in dec["tags"]
     # decision個別のタグも含む
-    assert "scope:search" in dec["tags"]
+    assert "intent:design" in dec["tags"]

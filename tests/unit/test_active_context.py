@@ -112,11 +112,11 @@ def test_get_active_domains_basic(temp_db):
 
 def test_get_active_domains_excludes_non_domain(temp_db):
     """domain以外のnamespaceは返らない"""
-    add_topic(title="Topic 1", description="Desc", tags=["scope:search"])
+    add_topic(title="Topic 1", description="Desc", tags=["intent:design"])
 
     domains = _get_active_domains()
     names = [d["name"] for d in domains]
-    assert "search" not in names
+    assert "design" not in names
 
 
 def test_get_active_domains_sorted_by_name(temp_db):
@@ -284,10 +284,10 @@ def test_get_active_activities_by_tag_empty(temp_db):
 
 def test_get_recent_non_domain_tags_basic(temp_db):
     """domain:以外のタグが返る"""
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "scope:search", "hooks"])
+    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "intent:design", "hooks"])
 
     tags = _get_recent_non_domain_tags()
-    assert "scope:search" in tags
+    assert "intent:design" in tags
     assert "hooks" in tags
     # domain:は含まれない
     assert "domain:test" not in tags
@@ -295,15 +295,15 @@ def test_get_recent_non_domain_tags_basic(temp_db):
 
 def test_get_recent_non_domain_tags_frequency_order(temp_db):
     """使用頻度降順"""
-    # scope:searchを2回使用、modeを1回使用
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "scope:search"])
-    add_topic(title="Topic 2", description="Desc", tags=["domain:test", "scope:search"])
-    add_topic(title="Topic 3", description="Desc", tags=["domain:test", "mode:discuss"])
+    # intent:designを2回使用、intent:discussを1回使用
+    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "intent:design"])
+    add_topic(title="Topic 2", description="Desc", tags=["domain:test", "intent:design"])
+    add_topic(title="Topic 3", description="Desc", tags=["domain:test", "intent:discuss"])
 
     tags = _get_recent_non_domain_tags()
-    search_idx = tags.index("scope:search")
-    mode_idx = tags.index("mode:discuss")
-    assert search_idx < mode_idx
+    design_idx = tags.index("intent:design")
+    discuss_idx = tags.index("intent:discuss")
+    assert design_idx < discuss_idx
 
 
 def test_get_recent_non_domain_tags_empty(temp_db):
@@ -326,7 +326,7 @@ def test_get_recent_non_domain_tags_excludes_old(temp_db):
         topic_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         from src.services.tag_service import ensure_tag_ids, link_tags
-        tag_ids = ensure_tag_ids(conn, [("scope", "old-scope")])
+        tag_ids = ensure_tag_ids(conn, [("intent", "old-intent")])
         link_tags(conn, "topic_tags", "topic_id", topic_id, tag_ids)
 
         conn.commit()
@@ -334,7 +334,7 @@ def test_get_recent_non_domain_tags_excludes_old(temp_db):
         conn.close()
 
     tags = _get_recent_non_domain_tags()
-    assert "scope:old-scope" not in tags
+    assert "intent:old-intent" not in tags
 
 
 # ========================================
@@ -393,12 +393,12 @@ def test_build_active_context_description_truncated(temp_db):
 
 def test_build_active_context_non_domain_tags(temp_db):
     """domain:以外のタグが「最近使われたタグ」セクションに列挙される"""
-    add_topic(title="Topic", description="Desc", tags=["domain:myapp", "scope:search", "hooks"])
+    add_topic(title="Topic", description="Desc", tags=["domain:myapp", "intent:design", "hooks"])
 
     result = _build_active_context()
 
     assert "## 最近使われたタグ" in result
-    assert "scope:search" in result
+    assert "intent:design" in result
     assert "hooks" in result
 
 
@@ -487,12 +487,12 @@ def test_build_active_context_only_non_domain_tags(temp_db):
         conn.close()
 
     # non-domainタグのみのトピックを追加
-    add_topic(title="Topic", description="Desc", tags=["scope:search"])
+    add_topic(title="Topic", description="Desc", tags=["intent:design"])
 
     result = _build_active_context()
 
     # domain:セクションはないがnon-domainタグセクションはある
-    # ただしscope:searchのトピックにはdomain:タグがないので
+    # ただしintent:designのトピックにはdomain:タグがないので
     # domainセクションは生成されない
     assert "## 最近使われたタグ" in result
-    assert "scope:search" in result
+    assert "intent:design" in result

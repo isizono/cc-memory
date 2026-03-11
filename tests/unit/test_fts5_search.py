@@ -85,7 +85,7 @@ def test_search_type_filter(temp_db):
 
 def test_search_with_tags(temp_db):
     """タグフィルタ: ANDで絞り込み"""
-    add_topic(title="タグ対象トピック一致テスト", description="テスト", tags=["domain:test", "scope:search"])
+    add_topic(title="タグ対象トピック一致テスト", description="テスト", tags=["domain:test", "intent:design"])
     add_topic(title="タグ対象外トピック一致テスト", description="テスト", tags=["domain:other"])
     result = search_service.search(keyword="タグ対象", tags=["domain:test"])
     assert "error" not in result
@@ -97,9 +97,9 @@ def test_search_with_tags(temp_db):
 
 def test_search_with_multiple_tags_and(temp_db):
     """タグフィルタ: 複数タグのAND条件"""
-    add_topic(title="複数タグAND対象テスト", description="テスト", tags=["domain:test", "scope:search"])
+    add_topic(title="複数タグAND対象テスト", description="テスト", tags=["domain:test", "intent:design"])
     add_topic(title="複数タグAND部分テスト", description="テスト", tags=["domain:test"])
-    result = search_service.search(keyword="複数タグAND", tags=["domain:test", "scope:search"])
+    result = search_service.search(keyword="複数タグAND", tags=["domain:test", "intent:design"])
     assert "error" not in result
     titles = [r["title"] for r in result["results"]]
     assert any("複数タグAND対象テスト" in t for t in titles)
@@ -229,10 +229,10 @@ def test_search_cross_type(temp_db):
 
 def test_search_decision_inherits_topic_tags(temp_db):
     """decisionはtopicのタグを継承してフィルタされる"""
-    topic = add_topic(title="継承テスト用トピック", description="テスト", tags=["domain:test", "scope:inherit"])
+    topic = add_topic(title="継承テスト用トピック", description="テスト", tags=["domain:test", "intent:investigate"])
     add_decision(topic_id=topic["topic_id"], decision="継承タグフィルタ決定テスト", reason="テスト")
-    # scope:inherit でフィルタ → topicを親に持つdecisionもヒット
-    result = search_service.search(keyword="継承タグフィルタ決定テスト", tags=["scope:inherit"])
+    # intent:investigate でフィルタ → topicを親に持つdecisionもヒット
+    result = search_service.search(keyword="継承タグフィルタ決定テスト", tags=["intent:investigate"])
     assert "error" not in result
     types = [r["type"] for r in result["results"]]
     assert "decision" in types
@@ -240,9 +240,9 @@ def test_search_decision_inherits_topic_tags(temp_db):
 
 def test_search_log_inherits_topic_tags(temp_db):
     """logはtopicのタグを継承してフィルタされる"""
-    topic = add_topic(title="ログ継承テスト用トピック", description="テスト", tags=["domain:test", "scope:loginherit"])
+    topic = add_topic(title="ログ継承テスト用トピック", description="テスト", tags=["domain:test", "loginherit"])
     add_log_entry(topic_id=topic["topic_id"], title="継承タグフィルタログテスト", content="テストログ内容")
-    result = search_service.search(keyword="継承タグフィルタログテスト", tags=["scope:loginherit"])
+    result = search_service.search(keyword="継承タグフィルタログテスト", tags=["loginherit"])
     assert "error" not in result
     types = [r["type"] for r in result["results"]]
     assert "log" in types

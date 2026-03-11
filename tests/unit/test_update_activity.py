@@ -176,11 +176,11 @@ class TestUpdateActivityTags:
 
     def test_update_tags(self, test_activity):
         """タグ全置換"""
-        result = update_activity(test_activity["activity_id"], tags=["scope:search", "domain:cc-memory"])
+        result = update_activity(test_activity["activity_id"], tags=["intent:design", "domain:cc-memory"])
 
         assert "error" not in result
         assert "tags" in result
-        assert "scope:search" in result["tags"]
+        assert "intent:design" in result["tags"]
         assert "domain:cc-memory" in result["tags"]
         # 旧タグは除去されている
         assert "domain:test" not in result["tags"]
