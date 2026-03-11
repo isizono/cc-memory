@@ -1,9 +1,9 @@
 ---
-name: checkin
+name: check-in
 description: アクティビティにcheck-inして関連情報を集約取得する
 ---
 
-# checkin
+# check-in
 
 指定されたアクティビティに対して `check_in` ツールを呼び出してください。
 
