@@ -35,6 +35,12 @@ claude plugin marketplace add isizono/claude-code-memory
 claude plugin install claude-code-memory
 ```
 
+インストール後、Claude Code内で以下を実行すると使い方の案内が表示されます。
+
+```
+/guide
+```
+
 ## MCPツール
 
 | カテゴリ | ツール | 説明 |
@@ -51,7 +57,10 @@ claude plugin install claude-code-memory
 
 | スキル | 説明 |
 |--------|------|
+| `/guide` | cc-memoryの使い方をAIが説明します |
 | `/sync-memory` | セッション終了前にtranscriptを解析し、トピック・決定事項・アクティビティを一括で記録・更新します |
+| `/check-in` | アクティビティにcheck-inして関連情報を集約取得します |
+| `/tag-notes` | タグのnotesを確認・更新します |
 
 ## 設定
 
