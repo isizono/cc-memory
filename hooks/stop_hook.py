@@ -7,8 +7,8 @@
    → なければblock
 4. get系API呼び出しチェック（セッション中1回以上）
    → なければblock
-5. activity check-inチェック（最初の3ターン、one-shot block）
-   → 3ターン経過 + check-in/add_activity未呼出 → block
+5. activity check-inチェック（2ターン目、one-shot block）
+   → 2ターン目 + check-in/add_activity未呼出 → block
 6. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
 7. nudgeカウンター管理
 8. 状態更新 → approve
@@ -108,16 +108,17 @@ def main() -> None:
                 )
                 return
 
-        # 5. Activity check-in チェック（最初の3ターン）
+        # 5. Activity check-in チェック（2ターン目）
         if not state.has_activity_checkin():
             if has_activity_checkin_calls(all_entries):
                 state.set_activity_checkin()
-            elif state.get_approved_turns() >= 2:
+            elif state.get_approved_turns() >= 1:
                 state.set_activity_checkin()  # one-shot: 次回はスキップ
                 state.increment_block_count()
                 _output(
                     "block",
-                    "アクティビティにcheck-inしてください。",
+                    "アクティビティにcheck-inしてください。"
+                    "該当するものがなければadd_activityで作成してください。",
                 )
                 return
 
