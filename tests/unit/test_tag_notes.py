@@ -176,13 +176,13 @@ class TestTagNotesInjection:
 
     def test_mixed_tags_with_and_without_notes(self, temp_db):
         """notes があるタグとないタグの混在"""
-        add_topic(title="Test", description="Desc", tags=["domain:test", "scope:search"])
+        add_topic(title="Test", description="Desc", tags=["domain:test", "intent:design"])
         update_tag("domain:test", "テスト教訓")
-        # scope:search には notes を設定しない
+        # intent:design には notes を設定しない
 
         conn = get_connection()
         try:
-            result = collect_tag_notes_for_injection(conn, ["domain:test", "scope:search"])
+            result = collect_tag_notes_for_injection(conn, ["domain:test", "intent:design"])
             assert result is not None
             assert len(result) == 1
             assert result[0]["tag"] == "domain:test"
@@ -191,26 +191,26 @@ class TestTagNotesInjection:
 
     def test_multiple_tags_with_notes(self, temp_db):
         """複数タグに notes がある場合"""
-        add_topic(title="Test", description="Desc", tags=["domain:test", "scope:search"])
+        add_topic(title="Test", description="Desc", tags=["domain:test", "intent:design"])
         update_tag("domain:test", "テスト教訓")
-        update_tag("scope:search", "検索の教訓")
+        update_tag("intent:design", "設計の教訓")
 
         conn = get_connection()
         try:
-            result = collect_tag_notes_for_injection(conn, ["domain:test", "scope:search"])
+            result = collect_tag_notes_for_injection(conn, ["domain:test", "intent:design"])
             assert result is not None
             assert len(result) == 2
             tag_strs = {r["tag"] for r in result}
             assert "domain:test" in tag_strs
-            assert "scope:search" in tag_strs
+            assert "intent:design" in tag_strs
         finally:
             conn.close()
 
     def test_partial_new_tags(self, temp_db):
         """一部が既に遭遇済み、一部が新規の場合"""
-        add_topic(title="Test", description="Desc", tags=["domain:test", "scope:search"])
+        add_topic(title="Test", description="Desc", tags=["domain:test", "intent:design"])
         update_tag("domain:test", "テスト教訓")
-        update_tag("scope:search", "検索の教訓")
+        update_tag("intent:design", "設計の教訓")
 
         conn = get_connection()
         try:
@@ -218,10 +218,10 @@ class TestTagNotesInjection:
             collect_tag_notes_for_injection(conn, ["domain:test"])
 
             # 両方渡すが、domain:test は既に遭遇済み
-            result = collect_tag_notes_for_injection(conn, ["domain:test", "scope:search"])
+            result = collect_tag_notes_for_injection(conn, ["domain:test", "intent:design"])
             assert result is not None
             assert len(result) == 1
-            assert result[0]["tag"] == "scope:search"
+            assert result[0]["tag"] == "intent:design"
         finally:
             conn.close()
 

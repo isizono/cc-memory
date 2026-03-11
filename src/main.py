@@ -97,7 +97,7 @@ def _get_recent_non_domain_tags() -> list[str]:
     topic_tags経由でトピックの作成日が直近7日のタグを取得する。
 
     Returns:
-        ["scope:design", "scope:implementation", "mode:discuss", "hooks", ...]（使用頻度降順）
+        ["intent:design", "intent:discuss", "hooks", ...]（使用頻度降順）
     """
     rows = execute_query(
         """
@@ -340,7 +340,7 @@ def add_topic(
 ) -> dict:
     """新しい議論トピックを追加する。
 
-    tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["domain:cc-memory", "scope:hook-system", "error-handling", "validation", "stdin"]
+    tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["domain:cc-memory", "intent:implement", "error-handling", "validation", "stdin"]
     """
     result = topic_service.add_topic(title, description, tags)
     if "error" not in result:
@@ -357,7 +357,7 @@ def add_log(
 ) -> dict:
     """トピックに議論ログを追加する。
 
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["mode:discussion", "migration", "breaking-change", "schema"]
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:discuss", "migration", "breaking-change", "schema"]
     """
     result = discussion_log_service.add_log(topic_id, title, content, tags)
     if "error" not in result and tags:
@@ -374,7 +374,7 @@ def add_decision(
 ) -> dict:
     """決定事項を記録する。
 
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["scope:data-model", "naming-convention", "backward-compat"]
+    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:design", "naming-convention", "backward-compat"]
     """
     result = decision_service.add_decision(decision, reason, topic_id, tags)
     if "error" not in result and tags:
@@ -489,7 +489,7 @@ def list_tags(
     namespaceでフィルタリング可能。
 
     Args:
-        namespace: namespaceでフィルタ（"domain", "scope", "mode", ""。未指定で全タグ）
+        namespace: namespaceでフィルタ（"domain", "intent", ""。未指定で全タグ）
 
     Returns:
         タグ一覧（tag, id, namespace, name, usage_count, notes）をusage_count降順で返す
@@ -525,12 +525,12 @@ def add_activity(
     新しいアクティビティを追加する。
 
     典型的な使い方:
-    - 作業アクティビティを作成: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "mode:discuss", "scope:api-design", "search", "ranking"])
+    - 作業アクティビティを作成: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement", "search", "ranking"])
 
     Args:
         title: アクティビティのタイトル
         description: アクティビティの詳細説明（必須）
-        tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/scope:(作業の塊)/mode:(作業スタンス)/素タグ(キーワード)。例: ["domain:cc-memory", "mode:implementation", "scope:api-design", "search", "ranking"]
+        tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["domain:cc-memory", "intent:implement", "search", "ranking"]
 
     Returns:
         作成されたアクティビティ情報
@@ -589,7 +589,7 @@ def update_activity(
     - アクティビティ完了: update_activity(activity_id, new_status="completed")
     - タイトル変更: update_activity(activity_id, title="新しいタイトル")
     - 説明更新: update_activity(activity_id, description="新しい説明")
-    - タグ変更: update_activity(activity_id, tags=["domain:cc-memory", "scope:search"])
+    - タグ変更: update_activity(activity_id, tags=["domain:cc-memory", "intent:implement"])
 
     ワークフロー位置: アクティビティ進行状況の更新時
 

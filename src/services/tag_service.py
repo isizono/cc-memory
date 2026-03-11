@@ -5,7 +5,7 @@ from typing import Optional, Union
 from src.db import execute_query, get_connection, row_to_dict
 
 
-VALID_NAMESPACES = {'', 'domain', 'scope', 'mode'}
+VALID_NAMESPACES = {'', 'domain', 'intent'}
 
 # Entity table mapping (for UNION inheritance queries)
 _ENTITY_TABLE = {
@@ -22,8 +22,7 @@ def parse_tag(tag_str: str) -> tuple[str, str]:
     例:
       "domain:cc-memory"  -> ("domain", "cc-memory")
       "hooks"             -> ("", "hooks")
-      "mode:design"       -> ("mode", "design")
-      "scope:parent-topic" -> ("scope", "parent-topic")
+      "intent:design"     -> ("intent", "design")
     """
     if ":" in tag_str:
         namespace, name = tag_str.split(":", 1)
@@ -397,7 +396,7 @@ def collect_tag_notes_for_injection(conn: sqlite3.Connection, tag_strings: list[
 
     Args:
         conn: DB接続
-        tag_strings: タグ文字列リスト（例: ["domain:cc-memory", "scope:design"]）
+        tag_strings: タグ文字列リスト（例: ["domain:cc-memory", "intent:design"]）
 
     Returns:
         notes があるタグの一覧。なければ None

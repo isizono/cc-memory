@@ -52,7 +52,7 @@ def test_list_tags_usage_count(temp_db):
     # domain:test を3つのエンティティで使用
     topic = add_topic(title="Topic 1", description="Desc", tags=["domain:test"])
     add_activity(title="Activity 1", description="Desc", tags=["domain:test"])
-    add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason", tags=["scope:search"])
+    add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason", tags=["intent:design"])
 
     result = list_tags()
     assert "error" not in result
@@ -61,20 +61,20 @@ def test_list_tags_usage_count(temp_db):
     test_tag = next(t for t in result["tags"] if t["tag"] == "domain:test")
     assert test_tag["usage_count"] == 2
 
-    # scope:search は decision_tags(1) = 1
-    search_tag = next(t for t in result["tags"] if t["tag"] == "scope:search")
-    assert search_tag["usage_count"] == 1
+    # intent:design は decision_tags(1) = 1
+    design_tag = next(t for t in result["tags"] if t["tag"] == "intent:design")
+    assert design_tag["usage_count"] == 1
 
 
 def test_list_tags_usage_count_includes_logs(temp_db):
     """logのタグもusage_countに含まれる"""
     topic = add_topic(title="Topic", description="Desc", tags=["domain:test"])
-    add_log(topic_id=topic["topic_id"], title="Log 1", content="Content", tags=["scope:logcount"])
+    add_log(topic_id=topic["topic_id"], title="Log 1", content="Content", tags=["logcount"])
 
     result = list_tags()
     assert "error" not in result
 
-    logcount_tag = next(t for t in result["tags"] if t["tag"] == "scope:logcount")
+    logcount_tag = next(t for t in result["tags"] if t["tag"] == "logcount")
     assert logcount_tag["usage_count"] == 1
 
 
@@ -83,13 +83,13 @@ def test_list_tags_sorted_by_usage_count_desc(temp_db):
     # domain:test を2つのトピックで使用
     add_topic(title="Topic 1", description="Desc", tags=["domain:test"])
     add_topic(title="Topic 2", description="Desc", tags=["domain:test"])
-    # scope:rare を1つだけ
-    add_topic(title="Topic 3", description="Desc", tags=["scope:rare"])
+    # intent:investigate を1つだけ
+    add_topic(title="Topic 3", description="Desc", tags=["intent:investigate"])
 
     result = list_tags()
     assert "error" not in result
 
-    # domain:default(1), domain:test(2), scope:rare(1) のはず
+    # domain:default(1), domain:test(2), intent:investigate(1) のはず
     # usage_count降順で、domain:testが最初に来る
     tags = result["tags"]
     usage_counts = [t["usage_count"] for t in tags]
@@ -99,7 +99,7 @@ def test_list_tags_sorted_by_usage_count_desc(temp_db):
 
 def test_list_tags_namespace_filter(temp_db):
     """namespaceフィルタ: 指定namespaceのみ返る"""
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "scope:search"])
+    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "intent:design"])
 
     result = list_tags(namespace="domain")
     assert "error" not in result
@@ -107,15 +107,15 @@ def test_list_tags_namespace_filter(temp_db):
         assert t["namespace"] == "domain"
 
 
-def test_list_tags_namespace_filter_scope(temp_db):
-    """namespaceフィルタ: scopeで絞り込み"""
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "scope:search"])
+def test_list_tags_namespace_filter_intent(temp_db):
+    """namespaceフィルタ: intentで絞り込み"""
+    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "intent:design"])
 
-    result = list_tags(namespace="scope")
+    result = list_tags(namespace="intent")
     assert "error" not in result
     assert len(result["tags"]) >= 1
     for t in result["tags"]:
-        assert t["namespace"] == "scope"
+        assert t["namespace"] == "intent"
 
 
 def test_list_tags_namespace_filter_nonexistent(temp_db):
@@ -129,12 +129,12 @@ def test_list_tags_namespace_filter_nonexistent(temp_db):
 
 def test_list_tags_no_namespace_filter(temp_db):
     """namespace未指定: 全タグを返す"""
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "scope:search"])
+    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "intent:design"])
 
     result = list_tags()
     assert "error" not in result
     namespaces = {t["namespace"] for t in result["tags"]}
-    # domain と scope と (domain:defaultの) domain が含まれる
+    # domain と intent と (domain:defaultの) domain が含まれる
     assert "domain" in namespaces
 
 

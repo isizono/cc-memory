@@ -24,6 +24,6 @@ check-in: {activity.title}
 topic: {topic.title}（topic がある場合のみ）
 
 ## 現在地
-status: {activity.status} | mode: {タグから抽出した mode 値、なければ「(未設定)」} | notes: {tag_notes の件数}件 | 資材: {materials の件数}件 | decisions: {recent_decisions の件数}件
+status: {activity.status} | intent: {タグから抽出した intent 値、なければ「(未設定)」} | notes: {tag_notes の件数}件 | 資材: {materials の件数}件 | decisions: {recent_decisions の件数}件
 {recent_decisions の各タイトルを箇条書き（最大5件、件数が多い場合は「他N件」と補足）}
 ```

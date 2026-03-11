@@ -42,10 +42,10 @@ def _get_topic_info(conn, topic_id: int) -> dict | None:
     return {"id": row["id"], "title": row["title"]}
 
 
-def _extract_mode_tag(tags: list[str]) -> str:
-    """タグリストからmode:プレフィックスのタグを抽出する。なければ「(未設定)」。"""
+def _extract_intent_tag(tags: list[str]) -> str:
+    """タグリストからintent:プレフィックスのタグを抽出する。なければ「(未設定)」。"""
     for tag in tags:
-        if tag.startswith("mode:"):
+        if tag.startswith("intent:"):
             return tag.split(":", 1)[1]
     return "(未設定)"
 
@@ -69,15 +69,15 @@ def _build_summary(
 
     フォーマット:
         check-in: タイトル
-          notes: N件 (M行) | mode: xxx | 資材: N件
+          notes: N件 (M行) | intent: xxx | 資材: N件
     """
-    mode = _extract_mode_tag(tags)
+    intent = _extract_intent_tag(tags)
     notes_count = len(tag_notes)
     notes_lines = _count_notes_lines(tag_notes)
     materials_count = len(materials)
 
     line1 = f"check-in: {activity['title']}"
-    line2 = f"  notes: {notes_count}件 ({notes_lines}行) | mode: {mode} | 資材: {materials_count}件"
+    line2 = f"  notes: {notes_count}件 ({notes_lines}行) | intent: {intent} | 資材: {materials_count}件"
 
     return f"{line1}\n{line2}"
 

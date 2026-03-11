@@ -38,12 +38,12 @@ def activity_id(temp_db):
 
 
 @pytest.fixture
-def activity_with_mode(temp_db):
-    """mode:タグ付きアクティビティを作成するフィクスチャ"""
+def activity_with_intent(temp_db):
+    """intent:タグ付きアクティビティを作成するフィクスチャ"""
     result = add_activity(
         title="[設計] API設計",
         description="APIの設計を行う",
-        tags=["domain:test", "mode:design"],
+        tags=["domain:test", "intent:design"],
     )
     return result["activity_id"]
 
@@ -153,22 +153,22 @@ class TestCheckInSummary:
         assert lines[0].startswith("check-in: ")
         assert "[作業] タグnotesカラム追加" in lines[0]
         assert "notes:" in lines[1]
-        assert "mode:" in lines[1]
+        assert "intent:" in lines[1]
         assert "資材:" in lines[1]
 
-    def test_summary_mode_from_tag(self, activity_with_mode):
-        """mode:タグがある場合、summaryにmode値が表示される"""
-        result = check_in(activity_with_mode)
+    def test_summary_intent_from_tag(self, activity_with_intent):
+        """intent:タグがある場合、summaryにintent値が表示される"""
+        result = check_in(activity_with_intent)
 
         assert "error" not in result
-        assert "mode: design" in result["summary"]
+        assert "intent: design" in result["summary"]
 
-    def test_summary_mode_unset(self, activity_id):
-        """mode:タグがない場合、(未設定)と表示される"""
+    def test_summary_intent_unset(self, activity_id):
+        """intent:タグがない場合、(未設定)と表示される"""
         result = check_in(activity_id)
 
         assert "error" not in result
-        assert "mode: (未設定)" in result["summary"]
+        assert "intent: (未設定)" in result["summary"]
 
     def test_summary_materials_count(self, activity_id):
         """summaryに資材の件数が反映される"""

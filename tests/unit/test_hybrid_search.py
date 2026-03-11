@@ -252,7 +252,7 @@ def test_hybrid_search_with_tags(temp_db, mock_embedding_model):
     add_topic(
         title="タグ付きハイブリッド検索対象テスト",
         description="これはヒットすべき",
-        tags=["domain:test", "scope:hybrid"],
+        tags=["domain:test", "intent:design"],
     )
     add_topic(
         title="タグ付きハイブリッド検索対象外テスト",
@@ -262,7 +262,7 @@ def test_hybrid_search_with_tags(temp_db, mock_embedding_model):
 
     result = search_service.search(
         keyword="タグ付きハイブリッド検索",
-        tags=["scope:hybrid"],
+        tags=["intent:design"],
     )
 
     assert "error" not in result

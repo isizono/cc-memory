@@ -1,6 +1,6 @@
 ---
 name: design
-description: This skill determines implementation approach and technical decisions. Use when How/Interface/Edge cases need decisions, or when working on a cc-memory activity with [設計] prefix or mode:design tag.
+description: This skill determines implementation approach and technical decisions. Use when How/Interface/Edge cases need decisions, or when working on a cc-memory activity with [設計] prefix or intent:design tag.
 ---
 
 # 設計フェーズ Skill
@@ -47,7 +47,7 @@ description: This skill determines implementation approach and technical decisio
 
 開始前チェックをパスしたら：
 
-1. mode:design タグ付きアクティビティで起動された場合、そのアクティビティを対象とする
+1. intent:design タグ付きアクティビティで起動された場合、そのアクティビティを対象とする
 2. それ以外の場合、既存の `[設計]` アクティビティを探す（議論フェーズで作成済みの場合がある）
    - あれば → そのアクティビティを引き継ぐ（新規作成しない）
    - なければ → `[設計]` アクティビティを新規作成する
