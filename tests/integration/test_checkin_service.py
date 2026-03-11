@@ -143,18 +143,21 @@ class TestCheckInSummary:
     """summary文字列のフォーマット確認"""
 
     def test_summary_format_basic(self, activity_id):
-        """summaryが仕様のフォーマットに従っている"""
+        """summaryが概要・現在地の2セクション構成になっている"""
         result = check_in(activity_id)
 
         assert "error" not in result
         summary = result["summary"]
-        lines = summary.split("\n")
-        assert len(lines) == 2
-        assert lines[0].startswith("check-in: ")
-        assert "[作業] タグnotesカラム追加" in lines[0]
-        assert "notes:" in lines[1]
-        assert "mode:" in lines[1]
-        assert "資材:" in lines[1]
+        assert summary.startswith("check-in: ")
+        assert "[作業] タグnotesカラム追加" in summary
+        assert "## 概要" in summary
+        assert "タグnotesカラムを追加する作業" in summary
+        assert "## 現在地" in summary
+        assert "status: in_progress" in summary
+        assert "mode:" in summary
+        assert "notes:" in summary
+        assert "資材:" in summary
+        assert "decisions:" in summary
 
     def test_summary_mode_from_tag(self, activity_with_mode):
         """mode:タグがある場合、summaryにmode値が表示される"""
@@ -181,8 +184,21 @@ class TestCheckInSummary:
         assert "error" not in result
         assert "資材: 3件" in result["summary"]
 
+    def test_summary_no_description(self, temp_db):
+        """descriptionがない場合、(説明なし)と表示される"""
+        activity = add_activity(
+            title="No desc",
+            description="",
+            tags=DEFAULT_TAGS,
+        )
+
+        result = check_in(activity["activity_id"])
+
+        assert "error" not in result
+        assert "(説明なし)" in result["summary"]
+
     def test_summary_notes_count(self, temp_db):
-        """tag_notesがある場合、summaryにnotes件数と行数が反映される"""
+        """tag_notesがある場合、summaryにnotes件数が反映される"""
         # notesを持つタグを作成
         conn = get_connection()
         try:
@@ -203,7 +219,7 @@ class TestCheckInSummary:
         result = check_in(activity["activity_id"])
 
         assert "error" not in result
-        assert "notes: 1件 (3行)" in result["summary"]
+        assert "notes: 1件" in result["summary"]
 
 
 class TestCheckInTagNotes:
