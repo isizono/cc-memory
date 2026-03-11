@@ -453,10 +453,14 @@ def test_recency_boost_decay_formula(temp_db):
         tags=DEFAULT_TAGS,
     )
 
-    # created_atを182日前（半年）に設定
-    half_year_ago = (datetime.now(timezone.utc) - timedelta(days=182)).strftime("%Y-%m-%d %H:%M:%S")
+    # created_atを固定日時に設定し、nowも固定して厳密に検証
+    created_at = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2025, 7, 2, 0, 0, 0, tzinfo=timezone.utc)  # 182日後
     conn = get_connection()
-    conn.execute("UPDATE discussion_topics SET created_at = ? WHERE id = ?", (half_year_ago, t["topic_id"]))
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = ? WHERE id = ?",
+        (created_at.strftime("%Y-%m-%d %H:%M:%S"), t["topic_id"]),
+    )
     conn.commit()
     conn.close()
 
@@ -465,11 +469,11 @@ def test_recency_boost_decay_formula(temp_db):
         {"type": "topic", "id": t["topic_id"], "title": "減衰計算テスト", "score": base_score},
     ]
 
-    _apply_recency_boost(results)
+    _apply_recency_boost(results, now=now)
 
     # 182日 × 0.0014 = 0.2548, factor = 1/(1+0.2548) ≈ 0.797
     expected_factor = 1.0 / (1.0 + 182 * RECENCY_DECAY_RATE)
-    assert results[0]["score"] == pytest.approx(base_score * expected_factor, rel=1e-2)
+    assert results[0]["score"] == pytest.approx(base_score * expected_factor)
 
 
 def test_recency_boost_empty_list():

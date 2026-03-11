@@ -312,7 +312,7 @@ def _vector_search(
         return None
 
 
-def _apply_recency_boost(results: list[dict]) -> None:
+def _apply_recency_boost(results: list[dict], now: datetime | None = None) -> None:
     """RRFスコアにrecency boost（時間減衰）を適用する（in-place）。
 
     recency_factor = 1 / (1 + age_days * RECENCY_DECAY_RATE)
@@ -321,7 +321,8 @@ def _apply_recency_boost(results: list[dict]) -> None:
     if not results:
         return
 
-    now = datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
 
     # typeごとにcreated_atをバッチ取得
     by_type: dict[str, list[dict]] = {}
@@ -484,11 +485,14 @@ def search(
                 }
             }
 
-        # RRF統合
+        # RRF統合（recency boost前なのでfetch_limitで多めに保持）
         effective_vec = vec_results if vec_results is not None else []
-        results = _rrf_merge(fts_results, effective_vec, limit)
+        results = _rrf_merge(fts_results, effective_vec, fetch_limit)
 
         _apply_recency_boost(results)
+
+        # recency boost後にlimit件に切り詰め
+        results = results[:limit]
 
         _attach_snippets(results)
 
