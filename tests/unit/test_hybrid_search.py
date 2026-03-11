@@ -1,15 +1,19 @@
 """ハイブリッド検索（FTS5 + ベクトル + RRF統合）のテスト
 
-_rrf_merge単体テスト + タグ対応の統合テスト。
+_rrf_merge単体テスト + _apply_recency_boost単体テスト + タグ対応の統合テスト。
 """
 import hashlib
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 import pytest
 import numpy as np
 
 from src.db import init_database, get_connection
-from src.services.search_service import _rrf_merge, RRF_K, RRF_W_FTS, RRF_W_VEC
+from src.services.search_service import (
+    _rrf_merge, _apply_recency_boost,
+    RRF_K, RRF_W_FTS, RRF_W_VEC, RECENCY_DECAY_RATE,
+)
 from src.services import search_service
 from src.services.topic_service import add_topic
 from src.services.decision_service import add_decision
@@ -396,3 +400,173 @@ def test_hybrid_keyword_array_2char_vec_only(temp_db, mock_embedding_model):
     assert "error" not in result
     # ベクトル検索のみなので結果は返る（エラーにはならない）
     assert "results" in result
+
+
+# ========================================
+# _apply_recency_boost 単体テスト
+# ========================================
+
+
+def test_recency_boost_newer_scores_higher(temp_db):
+    """recency boost: 同じRRFスコアでも新しいアイテムのほうがスコアが高くなる"""
+    # 2つのトピックを作成
+    t1 = add_topic(
+        title="古いトピック",
+        description="recency boostテスト用",
+        tags=DEFAULT_TAGS,
+    )
+    t2 = add_topic(
+        title="新しいトピック",
+        description="recency boostテスト用",
+        tags=DEFAULT_TAGS,
+    )
+
+    # t1のcreated_atを365日前に書き換え
+    old_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    conn.execute("UPDATE discussion_topics SET created_at = ? WHERE id = ?", (old_date, t1["topic_id"]))
+    conn.commit()
+    conn.close()
+
+    base_score = 0.01
+    results = [
+        {"type": "topic", "id": t1["topic_id"], "title": "古いトピック", "score": base_score},
+        {"type": "topic", "id": t2["topic_id"], "title": "新しいトピック", "score": base_score},
+    ]
+
+    _apply_recency_boost(results)
+
+    score_old = next(r["score"] for r in results if r["id"] == t1["topic_id"])
+    score_new = next(r["score"] for r in results if r["id"] == t2["topic_id"])
+
+    # 新しいアイテムのほうがスコアが高い
+    assert score_new > score_old
+    # ソート順も新しいほうが先
+    assert results[0]["id"] == t2["topic_id"]
+
+
+def test_recency_boost_decay_formula(temp_db):
+    """recency boost: 減衰率が formula 通りに計算される"""
+    t = add_topic(
+        title="減衰計算テスト",
+        description="テスト用",
+        tags=DEFAULT_TAGS,
+    )
+
+    # created_atを182日前（半年）に設定
+    half_year_ago = (datetime.now(timezone.utc) - timedelta(days=182)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    conn.execute("UPDATE discussion_topics SET created_at = ? WHERE id = ?", (half_year_ago, t["topic_id"]))
+    conn.commit()
+    conn.close()
+
+    base_score = 1.0
+    results = [
+        {"type": "topic", "id": t["topic_id"], "title": "減衰計算テスト", "score": base_score},
+    ]
+
+    _apply_recency_boost(results)
+
+    # 182日 × 0.0014 = 0.2548, factor = 1/(1+0.2548) ≈ 0.797
+    expected_factor = 1.0 / (1.0 + 182 * RECENCY_DECAY_RATE)
+    assert results[0]["score"] == pytest.approx(base_score * expected_factor, rel=1e-2)
+
+
+def test_recency_boost_empty_list():
+    """recency boost: 空リストでエラーにならない"""
+    results = []
+    _apply_recency_boost(results)
+    assert results == []
+
+
+def test_recency_boost_reorders_by_score(temp_db):
+    """recency boost: スコア降順で再ソートされる"""
+    t1 = add_topic(title="トピックA", description="テスト", tags=DEFAULT_TAGS)
+    t2 = add_topic(title="トピックB", description="テスト", tags=DEFAULT_TAGS)
+
+    # t1を古く、t2を新しくする
+    old_date = (datetime.now(timezone.utc) - timedelta(days=730)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    conn.execute("UPDATE discussion_topics SET created_at = ? WHERE id = ?", (old_date, t1["topic_id"]))
+    conn.commit()
+    conn.close()
+
+    # t1のスコアをわずかに高くしても、古さで逆転するケース
+    results = [
+        {"type": "topic", "id": t1["topic_id"], "title": "トピックA", "score": 0.012},
+        {"type": "topic", "id": t2["topic_id"], "title": "トピックB", "score": 0.010},
+    ]
+
+    _apply_recency_boost(results)
+
+    # 730日前: factor = 1/(1+730*0.0014) = 1/2.022 ≈ 0.495
+    # t1: 0.012 * 0.495 ≈ 0.00594
+    # t2 (今日): 0.010 * ~1.0 = 0.010
+    # t2が上位に来るはず
+    assert results[0]["id"] == t2["topic_id"]
+
+
+def test_recency_boost_cross_type(temp_db):
+    """recency boost: 異なるtypeを横断して処理できる"""
+    t = add_topic(title="横断テストトピック", description="テスト", tags=DEFAULT_TAGS)
+    d = add_decision(
+        topic_id=t["topic_id"],
+        decision="横断テスト決定",
+        reason="テスト用",
+    )
+
+    base_score = 0.01
+    results = [
+        {"type": "topic", "id": t["topic_id"], "title": "横断テストトピック", "score": base_score},
+        {"type": "decision", "id": d["decision_id"], "title": "横断テスト決定", "score": base_score},
+    ]
+
+    # エラーなく完了すること
+    _apply_recency_boost(results)
+
+    # 両方ともスコアが付いている（作成直後なのでほぼ変わらない）
+    for r in results:
+        assert r["score"] > 0
+        assert r["score"] <= base_score
+
+
+# ========================================
+# recency boost 統合テスト
+# ========================================
+
+
+def test_search_recency_boost_applied(temp_db, mock_embedding_model):
+    """search結果にrecency boostが適用されている: 新しいほうが上位"""
+    # 2つのトピックを同じキーワードで作成
+    t_old = add_topic(
+        title="リーセンシー統合テスト用トピック古い",
+        description="リーセンシー統合テストの検証用データ",
+        tags=DEFAULT_TAGS,
+    )
+    t_new = add_topic(
+        title="リーセンシー統合テスト用トピック新しい",
+        description="リーセンシー統合テストの検証用データ",
+        tags=DEFAULT_TAGS,
+    )
+
+    # 古いほうのcreated_atを1年前に設定
+    old_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    conn.execute("UPDATE discussion_topics SET created_at = ? WHERE id = ?", (old_date, t_old["topic_id"]))
+    conn.commit()
+    conn.close()
+
+    result = search_service.search(keyword="リーセンシー統合テスト")
+
+    assert "error" not in result
+    assert len(result["results"]) >= 2
+
+    # 結果内でtopic同士の順序を確認
+    topic_results = [r for r in result["results"] if r["type"] == "topic"]
+    assert len(topic_results) >= 2
+
+    # 新しいトピックが古いトピックより先に来る
+    ids_in_order = [r["id"] for r in topic_results]
+    idx_new = ids_in_order.index(t_new["topic_id"])
+    idx_old = ids_in_order.index(t_old["topic_id"])
+    assert idx_new < idx_old, "新しいトピックが古いトピックより上位に来るべき"

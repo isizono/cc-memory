@@ -1,5 +1,6 @@
 """FTS5 + ベクトル ハイブリッド検索サービス"""
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlite_vec import serialize_float32
@@ -41,6 +42,10 @@ SNIPPET_MAX_LEN = 200
 RRF_K = 60
 RRF_W_FTS = 1.0
 RRF_W_VEC = 1.0
+
+# Recency boost パラメータ
+# 半年(182日)で約0.80倍、1年(365日)で約0.66倍
+RECENCY_DECAY_RATE = 0.0014
 
 
 def _escape_fts5_query(keyword: str) -> str:
@@ -307,6 +312,45 @@ def _vector_search(
         return None
 
 
+def _apply_recency_boost(results: list[dict]) -> None:
+    """RRFスコアにrecency boost（時間減衰）を適用する（in-place）。
+
+    recency_factor = 1 / (1 + age_days * RECENCY_DECAY_RATE)
+    をスコアに乗算し、スコア降順で再ソートする。
+    """
+    if not results:
+        return
+
+    now = datetime.now(timezone.utc)
+
+    # typeごとにcreated_atをバッチ取得
+    by_type: dict[str, list[dict]] = {}
+    for item in results:
+        by_type.setdefault(item["type"], []).append(item)
+
+    for type_name, items in by_type.items():
+        table = TYPE_TO_TABLE.get(type_name)
+        if not table:
+            continue
+        ids = [item["id"] for item in items]
+        placeholders = ",".join("?" * len(ids))
+        rows = execute_query(
+            f"SELECT id, created_at FROM {table} WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+        created_map = {r["id"]: r["created_at"] for r in rows}
+        for item in items:
+            created_str = created_map.get(item["id"])
+            if created_str:
+                created = datetime.fromisoformat(created_str).replace(tzinfo=timezone.utc)
+                age_days = max(0, (now - created).days)
+                recency_factor = 1.0 / (1.0 + age_days * RECENCY_DECAY_RATE)
+                item["score"] *= recency_factor
+
+    # スコア降順で再ソート
+    results.sort(key=lambda x: x["score"], reverse=True)
+
+
 def _rrf_merge(
     fts_results: list[dict],
     vec_results: list[dict],
@@ -443,6 +487,8 @@ def search(
         # RRF統合
         effective_vec = vec_results if vec_results is not None else []
         results = _rrf_merge(fts_results, effective_vec, limit)
+
+        _apply_recency_boost(results)
 
         _attach_snippets(results)
 
