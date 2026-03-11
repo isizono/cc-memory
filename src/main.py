@@ -11,6 +11,7 @@ from src.services import (
     knowledge_service,
     material_service,
 )
+from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import list_tags as _list_tags, update_tag as _update_tag, collect_tag_notes_for_injection
 from src.db import execute_query, get_connection, row_to_dict
 
@@ -666,6 +667,27 @@ def list_materials(
         資材カタログ一覧（activity_id, materials[{material_id, activity_id, title, created_at}], total_count）
     """
     return material_service.list_materials(activity_id)
+
+
+@mcp.tool()
+def check_in(
+    activity_id: int,
+) -> dict:
+    """
+    アクティビティにcheck-inする。関連情報を集約取得しsummaryを返す。
+
+    既存アクティビティに関連する作業を始めるときに呼ぶ。
+    tag_notes・資材カタログ・関連decisionsを一括取得し、
+    statusがin_progress以外なら自動的にin_progressに更新する。
+    summaryフィールドをそのまま出力すること。
+
+    Args:
+        activity_id: アクティビティID
+
+    Returns:
+        check-in結果（activity, topic（topic_idがある場合のみ）, tag_notes, materials, recent_decisions, summary）
+    """
+    return _check_in(activity_id)
 
 
 @mcp.tool()

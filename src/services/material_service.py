@@ -111,6 +111,24 @@ def add_material(activity_id: int, title: str, content: str) -> dict:
         conn.close()
 
 
+def get_materials_by_activity_with_conn(conn, activity_id: int) -> list[dict]:
+    """
+    アクティビティに紐づく資材一覧をカタログ形式で取得する（conn共有版）
+
+    Args:
+        conn: SQLiteコネクション
+        activity_id: アクティビティのID
+
+    Returns:
+        資材カタログのリスト [{"id": int, "title": str, "created_at": str}, ...]
+    """
+    rows = conn.execute(
+        "SELECT id, title, created_at FROM materials WHERE activity_id = ? ORDER BY created_at ASC",
+        (activity_id,),
+    ).fetchall()
+    return [{"id": row["id"], "title": row["title"], "created_at": row["created_at"]} for row in rows]
+
+
 def get_material(material_id: int) -> dict:
     """
     資材を全文取得する
