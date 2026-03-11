@@ -142,6 +142,17 @@ def has_recent_recording(entries: list[dict]) -> bool:
     return _has_tool_calls(entries, _RECORDING_TOOLS)
 
 
+_ACTIVITY_CHECKIN_TOOLS = [
+    "mcp__plugin_claude-code-memory_cc-memory__check_in",
+    "mcp__plugin_claude-code-memory_cc-memory__add_activity",
+]
+
+
+def has_activity_checkin_calls(entries: list[dict]) -> bool:
+    """entriesにcheck_in/add_activityのツール呼び出しがあるかチェック。"""
+    return _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS)
+
+
 _CONTEXT_RETRIEVAL_TOOLS = [
     "mcp__plugin_claude-code-memory_cc-memory__search",
     "mcp__plugin_claude-code-memory_cc-memory__get_topics",
