@@ -1,12 +1,8 @@
 """タグ管理ユーティリティ"""
-import logging
 import sqlite3
 from typing import Optional, Union
 
 from src.db import execute_query, get_connection, row_to_dict
-
-
-logger = logging.getLogger(__name__)
 
 VALID_NAMESPACES = {'', 'domain', 'intent'}
 
@@ -92,6 +88,7 @@ def resolve_tag_ids(conn: sqlite3.Connection, parsed_tags: list[tuple[str, str]]
     """既存タグのIDのみを返す（INSERT しない）。
 
     存在しないタグは結果に含まれない。
+    エイリアスタグの場合はcanonical側のIDを返す。
     呼び出し元で len(result) < len(parsed_tags) をチェックすることで
     部分マッチを検出できる。
     """
@@ -102,10 +99,13 @@ def resolve_tag_ids(conn: sqlite3.Connection, parsed_tags: list[tuple[str, str]]
     )
     flat_params = [v for pair in parsed_tags for v in pair]
     rows = conn.execute(
-        f"SELECT id, namespace, name FROM tags WHERE {placeholders}",
+        f"SELECT id, namespace, name, canonical_id FROM tags WHERE {placeholders}",
         flat_params,
     ).fetchall()
-    id_map = {(row["namespace"], row["name"]): row["id"] for row in rows}
+    id_map = {}
+    for row in rows:
+        effective_id = row["canonical_id"] if row["canonical_id"] is not None else row["id"]
+        id_map[(row["namespace"], row["name"])] = effective_id
     return [id_map[(ns, name)] for ns, name in parsed_tags if (ns, name) in id_map]
 
 
@@ -113,6 +113,7 @@ def ensure_tag_ids(conn: sqlite3.Connection, parsed_tags: list[tuple[str, str]])
     """タグをINSERT OR IGNOREし、idのリストを返す。
 
     connを受け取り、呼び出し元のトランザクション内で動作する。
+    エイリアスタグの場合はcanonical側のIDを返す。
     """
     if not parsed_tags:
         return []
@@ -125,10 +126,13 @@ def ensure_tag_ids(conn: sqlite3.Connection, parsed_tags: list[tuple[str, str]])
     )
     flat_params = [v for pair in parsed_tags for v in pair]
     rows = conn.execute(
-        f"SELECT id, namespace, name FROM tags WHERE {placeholders}",
+        f"SELECT id, namespace, name, canonical_id FROM tags WHERE {placeholders}",
         flat_params,
     ).fetchall()
-    id_map = {(row["namespace"], row["name"]): row["id"] for row in rows}
+    id_map = {}
+    for row in rows:
+        effective_id = row["canonical_id"] if row["canonical_id"] is not None else row["id"]
+        id_map[(row["namespace"], row["name"])] = effective_id
     return [id_map[(ns, name)] for ns, name in parsed_tags]
 
 
@@ -213,6 +217,7 @@ def resolve_tags(
 
             if row:
                 tag_id = row["id"]
+                # TODO: canonical解決が必要（canonical_idが非NULLならcanonical_idを使う）
                 if tag_id not in seen_ids:
                     resolved_ids.append(tag_id)
                     seen_ids.add(tag_id)
@@ -474,12 +479,14 @@ def list_tags(namespace: Optional[str] = None) -> dict:
     try:
         rows = execute_query(
             """
-            SELECT t.id, t.namespace, t.name, t.notes,
+            SELECT t.id, t.namespace, t.name, t.notes, t.canonical_id,
+              ct.namespace AS canonical_namespace, ct.name AS canonical_name,
               (SELECT COUNT(*) FROM topic_tags WHERE tag_id = t.id) +
               (SELECT COUNT(*) FROM activity_tags WHERE tag_id = t.id) +
               (SELECT COUNT(*) FROM decision_tags WHERE tag_id = t.id) +
               (SELECT COUNT(*) FROM log_tags WHERE tag_id = t.id) AS usage_count
             FROM tags t
+            LEFT JOIN tags AS ct ON t.canonical_id = ct.id
             WHERE (? IS NULL OR t.namespace = ?)
             ORDER BY usage_count DESC, t.name ASC
             """,
@@ -491,6 +498,14 @@ def list_tags(namespace: Optional[str] = None) -> dict:
             ns = r["namespace"]
             name = r["name"]
             tag_str = f"{ns}:{name}" if ns else name
+
+            # canonical文字列の構築
+            canonical = None
+            if r["canonical_id"] is not None:
+                c_ns = r["canonical_namespace"]
+                c_name = r["canonical_name"]
+                canonical = f"{c_ns}:{c_name}" if c_ns else c_name
+
             tags.append({
                 "tag": tag_str,
                 "id": r["id"],
@@ -498,6 +513,7 @@ def list_tags(namespace: Optional[str] = None) -> dict:
                 "name": name,
                 "usage_count": r["usage_count"],
                 "notes": r["notes"],
+                "canonical": canonical,
             })
         return {"tags": tags}
 
@@ -510,17 +526,47 @@ def list_tags(namespace: Optional[str] = None) -> dict:
         }
 
 
-def update_tag(tag: str, notes: str) -> dict:
-    """既存タグの notes（教訓・運用ルール）を更新する。
+JUNCTION_TABLES = [
+    ("topic_tags", "topic_id"),
+    ("activity_tags", "activity_id"),
+    ("decision_tags", "decision_id"),
+    ("log_tags", "log_id"),
+]
+
+
+def update_tag(tag: str, notes: str | None = None, canonical: str | None = None) -> dict:
+    """既存タグの notes（教訓・運用ルール）またはcanonical（エイリアス先）を更新する。
 
     Args:
         tag: タグ文字列（例: "domain:cc-memory", "hooks"）
         notes: 教訓・運用ルールのテキスト（全文置換）
+        canonical: エイリアス先タグ文字列。設定するとtagがcanonicalのエイリアスになる。
+                   ""（空文字）でエイリアス解除。上書き可能だが、旧canonical先に
+                   付け替え済みの紐付けは戻らない。
 
     Returns:
-        成功時: {"tag": str, "notes": str, "updated": True}
+        成功時: {"tag": str, "notes": str, "updated": True} (notes更新時)
+                {"tag": str, "canonical": str | None, "updated": True} (canonical更新時)
         失敗時: {"error": {"code": ..., "message": ...}}
     """
+    # バリデーション: 同時指定禁止
+    if notes is not None and canonical is not None:
+        return {
+            "error": {
+                "code": "CONFLICTING_PARAMS",
+                "message": "Cannot specify both 'notes' and 'canonical'. Use separate calls.",
+            }
+        }
+
+    # 少なくとも1つは指定必須
+    if notes is None and canonical is None:
+        return {
+            "error": {
+                "code": "MISSING_PARAMS",
+                "message": "At least one of 'notes' or 'canonical' must be specified.",
+            }
+        }
+
     parsed = validate_and_parse_tags([tag])
     if isinstance(parsed, dict):
         return parsed
@@ -529,7 +575,7 @@ def update_tag(tag: str, notes: str) -> dict:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+            "SELECT id, notes, canonical_id FROM tags WHERE namespace = ? AND name = ?",
             (namespace, name),
         ).fetchone()
 
@@ -542,14 +588,120 @@ def update_tag(tag: str, notes: str) -> dict:
                 }
             }
 
+        tag_id = row["id"]
+        tag_str = f"{namespace}:{name}" if namespace else name
+
+        # --- notes 更新 ---
+        if notes is not None:
+            conn.execute(
+                "UPDATE tags SET notes = ? WHERE id = ?",
+                (notes, tag_id),
+            )
+            conn.commit()
+            return {"tag": tag_str, "notes": notes, "updated": True}
+
+        # --- canonical 更新 ---
+        # canonical="" → エイリアス解除
+        if canonical == "":
+            conn.execute(
+                "UPDATE tags SET canonical_id = NULL WHERE id = ?",
+                (tag_id,),
+            )
+            conn.commit()
+            return {"tag": tag_str, "canonical": None, "updated": True}
+
+        # エイリアスタグにnotes有りの場合 → エラー
+        if row["notes"] is not None:
+            return {
+                "error": {
+                    "code": "HAS_NOTES",
+                    "message": f"Tag '{tag_str}' has notes. Remove notes before setting as alias.",
+                }
+            }
+
+        # canonical先タグを解決
+        parsed_canonical = validate_and_parse_tags([canonical])
+        if isinstance(parsed_canonical, dict):
+            return parsed_canonical
+        c_namespace, c_name = parsed_canonical[0]
+
+        c_row = conn.execute(
+            "SELECT id, canonical_id FROM tags WHERE namespace = ? AND name = ?",
+            (c_namespace, c_name),
+        ).fetchone()
+
+        if not c_row:
+            c_display = f"{c_namespace}:{c_name}" if c_namespace else c_name
+            return {
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": f"Canonical tag '{c_display}' not found",
+                }
+            }
+
+        canonical_id = c_row["id"]
+
+        # 自分自身へのエイリアスは無意味なので禁止
+        if canonical_id == tag_id:
+            return {
+                "error": {
+                    "code": "CHAIN_NOT_ALLOWED",
+                    "message": "Cannot set a tag as alias of itself.",
+                }
+            }
+
+        # canonical先が既にエイリアス → 連鎖禁止
+        if c_row["canonical_id"] is not None:
+            return {
+                "error": {
+                    "code": "CHAIN_NOT_ALLOWED",
+                    "message": "Canonical target is already an alias. Chains are not allowed.",
+                }
+            }
+
+        # 自分が他タグのcanonical先になっている場合 → 連鎖禁止
+        dependent = conn.execute(
+            "SELECT id FROM tags WHERE canonical_id = ? LIMIT 1",
+            (tag_id,),
+        ).fetchone()
+        if dependent:
+            return {
+                "error": {
+                    "code": "CHAIN_NOT_ALLOWED",
+                    "message": f"Tag '{tag_str}' is the canonical target of other aliases. "
+                               "Remove those aliases first.",
+                }
+            }
+
+        # canonical_id を設定
         conn.execute(
-            "UPDATE tags SET notes = ? WHERE id = ?",
-            (notes, row["id"]),
+            "UPDATE tags SET canonical_id = ? WHERE id = ?",
+            (canonical_id, tag_id),
         )
+
+        # 紐付け付け替え: 中間テーブル4つ
+        for table, entity_col in JUNCTION_TABLES:
+            # 1. 重複する行を削除（canonical側IDが既に存在する場合）
+            conn.execute(
+                f"""
+                DELETE FROM {table} WHERE {entity_col} IN (
+                    SELECT a.{entity_col} FROM {table} a
+                    INNER JOIN {table} b ON a.{entity_col} = b.{entity_col}
+                    WHERE a.tag_id = ? AND b.tag_id = ?
+                ) AND tag_id = ?
+                """,
+                (tag_id, canonical_id, tag_id),
+            )
+            # 2. 残りを付け替え
+            conn.execute(
+                f"UPDATE {table} SET tag_id = ? WHERE tag_id = ?",
+                (canonical_id, tag_id),
+            )
+
         conn.commit()
 
-        tag_str = f"{namespace}:{name}" if namespace else name
-        return {"tag": tag_str, "notes": notes, "updated": True}
+        c_tag_str = f"{c_namespace}:{c_name}" if c_namespace else c_name
+        return {"tag": tag_str, "canonical": c_tag_str, "updated": True}
 
     except Exception as e:
         conn.rollback()

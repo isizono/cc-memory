@@ -95,16 +95,18 @@ def _resolve_tag_ids_readonly(conn, tag_strings: list[str]) -> list[int]:
 
     存在しないタグが含まれる場合、そのタグは無視される。
     全タグが存在しない場合は空リストを返す。
+    エイリアスタグの場合はcanonical側のIDを返す。
     """
     tag_ids = []
     for tag_str in tag_strings:
         ns, name = parse_tag(tag_str)
         row = conn.execute(
-            "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+            "SELECT id, canonical_id FROM tags WHERE namespace = ? AND name = ?",
             (ns, name)
         ).fetchone()
         if row:
-            tag_ids.append(row[0])
+            effective_id = row["canonical_id"] if row["canonical_id"] is not None else row["id"]
+            tag_ids.append(effective_id)
     return tag_ids
 
 

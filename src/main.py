@@ -517,32 +517,47 @@ def list_tags(
 
     タグの利用状況を確認するときに使う。
     namespaceでフィルタリング可能。
+    エイリアスタグにはcanonicalフィールド（エイリアス先のタグ文字列）が含まれる。
 
     Args:
         namespace: namespaceでフィルタ（"domain", "intent", ""。未指定で全タグ）
 
     Returns:
-        タグ一覧（tag, id, namespace, name, usage_count, notes）をusage_count降順で返す
+        タグ一覧（tag, id, namespace, name, usage_count, notes, canonical）をusage_count降順で返す
     """
     return _list_tags(namespace)
 
 
 @mcp.tool()
-def update_tag(tag: str, notes: str) -> dict:
+def update_tag(
+    tag: str,
+    notes: Optional[str] = None,
+    canonical: Optional[str] = None,
+) -> dict:
     """
-    既存タグの notes（教訓・運用ルール）を更新する。上書き方式（全文置換）。
+    既存タグの notes（教訓・運用ルール）またはcanonical（エイリアス先）を更新する。
 
-    タグに紐づく教訓や運用ルールを記録する。CLAUDE.mdのタグ版として機能し、
-    そのタグの文脈で作業するときに自動的にAIに注入される。
+    notesとcanonicalは排他（同時指定不可）。少なくとも1つを指定する。
+
+    notes: タグに紐づく教訓や運用ルールを記録する。CLAUDE.mdのタグ版として機能し、
+    そのタグの文脈で作業するときに自動的にAIに注入される。上書き方式（全文置換）。
+
+    canonical: エイリアス先タグを指定する。設定すると、tagがcanonicalのエイリアスになり、
+    以降tagで記録・検索するとcanonical側のタグIDで解決される。
+    設定時に既存の紐付け（topic_tags等4テーブル）をcanonical側に付け替える。
+    この付け替えは設定時の1回のみで、canonical上書き時に旧付け替え分は戻らない。
+    canonical=""で解除。連鎖（エイリアスのエイリアス）は禁止。
+    notes付きタグはエイリアスにできない（先にnotesを除去すること）。
 
     Args:
         tag: 対象タグ（例: "domain:cc-memory", "hooks"）
         notes: 教訓・運用ルールのテキスト（全文置換）
+        canonical: エイリアス先タグ（""で解除）
 
     Returns:
         更新結果
     """
-    return _update_tag(tag, notes)
+    return _update_tag(tag, notes=notes, canonical=canonical)
 
 
 @mcp.tool()
