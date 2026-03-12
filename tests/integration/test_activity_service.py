@@ -3,6 +3,8 @@ import os
 import tempfile
 import pytest
 from src.db import init_database, execute_query, get_connection
+from src.services.activity_service import add_activity, get_activities, update_activity
+from src.services.tag_service import _injected_tags
 from src.services.activity_service import add_activity, get_activities, update_activity, ACTIVITY_DESC_MAX_LEN
 
 
@@ -16,6 +18,8 @@ def temp_db():
         db_path = os.path.join(tmpdir, "test.db")
         os.environ["DISCUSSION_DB_PATH"] = db_path
         init_database()
+        # tag_notes注入済みセットをリセット（テスト間の干渉防止）
+        _injected_tags.clear()
         yield db_path
         if "DISCUSSION_DB_PATH" in os.environ:
             del os.environ["DISCUSSION_DB_PATH"]
@@ -28,6 +32,7 @@ def activity_with_db(temp_db):
         title="Test Activity",
         description="This is a test activity",
         tags=DEFAULT_TAGS,
+        check_in=False,
     )
     return {"activity": activity}
 
@@ -36,11 +41,12 @@ class TestAddActivity:
     """add_activityの統合テスト"""
 
     def test_add_activity_success(self, temp_db):
-        """アクティビティの追加が成功する"""
+        """アクティビティの追加が成功する（check_in=False）"""
         result = add_activity(
             title="New Activity",
             description="Activity description",
             tags=DEFAULT_TAGS,
+            check_in=False,
         )
 
         assert "error" not in result
@@ -50,6 +56,7 @@ class TestAddActivity:
         assert result["status"] == "pending"
         assert "tags" in result
         assert "domain:test" in result["tags"]
+        assert "check_in_result" not in result
 
     def test_add_activity_tags_required(self, temp_db):
         """tags=[]でTAGS_REQUIREDエラーになる"""
@@ -68,10 +75,128 @@ class TestAddActivity:
             title="Tagged Activity",
             description="Tagged description",
             tags=["domain:cc-memory", "hooks"],
+            check_in=False,
         )
 
         assert "error" not in result
         assert sorted(result["tags"]) == ["domain:cc-memory", "hooks"]
+
+    def test_add_activity_with_check_in_default(self, temp_db):
+        """デフォルト（check_in=True）でcheck_in_resultが含まれる"""
+        result = add_activity(
+            title="Activity with check-in",
+            description="Description",
+            tags=DEFAULT_TAGS,
+        )
+
+        assert "error" not in result
+        assert "check_in_result" in result
+        check_in_result = result["check_in_result"]
+        assert "error" not in check_in_result
+        assert "activity" in check_in_result
+        assert check_in_result["activity"]["status"] == "in_progress"
+        assert "tag_notes" in check_in_result
+        assert "summary" in check_in_result
+
+    def test_add_activity_with_check_in_false(self, temp_db):
+        """check_in=Falseで従来動作（ステータスpending、check_in_resultなし）"""
+        result = add_activity(
+            title="Activity no check-in",
+            description="Description",
+            tags=DEFAULT_TAGS,
+            check_in=False,
+        )
+
+        assert "error" not in result
+        assert result["status"] == "pending"
+        assert "check_in_result" not in result
+
+    def test_add_activity_with_topic_id(self, temp_db):
+        """topic_id指定でアクティビティが作成される"""
+        # トピックを作成
+        conn = get_connection()
+        try:
+            cursor = conn.execute(
+                "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+                ("Test Topic", "Topic description"),
+            )
+            topic_id = cursor.lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = add_activity(
+            title="Activity with topic",
+            description="Description",
+            tags=DEFAULT_TAGS,
+            topic_id=topic_id,
+            check_in=False,
+        )
+
+        assert "error" not in result
+        assert result["activity_id"] > 0
+
+        # DBでtopic_idが保存されていることを確認
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT topic_id FROM activities WHERE id = ?",
+                (result["activity_id"],),
+            ).fetchone()
+            assert row["topic_id"] == topic_id
+        finally:
+            conn.close()
+
+    def test_add_activity_without_topic_id(self, temp_db):
+        """topic_id未指定でtopic_idがNULLのアクティビティが作成される"""
+        result = add_activity(
+            title="Activity no topic",
+            description="Description",
+            tags=DEFAULT_TAGS,
+            check_in=False,
+        )
+
+        assert "error" not in result
+
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT topic_id FROM activities WHERE id = ?",
+                (result["activity_id"],),
+            ).fetchone()
+            assert row["topic_id"] is None
+        finally:
+            conn.close()
+
+    def test_add_activity_with_topic_id_and_check_in(self, temp_db):
+        """topic_id + check_in=Trueでrecent_decisionsが取得される"""
+        # トピックを作成
+        conn = get_connection()
+        try:
+            cursor = conn.execute(
+                "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+                ("Test Topic", "Topic description"),
+            )
+            topic_id = cursor.lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = add_activity(
+            title="Activity with topic and check-in",
+            description="Description",
+            tags=DEFAULT_TAGS,
+            topic_id=topic_id,
+        )
+
+        assert "error" not in result
+        assert "check_in_result" in result
+        check_in_result = result["check_in_result"]
+        assert "error" not in check_in_result
+        # topic_idがあるのでtopicフィールドが含まれる
+        assert "topic" in check_in_result
+        assert check_in_result["topic"]["id"] == topic_id
+        assert "recent_decisions" in check_in_result
 
 
 class TestGetActivities:
@@ -100,8 +225,8 @@ class TestGetActivities:
 
     def test_get_activities_no_tags_returns_all(self, temp_db):
         """tags未指定で全アクティビティを返す"""
-        add_activity(title="Activity A", description="Desc A", tags=["domain:test"])
-        add_activity(title="Activity B", description="Desc B", tags=["domain:other"])
+        add_activity(title="Activity A", description="Desc A", tags=["domain:test"], check_in=False)
+        add_activity(title="Activity B", description="Desc B", tags=["domain:other"], check_in=False)
 
         result = get_activities()
 
@@ -112,8 +237,8 @@ class TestGetActivities:
 
     def test_get_activities_no_tags_with_status_filter(self, temp_db):
         """tags未指定 + status指定で全ドメインからフィルタ"""
-        activity_a = add_activity(title="Activity A", description="Desc", tags=["domain:test"])
-        add_activity(title="Activity B", description="Desc", tags=["domain:other"])
+        activity_a = add_activity(title="Activity A", description="Desc", tags=["domain:test"], check_in=False)
+        add_activity(title="Activity B", description="Desc", tags=["domain:other"], check_in=False)
         update_activity(activity_a["activity_id"], new_status="completed")
 
         result = get_activities(status="completed")
@@ -124,8 +249,8 @@ class TestGetActivities:
 
     def test_get_activities_completed_sorted_by_updated_at_desc(self, temp_db):
         """completedのソート順がupdated_at DESCになっている"""
-        a1 = add_activity(title="Old completed", description="Desc", tags=DEFAULT_TAGS)
-        a2 = add_activity(title="New completed", description="Desc", tags=DEFAULT_TAGS)
+        a1 = add_activity(title="Old completed", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        a2 = add_activity(title="New completed", description="Desc", tags=DEFAULT_TAGS, check_in=False)
         update_activity(a1["activity_id"], new_status="completed")
         update_activity(a2["activity_id"], new_status="completed")
 
@@ -147,8 +272,8 @@ class TestGetActivities:
 
     def test_get_activities_pending_sorted_by_updated_at_desc(self, temp_db):
         """pendingのソート順がupdated_at DESCになっている"""
-        a1 = add_activity(title="Old pending", description="Desc", tags=DEFAULT_TAGS)
-        a2 = add_activity(title="New pending", description="Desc", tags=DEFAULT_TAGS)
+        a1 = add_activity(title="Old pending", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        a2 = add_activity(title="New pending", description="Desc", tags=DEFAULT_TAGS, check_in=False)
 
         # a1のupdated_atを古い値に書き換えてソート順を明確にする
         conn = get_connection()

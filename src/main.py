@@ -578,24 +578,35 @@ def add_activity(
     title: str,
     description: str,
     tags: list[str],
+    topic_id: int | None = None,
+    check_in: bool = True,
 ) -> dict:
     """
-    新しいアクティビティを追加する。
+    新しいアクティビティを追加する。デフォルトで作成後にcheck_inも実行する。
 
     典型的な使い方:
     - 作業アクティビティを作成: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement", "search", "ranking"])
+    - トピック紐付け: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement"], topic_id=123)
+    - check_inなしで作成: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement"], check_in=False)
 
     Args:
         title: アクティビティのタイトル
         description: アクティビティの詳細説明（必須）
         tags: タグ配列（必須、1個以上）。domain:タグとintent:タグは必須。素タグも積極的に付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["domain:cc-memory", "intent:implement", "search", "ranking"]
+        topic_id: 関連トピックID（optional）。指定するとcheck_in時にrecent_decisionsが取得される
+        check_in: 作成後にcheck_inを実行するか（デフォルト: True）。Trueの場合、返り値にcheck_in_resultが含まれる
 
     Returns:
-        作成されたアクティビティ情報
+        作成されたアクティビティ情報（check_in=Trueの場合はcheck_in_resultにtag_notes等を含む）
     """
-    result = activity_service.add_activity(title, description, tags)
+    result = activity_service.add_activity(
+        title, description, tags, topic_id=topic_id, check_in=check_in,
+    )
     if "error" not in result:
-        _maybe_inject_tag_notes(result, tags)
+        # check_in=Trueの場合、check_in_resultにtag_notesが含まれるため
+        # _maybe_inject_tag_notesは不要（二重注入防止）
+        if not check_in:
+            _maybe_inject_tag_notes(result, tags)
     return result
 
 

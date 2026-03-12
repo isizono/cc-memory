@@ -232,7 +232,7 @@ def test_get_recent_topics_by_tag_empty(temp_db):
 
 def test_get_active_activities_by_tag_basic(temp_db):
     """domain:タグに紐づくホットアクティビティが返る"""
-    add_activity(title="Activity 1", description="Desc", tags=["domain:test-proj"])
+    add_activity(title="Activity 1", description="Desc", tags=["domain:test-proj"], check_in=False)
 
     tag_id = _get_tag_id("domain", "test-proj")
     activities = _get_active_activities_by_tag(tag_id)
@@ -244,7 +244,7 @@ def test_get_active_activities_by_tag_basic(temp_db):
 
 def test_get_active_activities_by_tag_excludes_completed(temp_db):
     """completedアクティビティは含まれない"""
-    result = add_activity(title="Done Activity", description="Desc", tags=["domain:test-proj"])
+    result = add_activity(title="Done Activity", description="Desc", tags=["domain:test-proj"], check_in=False)
     update_activity(result["activity_id"], new_status="completed")
 
     tag_id = _get_tag_id("domain", "test-proj")
@@ -255,8 +255,8 @@ def test_get_active_activities_by_tag_excludes_completed(temp_db):
 
 def test_get_active_activities_by_tag_sort_order(temp_db):
     """in_progressが先、その後pending"""
-    r1 = add_activity(title="Pending Activity", description="Desc", tags=["domain:test-proj"])
-    r2 = add_activity(title="In Progress Activity", description="Desc", tags=["domain:test-proj"])
+    r1 = add_activity(title="Pending Activity", description="Desc", tags=["domain:test-proj"], check_in=False)
+    r2 = add_activity(title="In Progress Activity", description="Desc", tags=["domain:test-proj"], check_in=False)
     update_activity(r2["activity_id"], new_status="in_progress")
 
     tag_id = _get_tag_id("domain", "test-proj")
@@ -369,7 +369,7 @@ def test_build_active_context_with_domain_topics(temp_db):
 def test_build_active_context_with_activities(temp_db):
     """アクティビティがある場合、ホットアクティビティセクションが生成される"""
     add_topic(title="Topic", description="Desc", tags=["domain:myapp"])
-    add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"])
+    add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
 
     result = _build_active_context()
 
@@ -426,7 +426,7 @@ def test_build_active_context_topic_id_in_bracket(temp_db):
 def test_build_active_context_activity_id_in_bracket(temp_db):
     """アクティビティIDが[id]形式で表示される"""
     add_topic(title="Topic", description="Desc", tags=["domain:myapp"])
-    activity = add_activity(title="Activity 1", description="Desc", tags=["domain:myapp"])
+    activity = add_activity(title="Activity 1", description="Desc", tags=["domain:myapp"], check_in=False)
     activity_id = activity["activity_id"]
 
     result = _build_active_context()
@@ -450,7 +450,7 @@ def test_build_active_context_no_crash_on_error(temp_db):
 def test_build_active_context_completed_activities_excluded(temp_db):
     """completedアクティビティはホットアクティビティに含まれない"""
     add_topic(title="Topic", description="Desc", tags=["domain:myapp"])
-    result = add_activity(title="Done Activity", description="Desc", tags=["domain:myapp"])
+    result = add_activity(title="Done Activity", description="Desc", tags=["domain:myapp"], check_in=False)
     update_activity(result["activity_id"], new_status="completed")
 
     ctx = _build_active_context()

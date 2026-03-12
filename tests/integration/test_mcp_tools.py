@@ -54,6 +54,7 @@ def test_add_activity_with_tags(temp_db):
         title="test-activity",
         description="テストアクティビティ",
         tags=["domain:test"],
+        check_in=False,
     )
 
     assert "error" not in result

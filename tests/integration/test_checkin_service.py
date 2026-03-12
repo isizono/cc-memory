@@ -33,6 +33,7 @@ def activity_id(temp_db):
         title="[作業] タグnotesカラム追加",
         description="タグnotesカラムを追加する作業",
         tags=DEFAULT_TAGS,
+        check_in=False,
     )
     return result["activity_id"]
 
@@ -44,6 +45,7 @@ def activity_with_intent(temp_db):
         title="[設計] API設計",
         description="APIの設計を行う",
         tags=["domain:test", "intent:design"],
+        check_in=False,
     )
     return result["activity_id"]
 
@@ -106,7 +108,7 @@ class TestCheckIn:
         result = check_in(activity_id)
 
         assert "error" not in result
-        # activitiesテーブルにtopic_idカラムがないため、topicは省略される
+        # topic_idが未指定（NULL）のため、topicは省略される
         assert "topic" not in result
 
     def test_check_in_materials_empty(self, activity_id):
@@ -199,6 +201,7 @@ class TestCheckInSummary:
             title="Test with notes",
             description="Desc",
             tags=["domain:noted"],
+            check_in=False,
         )
 
         result = check_in(activity["activity_id"])
@@ -226,6 +229,7 @@ class TestCheckInTagNotes:
             title="Tag notes test",
             description="Desc",
             tags=["domain:withnotes"],
+            check_in=False,
         )
 
         result = check_in(activity["activity_id"])
@@ -258,6 +262,7 @@ class TestCheckInTagNotes:
             title="Design task",
             description="Desc",
             tags=["intent:design"],
+            check_in=False,
         )
         aid = activity["activity_id"]
 
@@ -289,6 +294,7 @@ class TestCheckInTagNotes:
             title="Domain task",
             description="Desc",
             tags=["domain:once"],
+            check_in=False,
         )
         aid = activity["activity_id"]
 

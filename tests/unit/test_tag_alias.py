@@ -237,7 +237,7 @@ class TestUpdateTagRelinking:
     def test_relink_junction_tables(self, temp_db):
         """中間テーブル4つの紐付けがcanonical側に移ること"""
         topic = add_topic(title="T", description="D", tags=["prm"])
-        activity = add_activity(title="A", description="D", tags=["prm"])
+        activity = add_activity(title="A", description="D", tags=["prm"], check_in=False)
         decision = add_decision(
             topic_id=topic["topic_id"], decision="Dec", reason="R", tags=["prm"]
         )
