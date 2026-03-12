@@ -461,6 +461,7 @@ def search(
     tags: Optional[list[str]] = None,
     type_filter: Optional[str] = None,
     limit: int = 10,
+    keyword_mode: str = "and",
 ) -> dict:
     """
     キーワードで横断検索する。
@@ -468,6 +469,7 @@ def search(
     FTS5 trigramとベクトル検索のハイブリッド。RRFスコアで統合・ランキング。
     2文字以上のキーワードを指定する。
     配列で複数キーワードを渡すとAND検索（すべてを含む結果のみ返す）。
+    keyword_mode="or"でOR検索（いずれかを含む結果を返す）。
     tagsでフィルタリング可能（AND結合）。未指定で全件検索。
 
     Args:
@@ -475,12 +477,13 @@ def search(
         tags: タグフィルタ（AND条件。未指定=全件検索）
         type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
+        keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
 
     Returns:
         検索結果一覧（type, id, title, score, snippet）
         snippetは各typeの対応するソースカラムの先頭200文字。
     """
-    result = search_service.search(keyword, tags, type_filter, limit)
+    result = search_service.search(keyword, tags, type_filter, limit, keyword_mode)
     if "error" not in result and tags:
         _maybe_inject_tag_notes(result, tags)
     return result
