@@ -258,7 +258,7 @@ def _vector_search(
             for kw in keywords:
                 query_embedding = embedding_service.encode_query(kw)
                 if query_embedding is None:
-                    return None
+                    continue
 
                 blob = serialize_float32(query_embedding)
                 vec_rows = execute_query(
@@ -313,9 +313,11 @@ def _vector_search(
                             "distance": distance,
                         }
 
+            if not merged:
+                return None
             results = list(merged.values())
             results.sort(key=lambda x: x["distance"])
-            return results[:limit]
+            return results
         else:
             # AND時: 従来通り（スペース結合して1 embedding）
             combined_keyword = " ".join(keywords)

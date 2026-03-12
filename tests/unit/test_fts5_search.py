@@ -587,10 +587,14 @@ def test_search_keyword_or_default_is_and(temp_db):
     """keyword_modeのデフォルトはand"""
     add_topic(title="デフォルトモード検索テスト", description="検索テスト説明", tags=DEFAULT_TAGS)
     add_topic(title="デフォルトモード設計ドキュメント", description="設計の詳細", tags=DEFAULT_TAGS)
-    # AND検索: 両方含む結果のみ
-    result = search_service.search(keyword=["デフォルトモード検索テスト", "デフォルトモード設計ドキュメント"])
-    assert "error" not in result
-    # この2つは互いのキーワードを含まないのでヒットしないはず（またはごく少数）
+    # デフォルト(AND)検索: 両方含む結果のみ
+    result_and = search_service.search(keyword=["デフォルトモード検索テスト", "デフォルトモード設計ドキュメント"])
+    assert "error" not in result_and
+    # OR検索: いずれかを含む結果
+    result_or = search_service.search(keyword=["デフォルトモード検索テスト", "デフォルトモード設計ドキュメント"], keyword_mode="or")
+    assert "error" not in result_or
+    # デフォルト(AND)はORより結果が少ない（2つのキーワードは互いを含まない）
+    assert len(result_and["results"]) < len(result_or["results"])
 
 
 def test_search_keyword_or_2char_fts_partial(temp_db):
