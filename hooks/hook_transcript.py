@@ -42,34 +42,6 @@ def _has_text_block(entry: dict) -> bool:
     )
 
 
-def get_assistant_entries(transcript_path: str, last_n: int | None = None) -> list[dict]:
-    """transcriptからassistantエントリを取得する。
-    last_nが指定されていれば直近N件のみ返す。"""
-    path = Path(transcript_path).expanduser()
-    if not path.exists():
-        return []
-
-    entries = []
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                    if entry.get("type") == "assistant":
-                        entries.append(entry)
-                except json.JSONDecodeError:
-                    continue
-    except Exception:
-        return []
-
-    if last_n is not None and entries:
-        return entries[-last_n:]
-    return entries
-
-
 def extract_text_from_entry(entry: dict) -> str:
     """エントリからテキスト内容を抽出する。"""
     message = entry.get("message", {})
