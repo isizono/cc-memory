@@ -106,6 +106,31 @@ class TestActivityCheckin:
         assert hook_state.has_activity_checkin() is True
 
 
+class TestSkillSkipRemaining:
+    def test_get_returns_zero_when_no_file(self, hook_state):
+        assert hook_state.get_skill_skip_remaining() == 0
+
+    def test_set_then_get(self, hook_state):
+        hook_state.set_skill_skip_remaining(3)
+        assert hook_state.get_skill_skip_remaining() == 3
+
+    def test_set_zero_deletes_file(self, hook_state):
+        hook_state.set_skill_skip_remaining(3)
+        hook_state.set_skill_skip_remaining(0)
+        assert hook_state.get_skill_skip_remaining() == 0
+        assert not hook_state._path("skill_skip").exists()
+
+    def test_set_negative_deletes_file(self, hook_state):
+        hook_state.set_skill_skip_remaining(3)
+        hook_state.set_skill_skip_remaining(-1)
+        assert hook_state.get_skill_skip_remaining() == 0
+
+    def test_corrupted_file_returns_zero(self, hook_state):
+        path = hook_state._path("skill_skip")
+        path.write_text("abc")
+        assert hook_state.get_skill_skip_remaining() == 0
+
+
 class TestClearSession:
     def test_clears_all_state_files(self, tmp_path, monkeypatch):
         monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
@@ -118,6 +143,7 @@ class TestClearSession:
         state.set_nudge_pending()
         state.increment_approved_turns()
         state.set_activity_checkin()
+        state.set_skill_skip_remaining(3)
 
         # clear
         HookState.clear_session("sess-abc")
@@ -129,6 +155,7 @@ class TestClearSession:
         assert state.pop_nudge_pending() is False
         assert state.get_approved_turns() == 0
         assert state.has_activity_checkin() is False
+        assert state.get_skill_skip_remaining() == 0
 
 
 class TestSessionIdSlash:

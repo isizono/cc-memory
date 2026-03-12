@@ -3,15 +3,16 @@
 処理フロー:
 1. stdin読み込み → JSON parse
 2. ブロック上限チェック（2回で強制approve）
-3. メタタグparse（一次ソース: stdinのlast_assistant_message、フォールバック: transcript）
+3. スキルスキップ判定（<command-name>検出 or 残りターン → 即approve）
+4. メタタグparse（一次ソース: stdinのlast_assistant_message、フォールバック: transcript）
    → 1ターン目（approved_turns == 0）は猶予。2ターン目以降はなければblock
-4. get系API呼び出しチェック（セッション中1回以上）
+5. get系API呼び出しチェック（セッション中1回以上）
    → なければblock
-5. activity check-inチェック（_CHECKIN_DEFER_TURNSターン後、one-shot block）
+6. activity check-inチェック（_CHECKIN_DEFER_TURNSターン後、one-shot block）
    → check-in/add_activity未呼出 → block
-6. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
-7. nudgeカウンター管理
-8. 状態更新 → approve
+7. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
+8. nudgeカウンター管理
+9. 状態更新 → approve
 """
 import json
 import os
@@ -26,8 +27,8 @@ if str(_project_root) not in sys.path:
 from hooks.hook_state import HookState
 from hooks.hook_transcript import (
     extract_text_from_entry,
-    get_assistant_entries,
     get_last_assistant_entry,
+    get_transcript_info,
     has_activity_checkin_calls,
     has_context_retrieval_calls,
     has_recent_recording,
@@ -37,6 +38,7 @@ from hooks.hook_transcript import (
 _BLOCK_LIMIT = 2
 _NUDGE_INTERVAL = 2
 _CHECKIN_DEFER_TURNS = 2
+_SKILL_SKIP_TURNS = 3
 
 
 def _output(decision: str, reason: str = "") -> None:
@@ -70,7 +72,24 @@ def main() -> None:
             _output("approve", "ブロック上限（2回）に達しました。強制的に通します。")
             return
 
-        # 3. メタタグparse
+        # 3. スキルスキップ判定
+        skill_skip = state.get_skill_skip_remaining()
+        if skill_skip > 0:
+            state.set_skill_skip_remaining(skill_skip - 1)
+            state.reset_block_count()
+            state.increment_approved_turns()
+            _output("approve", f"スキル実行中（残り{skill_skip - 1}ターン）")
+            return
+
+        all_entries, has_skill_cmd = get_transcript_info(transcript_path)
+        if has_skill_cmd:
+            state.set_skill_skip_remaining(_SKILL_SKIP_TURNS - 1)
+            state.reset_block_count()
+            state.increment_approved_turns()
+            _output("approve", "スキル実行を検出。チェックをスキップします。")
+            return
+
+        # 4. メタタグparse
         # 一次ソース: stdinのlast_assistant_message
         last_msg = data.get("last_assistant_message", "")
         meta = parse_meta_tag(last_msg) if last_msg else None
@@ -85,7 +104,7 @@ def main() -> None:
         if meta is None:
             # 1ターン目（approved_turns == 0）はメタタグなしでも猶予
             if state.get_approved_turns() == 0:
-                # メタタグなしでもapproveして次に進む（ステップ4以降はスキップ）
+                # メタタグなしでもapproveして次に進む（ステップ5以降はスキップ）
                 state.reset_block_count()
                 state.increment_approved_turns()
                 _output("approve", "1ターン目のためメタタグチェックを猶予します。")
@@ -100,8 +119,7 @@ def main() -> None:
 
         current_topic_name = meta["topic_name"]
 
-        # 4. get系API呼び出しチェック（セッション中1回以上）
-        all_entries = get_assistant_entries(transcript_path)
+        # 5. get系API呼び出しチェック（セッション中1回以上）
 
         if not state.has_context_retrieval():
             if has_context_retrieval_calls(all_entries):
@@ -116,7 +134,7 @@ def main() -> None:
                 )
                 return
 
-        # 5. Activity check-in チェック（2ターン目）
+        # 6. Activity check-in チェック（2ターン目）
         if not state.has_activity_checkin():
             if has_activity_checkin_calls(all_entries):
                 state.set_activity_checkin()
@@ -130,7 +148,7 @@ def main() -> None:
                 )
                 return
 
-        # 6. トピック変更チェック → 記録がなければblock
+        # 7. トピック変更チェック → 記録がなければblock
         prev_topic = state.get_prev_topic()
         if prev_topic is not None and prev_topic != current_topic_name:
             recent_entries = all_entries[-5:] if all_entries else []
@@ -143,7 +161,7 @@ def main() -> None:
                 )
                 return
 
-        # 7. nudgeカウンター
+        # 8. nudgeカウンター
         nudge_count = state.increment_nudge_counter()
 
         if nudge_count % _NUDGE_INTERVAL == 0:
@@ -153,7 +171,7 @@ def main() -> None:
             else:
                 state.set_nudge_pending()
 
-        # 8. 状態更新 + approve
+        # 9. 状態更新 + approve
         state.set_prev_topic(current_topic_name)
         state.reset_block_count()
         state.increment_approved_turns()

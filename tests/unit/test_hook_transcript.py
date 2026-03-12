@@ -6,8 +6,8 @@ import pytest
 
 from hooks.hook_transcript import (
     extract_text_from_entry,
-    get_assistant_entries,
     get_last_assistant_entry,
+    get_transcript_info,
     has_context_retrieval_calls,
     has_recent_recording,
     parse_meta_tag,
@@ -183,59 +183,6 @@ class TestGetLastAssistantEntry:
         assert get_last_assistant_entry(str(path)) is None
 
 
-# --- get_assistant_entries ---
-
-
-class TestGetAssistantEntries:
-    def test_get_all(self, tmp_path):
-        """全件取得"""
-        path = tmp_path / "transcript.jsonl"
-        lines = [
-            _make_user_entry(),
-            _make_assistant_entry(text="msg0"),
-            _make_user_entry(),
-            _make_assistant_entry(text="msg1"),
-            _make_user_entry(),
-            _make_assistant_entry(text="msg2"),
-        ]
-        _write_transcript(lines, path)
-        result = get_assistant_entries(str(path))
-        assert len(result) == 3
-
-    def test_get_last_n(self, tmp_path):
-        """last_n指定"""
-        path = tmp_path / "transcript.jsonl"
-        entries = [_make_assistant_entry(text=f"msg{i}") for i in range(5)]
-        lines = []
-        for e in entries:
-            lines.append(_make_user_entry())
-            lines.append(e)
-        _write_transcript(lines, path)
-
-        result = get_assistant_entries(str(path), last_n=3)
-        assert len(result) == 3
-        assert result[0]["message"]["content"][0]["text"] == "msg2"
-        assert result[1]["message"]["content"][0]["text"] == "msg3"
-        assert result[2]["message"]["content"][0]["text"] == "msg4"
-
-    def test_file_not_found(self, tmp_path):
-        """ファイルが存在しない場合は空リストを返す"""
-        path = tmp_path / "nonexistent.jsonl"
-        assert get_assistant_entries(str(path)) == []
-
-    def test_empty_file(self, tmp_path):
-        """空ファイルの場合は空リストを返す"""
-        path = tmp_path / "transcript.jsonl"
-        path.write_text("")
-        assert get_assistant_entries(str(path)) == []
-
-    def test_no_assistant_entries(self, tmp_path):
-        """ユーザーエントリのみの場合は空リストを返す"""
-        path = tmp_path / "transcript.jsonl"
-        _write_transcript([_make_user_entry("only user entries")], path)
-        assert get_assistant_entries(str(path)) == []
-
-
 # --- has_recent_recording ---
 
 
@@ -297,3 +244,92 @@ class TestHasContextRetrievalCalls:
         """記録ツールはコンテキスト取得とみなさない"""
         entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"])]
         assert has_context_retrieval_calls(entries) is False
+
+
+# --- get_transcript_info ---
+
+
+def _make_user_entry_real(text: str = "hello") -> dict:
+    """実際のtranscript形式（type: "user"）でuserエントリを作成する。"""
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+class TestGetTranscriptInfo:
+    def test_returns_assistant_entries_and_no_skill(self, tmp_path):
+        """通常のtranscript: assistant entriesを返し、skill commandなし"""
+        path = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry_real("hi"),
+            _make_assistant_entry(text="response"),
+            _make_user_entry_real("more"),
+            _make_assistant_entry(text="response2"),
+        ], path)
+        entries, has_skill = get_transcript_info(str(path))
+        assert len(entries) == 2
+        assert has_skill is False
+
+    def test_detects_skill_command(self, tmp_path):
+        """<command-name>を含むuserエントリでskill検出"""
+        path = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry_real(
+                '<command-message>sync-memory</command-message>\n'
+                '<command-name>/claude-code-memory:sync-memory</command-name>'
+            ),
+            _make_assistant_entry(text="processing skill"),
+        ], path)
+        entries, has_skill = get_transcript_info(str(path))
+        assert len(entries) == 1
+        assert has_skill is True
+
+    def test_only_last_user_entry_matters(self, tmp_path):
+        """直近のuserエントリのみが判定対象"""
+        path = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry_real(
+                '<command-name>/sync-memory</command-name>'
+            ),
+            _make_assistant_entry(text="skill response"),
+            _make_user_entry_real("normal message"),
+            _make_assistant_entry(text="normal response"),
+        ], path)
+        entries, has_skill = get_transcript_info(str(path))
+        assert len(entries) == 2
+        assert has_skill is False
+
+    def test_handles_human_type(self, tmp_path):
+        """type: humanのエントリでもskill検出可能"""
+        path = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            {"type": "human", "message": {"content": "<command-name>/test</command-name>"}},
+            _make_assistant_entry(text="response"),
+        ], path)
+        entries, has_skill = get_transcript_info(str(path))
+        assert has_skill is True
+
+    def test_handles_list_content(self, tmp_path):
+        """contentがリスト形式でもskill検出可能"""
+        path = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            {"type": "user", "message": {"content": [
+                {"type": "text", "text": "<command-name>/test</command-name>"},
+            ]}},
+            _make_assistant_entry(text="response"),
+        ], path)
+        entries, has_skill = get_transcript_info(str(path))
+        assert has_skill is True
+
+    def test_file_not_found(self, tmp_path):
+        """ファイルが存在しない場合"""
+        path = tmp_path / "nonexistent.jsonl"
+        entries, has_skill = get_transcript_info(str(path))
+        assert entries == []
+        assert has_skill is False
+
+    def test_empty_file(self, tmp_path):
+        """空ファイルの場合"""
+        path = tmp_path / "transcript.jsonl"
+        path.write_text("")
+        entries, has_skill = get_transcript_info(str(path))
+        assert entries == []
+        assert has_skill is False

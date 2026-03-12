@@ -1,7 +1,7 @@
 """hook共通: 状態ファイル管理クラス HookState
 
 hookが利用する状態ファイル（prev_topic, block_count, nudge_counter, nudge_pending,
-context_retrieved, approved_turns, activity_checkin）の読み書きを一元管理する。
+context_retrieved, approved_turns, activity_checkin, skill_skip）の読み書きを一元管理する。
 標準ライブラリのみに依存。
 """
 from pathlib import Path
@@ -118,6 +118,19 @@ class HookState:
     def set_activity_checkin(self) -> None:
         """activity check-in済みフラグを設定。以後のcheck-inチェックをスキップする。"""
         self._write(self._path("activity_checkin"), "1")
+
+    # --- skill_skip_remaining ---
+
+    def get_skill_skip_remaining(self) -> int:
+        """スキル実行中のスキップ残りターン数を取得。"""
+        return self._read_int(self._path("skill_skip"), 0)
+
+    def set_skill_skip_remaining(self, n: int) -> None:
+        """スキル実行中のスキップ残りターン数を設定。0以下の場合はファイル削除。"""
+        if n <= 0:
+            self._delete(self._path("skill_skip"))
+        else:
+            self._write(self._path("skill_skip"), str(n))
 
     # --- context_retrieved ---
 

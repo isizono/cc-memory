@@ -837,3 +837,133 @@ class TestContextRetrievalCheck:
         )
         # フラグがあるのでblockされない
         assert result["decision"] == "approve"
+
+
+def _make_skill_user_entry(skill_name: str = "sync-memory") -> dict:
+    """スキル発動時のuserエントリ（実際のtranscript形式）"""
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": (
+                f"<command-message>{skill_name}</command-message>\n"
+                f"<command-name>/{skill_name}</command-name>"
+            ),
+        },
+    }
+
+
+class TestSkillSkip:
+    """スキル実行時のスキップ機能"""
+
+    def test_skill_command_approves_without_meta_tag(self, env_setup):
+        """スキル発動ターン: メタタグなし・コンテキスト取得なしでもapprove"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_skill_user_entry("sync-memory"),
+            _make_assistant_entry(text="processing skill..."),
+        ], transcript)
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "approve"
+        assert "スキル" in result["reason"]
+
+    def test_skill_skip_remaining_approves(self, env_setup):
+        """スキップ残りがある場合: 即approve"""
+        state_dir = Path(env_setup["state_dir"])
+        skip_file = state_dir / "skill_skip_test-session"
+        skip_file.write_text("2")
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("normal message"),
+            _make_assistant_entry(text="response without meta tag"),
+        ], transcript)
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "approve"
+        assert "スキル" in result["reason"]
+
+        # スキップ残りが1にデクリメント
+        assert skip_file.read_text().strip() == "1"
+
+    def test_skill_skip_decrements_to_zero(self, env_setup):
+        """スキップ残り1 → 0でファイル削除"""
+        state_dir = Path(env_setup["state_dir"])
+        skip_file = state_dir / "skill_skip_test-session"
+        skip_file.write_text("1")
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("normal message"),
+            _make_assistant_entry(text="response"),
+        ], transcript)
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "approve"
+
+        # 0になったのでファイル削除
+        assert not skip_file.exists()
+
+    def test_skill_skip_sets_remaining_turns(self, env_setup):
+        """スキル検出時にskill_skipファイルが作成される"""
+        state_dir = Path(env_setup["state_dir"])
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_skill_user_entry("sync-memory"),
+            _make_assistant_entry(text="processing"),
+        ], transcript)
+
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+
+        # skill_skip = 2 (3ターン中、検出ターンで1消費)
+        skip_file = state_dir / "skill_skip_test-session"
+        assert skip_file.exists()
+        assert skip_file.read_text().strip() == "2"
+
+    def test_normal_checks_resume_after_skip(self, env_setup):
+        """スキップ終了後は通常チェック再開（メタタグなし→block）"""
+        state_dir = Path(env_setup["state_dir"])
+        # approved_turns=1にして1ターン目猶予を使い切る
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("5")
+
+        # skill_skipは0（スキップ終了済み）
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("normal message"),
+            _make_assistant_entry(text="no meta tag"),
+        ], transcript)
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "block"
+        assert "メタタグ" in result["reason"]
+
+    def test_skill_skip_increments_approved_turns(self, env_setup):
+        """スキル検出ターンでapproved_turnsがインクリメントされる"""
+        state_dir = Path(env_setup["state_dir"])
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_skill_user_entry("sync-memory"),
+            _make_assistant_entry(text="processing"),
+        ], transcript)
+
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+
+        turns_file = state_dir / "approved_turns_test-session"
+        assert turns_file.exists()
+        assert turns_file.read_text().strip() == "1"
