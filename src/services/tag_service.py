@@ -209,15 +209,14 @@ def resolve_tags(
             # 入力タグの表示用文字列
             input_tag_str = f"{ns}:{name}" if ns else name
 
-            # 2. 完全一致チェック
+            # 2. 完全一致チェック（canonical解決付き）
             row = conn.execute(
-                "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+                "SELECT id, canonical_id FROM tags WHERE namespace = ? AND name = ?",
                 (ns, name),
             ).fetchone()
 
             if row:
-                tag_id = row["id"]
-                # TODO: canonical解決が必要（canonical_idが非NULLならcanonical_idを使う）
+                tag_id = row["canonical_id"] if row["canonical_id"] is not None else row["id"]
                 if tag_id not in seen_ids:
                     resolved_ids.append(tag_id)
                     seen_ids.add(tag_id)
@@ -610,8 +609,8 @@ def update_tag(tag: str, notes: str | None = None, canonical: str | None = None)
             conn.commit()
             return {"tag": tag_str, "canonical": None, "updated": True}
 
-        # エイリアスタグにnotes有りの場合 → エラー
-        if row["notes"] is not None:
+        # エイリアスタグにnotes有りの場合 → エラー（空文字もnotesなしとして扱う）
+        if row["notes"]:
             return {
                 "error": {
                     "code": "HAS_NOTES",
