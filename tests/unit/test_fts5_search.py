@@ -199,7 +199,7 @@ def test_search_trigger_sync_decision(temp_db):
 
 def test_search_trigger_sync_activity(temp_db):
     """activityがsearch_indexに同期される"""
-    add_activity(title="トリガー同期アクティビティ検索テスト", description="テスト用アクティビティ", tags=DEFAULT_TAGS)
+    add_activity(title="トリガー同期アクティビティ検索テスト", description="テスト用アクティビティ", tags=DEFAULT_TAGS, check_in=False)
     result = search_service.search(keyword="トリガー同期アクティビティ検索テスト")
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -218,7 +218,7 @@ def test_search_cross_type(temp_db):
     """横断検索: topic/decision/activity全てが対象"""
     topic = add_topic(title="横断検索テスト用トピック", description="テスト", tags=DEFAULT_TAGS)
     add_decision(topic_id=topic["topic_id"], decision="横断検索テスト決定", reason="テスト")
-    add_activity(title="横断検索テスト用アクティビティ", description="テスト", tags=DEFAULT_TAGS)
+    add_activity(title="横断検索テスト用アクティビティ", description="テスト", tags=DEFAULT_TAGS, check_in=False)
     result = search_service.search(keyword="横断検索テスト")
     assert "error" not in result
     types_found = {r["type"] for r in result["results"]}
@@ -283,7 +283,7 @@ def test_get_by_ids_single_decision(temp_db):
 
 def test_get_by_ids_single_activity(temp_db):
     """get_by_ids: activityの詳細取得（1件）"""
-    activity = add_activity(title="詳細取得テスト用アクティビティ", description="テスト説明", tags=DEFAULT_TAGS)
+    activity = add_activity(title="詳細取得テスト用アクティビティ", description="テスト説明", tags=DEFAULT_TAGS, check_in=False)
     result = search_service.get_by_ids([{"type": "activity", "id": activity["activity_id"]}])
     assert len(result["results"]) == 1
     item = result["results"][0]
@@ -425,7 +425,7 @@ def test_search_snippet_decision(temp_db):
 
 def test_search_snippet_activity(temp_db):
     """search結果のactivityにsnippetが含まれること（ソース: description）"""
-    add_activity(title="スニペットアクティビティテスト", description="アクティビティの詳細説明テスト", tags=DEFAULT_TAGS)
+    add_activity(title="スニペットアクティビティテスト", description="アクティビティの詳細説明テスト", tags=DEFAULT_TAGS, check_in=False)
     result = search_service.search(keyword="スニペットアクティビティテスト")
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -529,7 +529,7 @@ def test_search_keyword_array_with_2char_fts_skipped(temp_db):
 def test_get_by_ids_batch(temp_db):
     """複数アイテムのバッチ取得"""
     add_topic(title="トピック1", description="説明1", tags=DEFAULT_TAGS)
-    add_activity(title="アクティビティ1", description="説明1", tags=DEFAULT_TAGS)
+    add_activity(title="アクティビティ1", description="説明1", tags=DEFAULT_TAGS, check_in=False)
     result = search_service.get_by_ids([
         {"type": "topic", "id": 1},
         {"type": "activity", "id": 1},
@@ -568,7 +568,7 @@ def test_get_by_ids_mixed_types(temp_db):
     """全4種類のtype混在でのバッチ取得"""
     topic = add_topic(title="混在テストトピック", description="テスト", tags=DEFAULT_TAGS)
     add_decision(topic_id=topic["topic_id"], decision="混在テスト決定", reason="テスト")
-    add_activity(title="混在テストアクティビティ", description="テスト", tags=DEFAULT_TAGS)
+    add_activity(title="混在テストアクティビティ", description="テスト", tags=DEFAULT_TAGS, check_in=False)
     add_log_entry(topic_id=topic["topic_id"], title="混在テストログ", content="テスト内容")
     result = search_service.get_by_ids([
         {"type": "topic", "id": 1},

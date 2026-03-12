@@ -28,6 +28,7 @@ def test_activity(temp_db):
         title="Original Title",
         description="Original Description",
         tags=DEFAULT_TAGS,
+        check_in=False,
     )
     return result
 

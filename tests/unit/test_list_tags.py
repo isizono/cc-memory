@@ -51,7 +51,7 @@ def test_list_tags_usage_count(temp_db):
     """usage_countが正しくカウントされる"""
     # domain:test を3つのエンティティで使用
     topic = add_topic(title="Topic 1", description="Desc", tags=["domain:test"])
-    add_activity(title="Activity 1", description="Desc", tags=["domain:test"])
+    add_activity(title="Activity 1", description="Desc", tags=["domain:test"], check_in=False)
     add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason", tags=["intent:design"])
 
     result = list_tags()

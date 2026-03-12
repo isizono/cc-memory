@@ -30,6 +30,7 @@ def activity_id(temp_db):
         title="Test Activity",
         description="Activity for material tests",
         tags=DEFAULT_TAGS,
+        check_in=False,
     )
     return result["activity_id"]
 

@@ -257,6 +257,7 @@ def test_add_activity_creates_embedding(temp_db, mock_embedding_server):
         title="Embedding統合テストアクティビティ",
         description="vec_indexへの格納を検証する",
         tags=DEFAULT_TAGS,
+        check_in=False,
     )
 
     assert "error" not in activity
@@ -425,6 +426,7 @@ def test_add_activity_succeeds_when_embedding_fails(temp_db, monkeypatch):
         title="Embedding失敗テストアクティビティ",
         description="サーバー接続失敗時もactivity作成は成功する",
         tags=DEFAULT_TAGS,
+        check_in=False,
     )
 
     assert "error" not in activity

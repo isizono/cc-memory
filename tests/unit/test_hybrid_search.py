@@ -291,6 +291,7 @@ def test_hybrid_search_cross_type_with_tags(temp_db, mock_embedding_model):
         title="横断ハイブリッドタグテストアクティビティ",
         description="テスト用アクティビティ",
         tags=DEFAULT_TAGS,
+        check_in=False,
     )
 
     result = search_service.search(

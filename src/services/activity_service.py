@@ -37,7 +37,13 @@ def _activity_to_response(activity: dict, tags: list[str]) -> dict:
     }
 
 
-def add_activity(title: str, description: str, tags: list[str]) -> dict:
+def add_activity(
+    title: str,
+    description: str,
+    tags: list[str],
+    topic_id: int | None = None,
+    check_in: bool = True,
+) -> dict:
     """
     アクティビティを作成してIDを返す
 
@@ -45,9 +51,11 @@ def add_activity(title: str, description: str, tags: list[str]) -> dict:
         title: アクティビティのタイトル
         description: アクティビティの説明
         tags: タグ配列（必須、1個以上）
+        topic_id: 関連トピックID（optional）
+        check_in: 作成後にcheck_inを実行するか（デフォルト: True）
 
     Returns:
-        作成されたアクティビティ情報
+        作成されたアクティビティ情報（check_in=Trueの場合はcheck_in_resultを含む）
     """
     # タグのバリデーション
     parsed_tags = validate_and_parse_tags(tags, required=True)
@@ -57,10 +65,16 @@ def add_activity(title: str, description: str, tags: list[str]) -> dict:
     conn = get_connection()
     try:
         # アクティビティをINSERT
-        cursor = conn.execute(
-            "INSERT INTO activities (title, description, status) VALUES (?, ?, ?)",
-            (title, description, 'pending'),
-        )
+        if topic_id is not None:
+            cursor = conn.execute(
+                "INSERT INTO activities (title, description, status, topic_id) VALUES (?, ?, ?, ?)",
+                (title, description, 'pending', topic_id),
+            )
+        else:
+            cursor = conn.execute(
+                "INSERT INTO activities (title, description, status) VALUES (?, ?, ?)",
+                (title, description, 'pending'),
+            )
         activity_id = cursor.lastrowid
 
         # タグをリンク
@@ -83,7 +97,7 @@ def add_activity(title: str, description: str, tags: list[str]) -> dict:
         # embedding生成（失敗してもactivity作成には影響しない）
         generate_and_store_embedding("activity", activity_id, build_embedding_text(title, description))
 
-        return _activity_to_response(activity, tag_strings)
+        result = _activity_to_response(activity, tag_strings)
 
     except sqlite3.IntegrityError as e:
         conn.rollback()
@@ -103,6 +117,14 @@ def add_activity(title: str, description: str, tags: list[str]) -> dict:
         }
     finally:
         conn.close()
+
+    # check_in実行（connを閉じた後に呼ぶ。checkin_serviceが別connを開くため）
+    if check_in:
+        from src.services.checkin_service import check_in as do_check_in
+        check_in_result = do_check_in(activity_id)
+        result["check_in_result"] = check_in_result
+
+    return result
 
 
 def get_activities(tags: list[str] | None = None, status: str = "active", limit: int = 5) -> dict:
