@@ -462,21 +462,27 @@ def search(
                 tag_ids = _resolve_tag_ids_readonly(conn, tags)
                 # 指定タグの一部でもDBに存在しない場合、ANDフィルタは必ず空結果
                 if len(tag_ids) < len(tags):
-                    return {"results": [], "total_count": 0}
+                    return {"results": [], "total_count": 0, "search_methods_used": []}
             finally:
                 conn.close()
 
         # RRFで両ソースをマージした後にlimitで切るため、各ソースからlimitより多めに取得する
         fetch_limit = limit * 5
 
+        # 使用された検索手法を追跡
+        methods_used: list[str] = []
+
         # FTS5検索: 全キーワードが3文字以上の場合のみ
         min_len = min(len(kw) for kw in keywords)
         fts_results = []
         if min_len >= 3:
             fts_results = _fts_search(keywords, tag_ids, type_filter, fetch_limit)
+            methods_used.append("fts5")
 
         # ベクトル検索
         vec_results = _vector_search(keywords, tag_ids, type_filter, fetch_limit)
+        if vec_results is not None:
+            methods_used.append("vector")
 
         # 2文字キーワード + ベクトル検索無効 → エラー
         if min_len < 3 and vec_results is None:
@@ -498,7 +504,11 @@ def search(
 
         _attach_snippets(results)
 
-        return {"results": results, "total_count": len(results)}
+        return {
+            "results": results,
+            "total_count": len(results),
+            "search_methods_used": methods_used,
+        }
 
     except Exception as e:
         return {
