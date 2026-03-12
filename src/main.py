@@ -387,12 +387,13 @@ def add_topic(
 @mcp.tool()
 def add_log(
     topic_id: int,
-    title: str,
-    content: str,
+    title: Optional[str] = None,
+    content: str = "",
     tags: Optional[list[str]] = None,
 ) -> dict:
     """トピックに議論ログを追加する。
 
+    title: ログのタイトル。省略するとcontentの先頭行から自動生成される。
     tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:discuss", "migration", "breaking-change", "schema"]
     """
     result = discussion_log_service.add_log(topic_id, title, content, tags)

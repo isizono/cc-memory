@@ -378,8 +378,8 @@ def test_search_log_title_fallback(temp_db):
     assert item["data"]["title"] == "フォールバックテスト"
 
 
-def test_add_log_empty_title_error(temp_db):
-    """バリデーション: title空文字でadd_logするとバリデーションエラー"""
+def test_add_log_empty_title_auto_generates_from_content(temp_db):
+    """title空文字でcontentありの場合、contentの先頭行からtitleを自動生成する"""
     topic = add_topic(
         title="バリデーションテスト用トピック",
         description="テスト用",
@@ -389,12 +389,11 @@ def test_add_log_empty_title_error(temp_db):
     result = add_log_entry(
         topic_id=topic["topic_id"],
         title="",
-        content="内容があってもtitleが空ならエラー",
+        content="内容があればtitleが自動生成される",
     )
 
-    assert "error" in result
-    assert result["error"]["code"] == "VALIDATION_ERROR"
-    assert "title must not be empty" in result["error"]["message"]
+    assert "error" not in result
+    assert result["title"] == "内容があればtitleが自動生成される"
 
 
 # ========================================
