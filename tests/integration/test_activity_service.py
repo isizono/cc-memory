@@ -3,7 +3,7 @@ import os
 import tempfile
 import pytest
 from src.db import init_database, execute_query, get_connection
-from src.services.activity_service import add_activity, get_activities, update_activity
+from src.services.activity_service import add_activity, get_activities, update_activity, ACTIVITY_DESC_MAX_LEN
 
 
 DEFAULT_TAGS = ["domain:test"]
@@ -166,6 +166,16 @@ class TestGetActivities:
         titles = [a["title"] for a in result["activities"]]
         assert titles == ["New pending", "Old pending"]
 
+    def test_get_activities_truncates_description_at_max_len(self, temp_db):
+        """descriptionがACTIVITY_DESC_MAX_LEN文字に切り詰められること"""
+        long_desc = "a" * (ACTIVITY_DESC_MAX_LEN + 50)
+        add_activity(title="Long Desc", description=long_desc, tags=["domain:test"])
+
+        result = get_activities(tags=["domain:test"])
+
+        assert "error" not in result
+        activity = result["activities"][0]
+        assert len(activity["description"]) == ACTIVITY_DESC_MAX_LEN
 
 
 class TestUpdateActivity:

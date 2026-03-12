@@ -16,6 +16,8 @@ from src.services.tag_service import (
 
 logger = logging.getLogger(__name__)
 
+# get_activitiesでdescriptionを切り詰める上限文字数
+ACTIVITY_DESC_MAX_LEN = 200
 # DB格納可能なステータス値
 REAL_STATUSES = {"pending", "in_progress", "completed"}
 # "active"エイリアスが展開されるステータス
@@ -218,7 +220,7 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
             activities.append({
                 "id": activity["id"],
                 "title": activity["title"],
-                "description": (activity["description"] or "")[:100],
+                "description": (activity["description"] or "")[:ACTIVITY_DESC_MAX_LEN],
                 "status": activity["status"],
                 "tags": tags_map.get(activity["id"], []),
                 "created_at": activity["created_at"],
