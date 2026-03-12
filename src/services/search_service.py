@@ -462,7 +462,7 @@ def search(
                 tag_ids = _resolve_tag_ids_readonly(conn, tags)
                 # 指定タグの一部でもDBに存在しない場合、ANDフィルタは必ず空結果
                 if len(tag_ids) < len(tags):
-                    return {"results": [], "total_count": 0}
+                    return {"results": [], "total_count": 0, "search_methods_used": []}
             finally:
                 conn.close()
 
