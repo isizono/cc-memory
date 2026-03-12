@@ -14,8 +14,8 @@ from src.services.tag_service import (
 
 def add_log(
     topic_id: int,
-    title: str,
-    content: str,
+    title: Optional[str] = None,
+    content: str = "",
     tags: Optional[list[str]] = None,
 ) -> dict:
     """
@@ -23,7 +23,7 @@ def add_log(
 
     Args:
         topic_id: 対象トピックのID
-        title: ログのタイトル（必須、空文字不可）
+        title: ログのタイトル。省略時はcontentの先頭行から自動生成される
         content: 議論内容（マークダウン可）
         tags: 追加タグ（optional）。省略時はtopicのタグを継承
 
@@ -31,12 +31,16 @@ def add_log(
         作成されたログ情報
     """
     if not title or not title.strip():
-        return {
-            "error": {
-                "code": "VALIDATION_ERROR",
-                "message": "title must not be empty"
+        # titleが未指定・空の場合、contentから自動生成を試みる
+        first_line = content.strip().split('\n', 1)[0].strip()
+        title = first_line[:50] if len(first_line) > 50 else first_line
+        if not title:
+            return {
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "title and content cannot both be empty"
+                }
             }
-        }
 
     # タグのバリデーション（tagsが指定された場合のみ）
     parsed_tags = None

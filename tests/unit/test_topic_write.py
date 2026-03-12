@@ -207,6 +207,92 @@ def test_add_log_invalid_topic(temp_db):
     assert result["error"]["code"] == "CONSTRAINT_VIOLATION"
 
 
+def test_add_log_title_none_auto_generates(temp_db):
+    """title=Noneでcontentの先頭行からtitleが自動生成される"""
+    topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
+
+    result = add_log(
+        topic_id=topic["topic_id"],
+        title=None,
+        content="自動生成されるタイトル\nこれは本文の2行目です",
+    )
+
+    assert "error" not in result
+    assert result["title"] == "自動生成されるタイトル"
+    assert result["log_id"] > 0
+
+
+def test_add_log_title_empty_auto_generates(temp_db):
+    """title=""でcontentの先頭行からtitleが自動生成される"""
+    topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
+
+    result = add_log(
+        topic_id=topic["topic_id"],
+        title="",
+        content="空文字titleの自動生成テスト",
+    )
+
+    assert "error" not in result
+    assert result["title"] == "空文字titleの自動生成テスト"
+
+
+def test_add_log_title_auto_truncate_at_50(temp_db):
+    """contentの最初の行が50文字を超える場合に50文字で切り詰められる"""
+    topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
+
+    long_first_line = "あ" * 60  # 60文字
+    result = add_log(
+        topic_id=topic["topic_id"],
+        content=long_first_line + "\n2行目",
+    )
+
+    assert "error" not in result
+    assert result["title"] == "あ" * 50
+    assert len(result["title"]) == 50
+
+
+def test_add_log_title_auto_uses_first_line_only(temp_db):
+    """contentが改行を含む場合に最初の行だけがtitleになる"""
+    topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
+
+    result = add_log(
+        topic_id=topic["topic_id"],
+        content="1行目のタイトル\n2行目の内容\n3行目の内容",
+    )
+
+    assert "error" not in result
+    assert result["title"] == "1行目のタイトル"
+
+
+def test_add_log_title_none_content_empty_error(temp_db):
+    """title=Noneかつcontent=""の場合にエラーが返る"""
+    topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
+
+    result = add_log(
+        topic_id=topic["topic_id"],
+        title=None,
+        content="",
+    )
+
+    assert "error" in result
+    assert result["error"]["code"] == "VALIDATION_ERROR"
+    assert "title and content cannot both be empty" in result["error"]["message"]
+
+
+def test_add_log_explicit_title_unchanged(temp_db):
+    """title指定時は従来通り動作する（自動生成されない）"""
+    topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
+
+    result = add_log(
+        topic_id=topic["topic_id"],
+        title="明示的なタイトル",
+        content="contentの先頭行とは異なる",
+    )
+
+    assert "error" not in result
+    assert result["title"] == "明示的なタイトル"
+
+
 def test_add_decision_success(temp_db):
     """決定事項の追加が成功する"""
     # トピックを作成

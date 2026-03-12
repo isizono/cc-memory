@@ -404,6 +404,28 @@ def test_hybrid_keyword_array_2char_vec_only(temp_db, mock_embedding_model):
 
 
 # ========================================
+# keyword配列（OR検索）のテスト
+# ========================================
+
+
+def test_hybrid_keyword_or_basic(temp_db, mock_embedding_model):
+    """OR検索: ハイブリッド検索でOR動作"""
+    add_topic(title="ハイブリッドOR検索テスト対象A", description="メモリ管理の説明", tags=DEFAULT_TAGS)
+    add_topic(title="ハイブリッドOR検索テスト対象B", description="検索機能の説明", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword=["ハイブリッドOR検索テスト対象A", "ハイブリッドOR検索テスト対象B"], keyword_mode="or")
+    assert "error" not in result
+    assert len(result["results"]) >= 2
+
+
+def test_hybrid_keyword_or_2char_vec(temp_db, mock_embedding_model):
+    """OR検索: 2文字キーワード混在でもベクトル検索が補完する"""
+    add_topic(title="設計レビュー用ドキュメント", description="設計の詳細レビュー", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword=["設計", "レビュー"], keyword_mode="or")
+    assert "error" not in result
+    assert "results" in result
+
+
+# ========================================
 # _apply_recency_boost 単体テスト
 # ========================================
 
@@ -575,3 +597,145 @@ def test_search_recency_boost_applied(temp_db, mock_embedding_model):
     idx_new = ids_in_order.index(t_new["topic_id"])
     idx_old = ids_in_order.index(t_old["topic_id"])
     assert idx_new < idx_old, "新しいトピックが古いトピックより上位に来るべき"
+
+
+# ========================================
+# offset（ページネーション）テスト
+# ========================================
+
+
+def test_search_offset_skips_results(temp_db, mock_embedding_model):
+    """offset指定: 先頭のresultsがスキップされる"""
+    for i in range(5):
+        add_topic(
+            title=f"オフセットテスト用トピック{i}",
+            description="オフセットテスト用の検索対象データ",
+            tags=DEFAULT_TAGS,
+        )
+
+    result_all = search_service.search(keyword="オフセットテスト用", limit=10)
+    result_offset = search_service.search(keyword="オフセットテスト用", limit=10, offset=2)
+
+    assert "error" not in result_all
+    assert "error" not in result_offset
+    assert len(result_all["results"]) >= 3
+    # offset=2 の結果は、全体の3番目以降と一致する
+    assert result_offset["results"][0]["id"] == result_all["results"][2]["id"]
+
+
+def test_search_offset_with_limit(temp_db, mock_embedding_model):
+    """offset + limit: 中間ページの取得"""
+    for i in range(5):
+        add_topic(
+            title=f"ページネーションテスト用トピック{i}",
+            description="ページネーションテスト用の検索対象データ",
+            tags=DEFAULT_TAGS,
+        )
+
+    result_all = search_service.search(keyword="ページネーションテスト用", limit=10)
+    result_page = search_service.search(keyword="ページネーションテスト用", limit=2, offset=1)
+
+    assert "error" not in result_all
+    assert "error" not in result_page
+    assert len(result_page["results"]) <= 2
+    if len(result_all["results"]) > 1:
+        assert result_page["results"][0]["id"] == result_all["results"][1]["id"]
+
+
+def test_search_offset_beyond_results(temp_db, mock_embedding_model):
+    """offset が結果件数を超える場合: 空配列が返る"""
+    add_topic(
+        title="オフセット超過テスト用トピック",
+        description="オフセット超過テスト用データ",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword="オフセット超過テスト用", limit=10, offset=100)
+
+    assert "error" not in result
+    assert len(result["results"]) == 0
+
+
+def test_search_offset_zero_is_default(temp_db, mock_embedding_model):
+    """offset=0: offsetなしと同じ結果"""
+    add_topic(
+        title="オフセットゼロテスト用トピック",
+        description="オフセットゼロテスト用データ",
+        tags=DEFAULT_TAGS,
+    )
+
+    result_default = search_service.search(keyword="オフセットゼロテスト用")
+    result_zero = search_service.search(keyword="オフセットゼロテスト用", offset=0)
+
+    assert "error" not in result_default
+    assert "error" not in result_zero
+    assert len(result_default["results"]) == len(result_zero["results"])
+    for r1, r2 in zip(result_default["results"], result_zero["results"]):
+        assert r1["id"] == r2["id"]
+
+
+def test_search_offset_negative_treated_as_zero(temp_db, mock_embedding_model):
+    """負のoffset: 0として扱われる"""
+    add_topic(
+        title="負オフセットテスト用トピック",
+        description="負オフセットテスト用データ",
+        tags=DEFAULT_TAGS,
+    )
+
+    result_default = search_service.search(keyword="負オフセットテスト用")
+    result_neg = search_service.search(keyword="負オフセットテスト用", offset=-5)
+
+    assert "error" not in result_default
+    assert "error" not in result_neg
+    assert len(result_default["results"]) == len(result_neg["results"])
+
+
+
+# ========================================
+# search_methods_used テスト
+# ========================================
+
+
+def test_search_methods_used_hybrid(temp_db, mock_embedding_model):
+    """3文字以上 + ベクトル有効: fts5とvectorの両方が使われる"""
+    add_topic(
+        title="ハイブリッドメソッド確認テスト用",
+        description="FTS5とベクトルの両方が使われることを確認",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword="ハイブリッドメソッド確認テスト")
+
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["fts5", "vector"]
+
+
+def test_search_methods_used_vector_only(temp_db, mock_embedding_model):
+    """2文字キーワード + ベクトル有効: vectorのみが使われる"""
+    add_topic(
+        title="設計ドキュメント",
+        description="アーキテクチャ設計の詳細",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword="設計")
+
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["vector"]
+
+
+def test_search_methods_used_fts_only_vec_disabled(temp_db, disable_embedding):
+    """3文字以上 + ベクトル無効: fts5のみが使われる"""
+    add_topic(
+        title="認証フローメソッド確認テスト",
+        description="FTSのみで検索される",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword="認証フローメソッド確認テスト")
+
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["fts5"]
