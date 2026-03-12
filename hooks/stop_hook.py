@@ -4,11 +4,11 @@
 1. stdin読み込み → JSON parse
 2. ブロック上限チェック（2回で強制approve）
 3. メタタグparse（一次ソース: stdinのlast_assistant_message、フォールバック: transcript）
-   → なければblock
+   → 1ターン目（approved_turns == 0）は猶予。2ターン目以降はなければblock
 4. get系API呼び出しチェック（セッション中1回以上）
    → なければblock
-5. activity check-inチェック（2ターン目、one-shot block）
-   → 2ターン目 + check-in/add_activity未呼出 → block
+5. activity check-inチェック（_CHECKIN_DEFER_TURNSターン後、one-shot block）
+   → check-in/add_activity未呼出 → block
 6. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
 7. nudgeカウンター管理
 8. 状態更新 → approve
@@ -36,6 +36,7 @@ from hooks.hook_transcript import (
 
 _BLOCK_LIMIT = 2
 _NUDGE_INTERVAL = 2
+_CHECKIN_DEFER_TURNS = 2
 
 
 def _output(decision: str, reason: str = "") -> None:
@@ -82,6 +83,13 @@ def main() -> None:
                 meta = parse_meta_tag(text)
 
         if meta is None:
+            # 1ターン目（approved_turns == 0）はメタタグなしでも猶予
+            if state.get_approved_turns() == 0:
+                # メタタグなしでもapproveして次に進む（ステップ4以降はスキップ）
+                state.reset_block_count()
+                state.increment_approved_turns()
+                _output("approve", "1ターン目のためメタタグチェックを猶予します。")
+                return
             state.increment_block_count()
             _output(
                 "block",
@@ -112,7 +120,7 @@ def main() -> None:
         if not state.has_activity_checkin():
             if has_activity_checkin_calls(all_entries):
                 state.set_activity_checkin()
-            elif state.get_approved_turns() >= 1:
+            elif state.get_approved_turns() >= _CHECKIN_DEFER_TURNS:
                 state.set_activity_checkin()  # one-shot: 次回はスキップ
                 state.increment_block_count()
                 _output(

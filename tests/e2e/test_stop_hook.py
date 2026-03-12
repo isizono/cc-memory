@@ -115,9 +115,15 @@ def env_setup(tmp_path):
 
 
 class TestNoMetaTag:
-    """1. メタタグなし → block"""
+    """1. メタタグなし → block（2ターン目以降）/ approve（1ターン目猶予）"""
 
-    def test_no_meta_tag_blocks(self, env_setup):
+    def test_no_meta_tag_blocks_after_first_turn(self, env_setup):
+        """2ターン目以降（approved_turns>=1）でメタタグなし → block"""
+        state_dir = Path(env_setup["state_dir"])
+        # approved_turns を 1 にセット（2ターン目）
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("1")
+
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -132,6 +138,46 @@ class TestNoMetaTag:
         )
         assert result["decision"] == "block"
         assert "メタタグ" in result["reason"]
+
+    def test_no_meta_tag_approves_on_first_turn(self, env_setup):
+        """1ターン目（approved_turns=0）でメタタグなし → approve（猶予）"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(text="response without meta tag"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"]
+        )
+        assert result["decision"] == "approve"
+        assert "猶予" in result["reason"]
+
+    def test_first_turn_grace_increments_approved_turns(self, env_setup):
+        """1ターン目猶予でapproveされた後、approved_turnsが1にインクリメントされる"""
+        state_dir = Path(env_setup["state_dir"])
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(text="response without meta tag"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"]
+        )
+        assert result["decision"] == "approve"
+
+        # approved_turns が 1 にインクリメントされている
+        turns_file = state_dir / "approved_turns_test-session"
+        assert turns_file.exists()
+        assert turns_file.read_text().strip() == "1"
 
 
 class TestMetaTagApproves:
@@ -521,8 +567,8 @@ class TestLastAssistantMessage:
 class TestActivityCheckinBlock:
     """activity check-in チェック"""
 
-    def test_no_checkin_after_3_turns_blocks(self, env_setup):
-        """3ターン目でcheck-in未呼出 → block"""
+    def test_no_checkin_after_defer_turns_blocks(self, env_setup):
+        """猶予期間後（approved_turns=2）でcheck-in未呼出 → block"""
         state_dir = Path(env_setup["state_dir"])
         # approved_turns を 2 にセット（3ターン目）
         turns_file = state_dir / "approved_turns_test-session"
@@ -608,14 +654,33 @@ class TestActivityCheckinBlock:
         )
         assert result["decision"] == "approve"
 
-    def test_before_2_turns_no_block(self, env_setup):
-        """1ターン目ではblockしない（approved_turns=0）"""
+    def test_before_defer_turns_no_block(self, env_setup):
+        """猶予期間中（approved_turns=0）ではblockしない"""
         state_dir = Path(env_setup["state_dir"])
         turns_file = state_dir / "approved_turns_test-session"
         turns_file.write_text("0")
         context_file = state_dir / "context_retrieved_test-session"
         context_file.write_text("1")
-        # check-in未呼出だが、まだ2ターン目未満
+        # check-in未呼出だが、まだ猶予期間中
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+        ], transcript)
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_checkin_grace_at_turn_1(self, env_setup):
+        """猶予期間中（approved_turns=1）でもblockしない"""
+        state_dir = Path(env_setup["state_dir"])
+        turns_file = state_dir / "approved_turns_test-session"
+        turns_file.write_text("1")
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+        # check-in未呼出だが、まだ猶予期間中（< _CHECKIN_DEFER_TURNS=2）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript([
             _make_user_entry("hi"),
