@@ -226,11 +226,19 @@ def _fts_search(
     tag_ids: Optional[list[int]],
     type_filter: Optional[str],
     limit: int,
+    keyword_mode: str = "and",
 ) -> list[dict]:
     """FTS5検索。結果はBM25ランク順のリスト。"""
-    # 各キーワードをエスケープして AND 結合
-    escaped_parts = [_escape_fts5_query(kw) for kw in keywords]
-    escaped_keyword = " AND ".join(escaped_parts)
+    # OR時: 3文字以上のキーワードだけでFTS5クエリを組む（2文字はフィルタ除外）
+    if keyword_mode == "or":
+        fts_keywords = [kw for kw in keywords if len(kw) >= 3]
+        if not fts_keywords:
+            return []
+        escaped_parts = [_escape_fts5_query(kw) for kw in fts_keywords]
+        escaped_keyword = " OR ".join(escaped_parts)
+    else:
+        escaped_parts = [_escape_fts5_query(kw) for kw in keywords]
+        escaped_keyword = " AND ".join(escaped_parts)
 
     if tag_ids:
         cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
@@ -281,74 +289,142 @@ def _vector_search(
     tag_ids: Optional[list[int]],
     type_filter: Optional[str],
     limit: int,
+    keyword_mode: str = "and",
 ) -> Optional[list[dict]]:
     """ベクトル検索。ベクトル検索無効時はNoneを返す。"""
     try:
-        # 配列をスペースで結合して1つのembeddingを生成
-        combined_keyword = " ".join(keywords)
-        query_embedding = embedding_service.encode_query(combined_keyword)
-        if query_embedding is None:
-            return None
+        if keyword_mode == "or" and len(keywords) > 1:
+            # OR時: 各キーワードで個別にベクトル検索し、結果をマージ
+            merged: dict[tuple, dict] = {}  # key: (type, id)
+            for kw in keywords:
+                query_embedding = embedding_service.encode_query(kw)
+                if query_embedding is None:
+                    continue
 
-        blob = serialize_float32(query_embedding)
+                blob = serialize_float32(query_embedding)
+                vec_rows = execute_query(
+                    "SELECT rowid, distance FROM vec_index WHERE embedding MATCH ? AND k = ?",
+                    (blob, limit),
+                )
+                if not vec_rows:
+                    continue
 
-        # vec_indexからKNN取得（タグフィルタ不可なので多めに取得）
-        # limitはsearch()側でlimit*5に拡大済み
-        vec_rows = execute_query(
-            "SELECT rowid, distance FROM vec_index WHERE embedding MATCH ? AND k = ?",
-            (blob, limit),
-        )
+                vec_data = {}
+                for row in vec_rows:
+                    r = row_to_dict(row)
+                    vec_data[r["rowid"]] = r["distance"]
 
-        if not vec_rows:
-            return []
+                rowids = list(vec_data.keys())
+                rowid_placeholders = ",".join("?" * len(rowids))
 
-        vec_data = {}
-        for row in vec_rows:
-            r = row_to_dict(row)
-            vec_data[r["rowid"]] = r["distance"]
+                if tag_ids:
+                    cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
+                    query = f"""
+                    {cte_sql}
+                    SELECT id, source_type, source_id, title
+                    FROM search_index
+                    WHERE id IN ({rowid_placeholders})
+                      AND (? IS NULL OR source_type = ?)
+                      AND EXISTS (
+                        SELECT 1 FROM tag_filtered tf
+                        WHERE tf.source_type = search_index.source_type
+                          AND tf.source_id = search_index.source_id
+                      )
+                    """
+                    params = (*cte_params, *rowids, type_filter, type_filter)
+                else:
+                    query = f"""
+                    SELECT id, source_type, source_id, title
+                    FROM search_index
+                    WHERE id IN ({rowid_placeholders})
+                      AND (? IS NULL OR source_type = ?)
+                    """
+                    params = (*rowids, type_filter, type_filter)
 
-        rowids = list(vec_data.keys())
-        rowid_placeholders = ",".join("?" * len(rowids))
+                filter_rows = execute_query(query, params)
+                for row in filter_rows:
+                    r = row_to_dict(row)
+                    key = (r["source_type"], r["source_id"])
+                    distance = vec_data[r["id"]]
+                    if key not in merged or distance < merged[key]["distance"]:
+                        merged[key] = {
+                            "type": r["source_type"],
+                            "id": r["source_id"],
+                            "title": r["title"],
+                            "distance": distance,
+                        }
 
-        if tag_ids:
-            cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
-            query = f"""
-            {cte_sql}
-            SELECT id, source_type, source_id, title
-            FROM search_index
-            WHERE id IN ({rowid_placeholders})
-              AND (? IS NULL OR source_type = ?)
-              AND EXISTS (
-                SELECT 1 FROM tag_filtered tf
-                WHERE tf.source_type = search_index.source_type
-                  AND tf.source_id = search_index.source_id
-              )
-            """
-            params = (*cte_params, *rowids, type_filter, type_filter)
+            if not merged:
+                return None
+            results = list(merged.values())
+            results.sort(key=lambda x: x["distance"])
+            return results
         else:
-            query = f"""
-            SELECT id, source_type, source_id, title
-            FROM search_index
-            WHERE id IN ({rowid_placeholders})
-              AND (? IS NULL OR source_type = ?)
-            """
-            params = (*rowids, type_filter, type_filter)
+            # AND時: 従来通り（スペース結合して1 embedding）
+            combined_keyword = " ".join(keywords)
+            query_embedding = embedding_service.encode_query(combined_keyword)
+            if query_embedding is None:
+                return None
 
-        filter_rows = execute_query(query, params)
+            blob = serialize_float32(query_embedding)
 
-        results = []
-        for row in filter_rows:
-            r = row_to_dict(row)
-            results.append({
-                "type": r["source_type"],
-                "id": r["source_id"],
-                "title": r["title"],
-                "distance": vec_data[r["id"]],
-            })
+            # vec_indexからKNN取得（タグフィルタ不可なので多めに取得）
+            # limitはsearch()側でlimit*5に拡大済み
+            vec_rows = execute_query(
+                "SELECT rowid, distance FROM vec_index WHERE embedding MATCH ? AND k = ?",
+                (blob, limit),
+            )
 
-        # distance順でソート（小さいほど類似度が高い）
-        results.sort(key=lambda x: x["distance"])
-        return results[:limit]
+            if not vec_rows:
+                return []
+
+            vec_data = {}
+            for row in vec_rows:
+                r = row_to_dict(row)
+                vec_data[r["rowid"]] = r["distance"]
+
+            rowids = list(vec_data.keys())
+            rowid_placeholders = ",".join("?" * len(rowids))
+
+            if tag_ids:
+                cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
+                query = f"""
+                {cte_sql}
+                SELECT id, source_type, source_id, title
+                FROM search_index
+                WHERE id IN ({rowid_placeholders})
+                  AND (? IS NULL OR source_type = ?)
+                  AND EXISTS (
+                    SELECT 1 FROM tag_filtered tf
+                    WHERE tf.source_type = search_index.source_type
+                      AND tf.source_id = search_index.source_id
+                  )
+                """
+                params = (*cte_params, *rowids, type_filter, type_filter)
+            else:
+                query = f"""
+                SELECT id, source_type, source_id, title
+                FROM search_index
+                WHERE id IN ({rowid_placeholders})
+                  AND (? IS NULL OR source_type = ?)
+                """
+                params = (*rowids, type_filter, type_filter)
+
+            filter_rows = execute_query(query, params)
+
+            results = []
+            for row in filter_rows:
+                r = row_to_dict(row)
+                results.append({
+                    "type": r["source_type"],
+                    "id": r["source_id"],
+                    "title": r["title"],
+                    "distance": vec_data[r["id"]],
+                })
+
+            # distance順でソート（小さいほど類似度が高い）
+            results.sort(key=lambda x: x["distance"])
+            return results[:limit]
 
     except (ValueError, RuntimeError, OSError):
         logger.warning("Vector search failed, falling back to FTS-only", exc_info=True)
@@ -437,6 +513,7 @@ def search(
     tags: Optional[list[str]] = None,
     type_filter: Optional[str] = None,
     limit: int = 10,
+    keyword_mode: str = "and",
 ) -> dict:
     """
     キーワードで横断検索する。
@@ -444,6 +521,7 @@ def search(
     FTS5 trigramとベクトル検索のハイブリッド。RRFスコアで統合・ランキング。
     2文字以上のキーワードを指定する。
     配列で複数キーワードを渡すとAND検索（すべてを含む結果のみ返す）。
+    keyword_mode="or"でOR検索（いずれかを含む結果を返す）。
     3文字以上: FTS5 + ベクトル検索のハイブリッド。
     2文字: ベクトル検索のみ（ベクトル検索無効時はエラー）。
     tagsでフィルタリング可能（AND結合）。未指定で全件検索。
@@ -454,12 +532,22 @@ def search(
         tags: タグフィルタ（AND条件。未指定=全件検索）
         type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
+        keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
 
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
         snippetは各typeの対応するソースカラムの先頭200文字。
         tagsはエンティティに紐づくタグ文字列のリスト。
     """
+    # keyword_modeバリデーション
+    if keyword_mode not in ("and", "or"):
+        return {
+            "error": {
+                "code": "INVALID_KEYWORD_MODE",
+                "message": f"Invalid keyword_mode: {keyword_mode}. Must be 'and' or 'or'"
+            }
+        }
+
     # 正規化: str → list[str]
     if isinstance(keyword, str):
         keywords = [keyword.strip()]
@@ -504,24 +592,42 @@ def search(
                 tag_ids = _resolve_tag_ids_readonly(conn, tags)
                 # 指定タグの一部でもDBに存在しない場合、ANDフィルタは必ず空結果
                 if len(tag_ids) < len(tags):
-                    return {"results": [], "total_count": 0}
+                    return {"results": [], "total_count": 0, "search_methods_used": []}
             finally:
                 conn.close()
 
         # RRFで両ソースをマージした後にlimitで切るため、各ソースからlimitより多めに取得する
         fetch_limit = limit * 5
 
-        # FTS5検索: 全キーワードが3文字以上の場合のみ
+        # 使用された検索手法を追跡
+        methods_used: list[str] = []
+
+        # FTS5検索判定
         min_len = min(len(kw) for kw in keywords)
         fts_results = []
-        if min_len >= 3:
-            fts_results = _fts_search(keywords, tag_ids, type_filter, fetch_limit)
+        if keyword_mode == "or":
+            # OR時: 3文字以上のキーワードが1つでもあればFTSを使う
+            if any(len(kw) >= 3 for kw in keywords):
+                fts_results = _fts_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+                methods_used.append("fts5")
+        else:
+            # AND時（現行通り）: 全キーワードが3文字以上の場合のみ
+            if min_len >= 3:
+                fts_results = _fts_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+                methods_used.append("fts5")
 
         # ベクトル検索
-        vec_results = _vector_search(keywords, tag_ids, type_filter, fetch_limit)
+        vec_results = _vector_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+        if vec_results is not None:
+            methods_used.append("vector")
 
         # 2文字キーワード + ベクトル検索無効 → エラー
-        if min_len < 3 and vec_results is None:
+        # OR時: 3文字以上が1つでもあればFTSで検索できるのでエラーにしない
+        fts_available = (
+            any(len(kw) >= 3 for kw in keywords) if keyword_mode == "or"
+            else min_len >= 3
+        )
+        if not fts_available and vec_results is None:
             return {
                 "error": {
                     "code": "KEYWORD_TOO_SHORT",
@@ -541,7 +647,11 @@ def search(
         _attach_snippets(results)
         _attach_tags(results)
 
-        return {"results": results, "total_count": len(results)}
+        return {
+            "results": results,
+            "total_count": len(results),
+            "search_methods_used": methods_used,
+        }
 
     except Exception as e:
         return {

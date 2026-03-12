@@ -48,12 +48,14 @@ def test_search_basic(temp_db):
 
 
 def test_search_response_format(temp_db):
-    """レスポンス形式: results配列とtotal_count"""
+    """レスポンス形式: results配列とtotal_countとsearch_methods_used"""
     add_topic(title="レスポンス形式検索テスト", description="テスト用", tags=DEFAULT_TAGS)
     result = search_service.search(keyword="レスポンス形式検索テスト")
     assert "error" not in result
     assert "results" in result
     assert "total_count" in result
+    assert "search_methods_used" in result
+    assert isinstance(result["search_methods_used"], list)
     assert isinstance(result["results"], list)
     if result["results"]:
         item = result["results"][0]
@@ -378,8 +380,8 @@ def test_search_log_title_fallback(temp_db):
     assert item["data"]["title"] == "フォールバックテスト"
 
 
-def test_add_log_empty_title_error(temp_db):
-    """バリデーション: title空文字でadd_logするとバリデーションエラー"""
+def test_add_log_empty_title_auto_generates_from_content(temp_db):
+    """title空文字でcontentありの場合、contentの先頭行からtitleを自動生成する"""
     topic = add_topic(
         title="バリデーションテスト用トピック",
         description="テスト用",
@@ -389,12 +391,11 @@ def test_add_log_empty_title_error(temp_db):
     result = add_log_entry(
         topic_id=topic["topic_id"],
         title="",
-        content="内容があってもtitleが空ならエラー",
+        content="内容があればtitleが自動生成される",
     )
 
-    assert "error" in result
-    assert result["error"]["code"] == "VALIDATION_ERROR"
-    assert "title must not be empty" in result["error"]["message"]
+    assert "error" not in result
+    assert result["title"] == "内容があればtitleが自動生成される"
 
 
 # ========================================
@@ -598,6 +599,91 @@ def test_search_keyword_array_with_2char_fts_skipped(temp_db):
 
 
 # ========================================
+# keyword配列（OR検索）のテスト
+# ========================================
+
+
+def test_search_keyword_or_basic(temp_db):
+    """OR検索: いずれかのキーワードを含む結果を返す"""
+    add_topic(title="OR検索テスト用メモリ管理", description="メモリの説明", tags=DEFAULT_TAGS)
+    add_topic(title="OR検索テスト用検索機能", description="検索の説明", tags=DEFAULT_TAGS)
+    add_topic(title="OR検索テスト無関係トピック", description="無関係", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword=["OR検索テスト用メモリ管理", "OR検索テスト用検索機能"], keyword_mode="or")
+    assert "error" not in result
+    assert len(result["results"]) >= 2
+    titles = [r["title"] for r in result["results"]]
+    assert any("メモリ管理" in t for t in titles)
+    assert any("検索機能" in t for t in titles)
+
+
+def test_search_keyword_or_single_keyword(temp_db):
+    """OR検索: 単一キーワードではANDと同じ挙動"""
+    add_topic(title="OR単一キーワードテスト", description="テスト", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword=["OR単一キーワードテスト"], keyword_mode="or")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+
+
+def test_search_keyword_or_string_keyword(temp_db):
+    """OR検索: 文字列keywordでも動作（単一キーワード扱い）"""
+    add_topic(title="OR文字列キーワードテスト", description="テスト", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword="OR文字列キーワードテスト", keyword_mode="or")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+
+
+def test_search_keyword_or_with_type_filter(temp_db):
+    """OR検索: type_filterとの組み合わせ"""
+    topic = add_topic(title="ORフィルタテスト用トピック", description="テスト", tags=DEFAULT_TAGS)
+    add_decision(topic_id=topic["topic_id"], decision="ORフィルタテスト用決定", reason="テスト")
+    result = search_service.search(keyword=["ORフィルタテスト用トピック", "ORフィルタテスト用決定"], keyword_mode="or", type_filter="topic")
+    assert "error" not in result
+    for item in result["results"]:
+        assert item["type"] == "topic"
+
+
+def test_search_keyword_or_with_tags(temp_db):
+    """OR検索: タグフィルタとの組み合わせ"""
+    add_topic(title="ORタグテスト対象トピック", description="テスト", tags=["domain:test", "intent:design"])
+    add_topic(title="ORタグテスト対象外トピック", description="テスト", tags=["domain:other"])
+    result = search_service.search(keyword=["ORタグテスト対象トピック", "ORタグテスト対象外トピック"], keyword_mode="or", tags=["domain:test"])
+    assert "error" not in result
+    titles = [r["title"] for r in result["results"]]
+    assert any("対象トピック" in t for t in titles)
+    assert all("対象外トピック" not in t for t in titles)
+
+
+def test_search_invalid_keyword_mode(temp_db):
+    """不正なkeyword_modeでエラー"""
+    result = search_service.search(keyword="テスト", keyword_mode="invalid")
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_KEYWORD_MODE"
+
+
+def test_search_keyword_or_default_is_and(temp_db):
+    """keyword_modeのデフォルトはand"""
+    add_topic(title="デフォルトモード検索テスト", description="検索テスト説明", tags=DEFAULT_TAGS)
+    add_topic(title="デフォルトモード設計ドキュメント", description="設計の詳細", tags=DEFAULT_TAGS)
+    # デフォルト(AND)検索: 両方含む結果のみ
+    result_and = search_service.search(keyword=["デフォルトモード検索テスト", "デフォルトモード設計ドキュメント"])
+    assert "error" not in result_and
+    # OR検索: いずれかを含む結果
+    result_or = search_service.search(keyword=["デフォルトモード検索テスト", "デフォルトモード設計ドキュメント"], keyword_mode="or")
+    assert "error" not in result_or
+    # デフォルト(AND)はORより結果が少ない（2つのキーワードは互いを含まない）
+    assert len(result_and["results"]) < len(result_or["results"])
+
+
+def test_search_keyword_or_2char_fts_partial(temp_db):
+    """OR検索: 2文字キーワード混在時、3文字以上のキーワードだけでFTS5検索される（ベクトル無効時）"""
+    add_topic(title="OR部分FTSテスト用長いキーワード", description="テスト", tags=DEFAULT_TAGS)
+    # "設計"(2文字) + "OR部分FTSテスト用"(9文字) → FTSは後者のみで検索、エラーにならない
+    result = search_service.search(keyword=["設計", "OR部分FTSテスト用長いキーワード"], keyword_mode="or")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+
+
+# ========================================
 # get_by_ids バッチ取得のテスト
 # ========================================
 
@@ -740,3 +826,25 @@ def test_search_tags_log_own_tags(temp_db):
     assert "domain:test" in item["tags"]
     # log固有のタグ
     assert "intent:investigate" in item["tags"]
+
+
+# ========================================
+# search_methods_used テスト
+# ========================================
+
+
+def test_search_methods_used_fts_only(temp_db):
+    """embedding無効時: FTS5のみが使われる（3文字以上キーワード）"""
+    add_topic(title="メソッド確認用トピック検索テスト", description="テスト", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword="メソッド確認用トピック検索テスト")
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["fts5"]
+
+
+def test_search_methods_used_empty_results(temp_db):
+    """結果0件でもsearch_methods_usedは返る"""
+    result = search_service.search(keyword="絶対に存在しないキーワード999999")
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["fts5"]

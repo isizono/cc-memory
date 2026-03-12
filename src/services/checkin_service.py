@@ -172,6 +172,7 @@ def check_in(activity_id: int) -> dict:
             "activity": {
                 "id": activity["id"],
                 "title": activity["title"],
+                "description": activity["description"],
                 "status": activity["status"],
                 "tags": tags,
             },

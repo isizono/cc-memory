@@ -403,6 +403,28 @@ def test_hybrid_keyword_array_2char_vec_only(temp_db, mock_embedding_model):
 
 
 # ========================================
+# keyword配列（OR検索）のテスト
+# ========================================
+
+
+def test_hybrid_keyword_or_basic(temp_db, mock_embedding_model):
+    """OR検索: ハイブリッド検索でOR動作"""
+    add_topic(title="ハイブリッドOR検索テスト対象A", description="メモリ管理の説明", tags=DEFAULT_TAGS)
+    add_topic(title="ハイブリッドOR検索テスト対象B", description="検索機能の説明", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword=["ハイブリッドOR検索テスト対象A", "ハイブリッドOR検索テスト対象B"], keyword_mode="or")
+    assert "error" not in result
+    assert len(result["results"]) >= 2
+
+
+def test_hybrid_keyword_or_2char_vec(temp_db, mock_embedding_model):
+    """OR検索: 2文字キーワード混在でもベクトル検索が補完する"""
+    add_topic(title="設計レビュー用ドキュメント", description="設計の詳細レビュー", tags=DEFAULT_TAGS)
+    result = search_service.search(keyword=["設計", "レビュー"], keyword_mode="or")
+    assert "error" not in result
+    assert "results" in result
+
+
+# ========================================
 # _apply_recency_boost 単体テスト
 # ========================================
 
@@ -574,3 +596,53 @@ def test_search_recency_boost_applied(temp_db, mock_embedding_model):
     idx_new = ids_in_order.index(t_new["topic_id"])
     idx_old = ids_in_order.index(t_old["topic_id"])
     assert idx_new < idx_old, "新しいトピックが古いトピックより上位に来るべき"
+
+
+# ========================================
+# search_methods_used テスト
+# ========================================
+
+
+def test_search_methods_used_hybrid(temp_db, mock_embedding_model):
+    """3文字以上 + ベクトル有効: fts5とvectorの両方が使われる"""
+    add_topic(
+        title="ハイブリッドメソッド確認テスト用",
+        description="FTS5とベクトルの両方が使われることを確認",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword="ハイブリッドメソッド確認テスト")
+
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["fts5", "vector"]
+
+
+def test_search_methods_used_vector_only(temp_db, mock_embedding_model):
+    """2文字キーワード + ベクトル有効: vectorのみが使われる"""
+    add_topic(
+        title="設計ドキュメント",
+        description="アーキテクチャ設計の詳細",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword="設計")
+
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["vector"]
+
+
+def test_search_methods_used_fts_only_vec_disabled(temp_db, disable_embedding):
+    """3文字以上 + ベクトル無効: fts5のみが使われる"""
+    add_topic(
+        title="認証フローメソッド確認テスト",
+        description="FTSのみで検索される",
+        tags=DEFAULT_TAGS,
+    )
+
+    result = search_service.search(keyword="認証フローメソッド確認テスト")
+
+    assert "error" not in result
+    assert "search_methods_used" in result
+    assert result["search_methods_used"] == ["fts5"]

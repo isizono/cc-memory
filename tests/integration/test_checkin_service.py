@@ -59,6 +59,7 @@ class TestCheckIn:
         assert "activity" in result
         assert result["activity"]["id"] == activity_id
         assert result["activity"]["title"] == "[作業] タグnotesカラム追加"
+        assert result["activity"]["description"] == "タグnotesカラムを追加する作業"
         assert result["activity"]["status"] == "in_progress"
         assert "tags" in result["activity"]
         assert "tag_notes" in result
