@@ -62,6 +62,8 @@ def test_search_response_format(temp_db):
         assert "title" in item
         assert "score" in item
         assert "snippet" in item
+        assert "tags" in item
+        assert isinstance(item["tags"], list)
 
 
 def test_search_bm25_ranking(temp_db):
@@ -468,6 +470,80 @@ def test_search_snippet_empty_source(temp_db):
     item = next(r for r in result["results"] if r["type"] == "topic")
     assert "snippet" in item
     assert item["snippet"] == ""
+
+
+# ========================================
+# tags テスト
+# ========================================
+
+
+def test_search_tags_topic(temp_db):
+    """search結果のtopicにtagsが含まれること"""
+    add_topic(title="タグ付きトピック検索テスト", description="テスト", tags=["domain:test", "intent:design"])
+    result = search_service.search(keyword="タグ付きトピック検索テスト")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    item = next(r for r in result["results"] if r["type"] == "topic")
+    assert "tags" in item
+    assert "domain:test" in item["tags"]
+    assert "intent:design" in item["tags"]
+
+
+def test_search_tags_decision(temp_db):
+    """search結果のdecisionにtagsが含まれること（topic継承）"""
+    topic = add_topic(title="トピック", description="テスト", tags=["domain:test", "intent:investigate"])
+    add_decision(topic_id=topic["topic_id"], decision="タグ付き決定事項検索テスト", reason="テスト理由")
+    result = search_service.search(keyword="タグ付き決定事項検索テスト")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    item = next(r for r in result["results"] if r["type"] == "decision")
+    assert "tags" in item
+    # decisionはtopicのタグを継承する
+    assert "domain:test" in item["tags"]
+    assert "intent:investigate" in item["tags"]
+
+
+def test_search_tags_activity(temp_db):
+    """search結果のactivityにtagsが含まれること"""
+    add_activity(title="タグ付きアクティビティ検索テスト", description="テスト", tags=["domain:test"])
+    result = search_service.search(keyword="タグ付きアクティビティ検索テスト")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    item = next(r for r in result["results"] if r["type"] == "activity")
+    assert "tags" in item
+    assert "domain:test" in item["tags"]
+
+
+def test_search_tags_log(temp_db):
+    """search結果のlogにtagsが含まれること（topic継承）"""
+    topic = add_topic(title="トピック", description="テスト", tags=["domain:test"])
+    add_log_entry(topic_id=topic["topic_id"], title="タグ付きログ検索テスト", content="テスト内容")
+    result = search_service.search(keyword="タグ付きログ検索テスト")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    item = next(r for r in result["results"] if r["type"] == "log")
+    assert "tags" in item
+    assert "domain:test" in item["tags"]
+
+
+def test_search_tags_cross_type(temp_db):
+    """横断検索で全typeにtagsが付与される"""
+    topic = add_topic(title="横断タグテスト用トピック", description="テスト", tags=DEFAULT_TAGS)
+    add_decision(topic_id=topic["topic_id"], decision="横断タグテスト決定", reason="テスト")
+    add_activity(title="横断タグテスト用アクティビティ", description="テスト", tags=DEFAULT_TAGS)
+    add_log_entry(topic_id=topic["topic_id"], title="横断タグテストログ", content="テスト内容")
+    result = search_service.search(keyword="横断タグテスト")
+    assert "error" not in result
+    for item in result["results"]:
+        assert "tags" in item, f"type={item['type']} にtagsフィールドがない"
+        assert isinstance(item["tags"], list)
+
+
+def test_search_tags_empty_results(temp_db):
+    """ヒットなし: tags付与でエラーにならない"""
+    result = search_service.search(keyword="絶対に存在しないタグテスト用キーワード")
+    assert "error" not in result
+    assert result["results"] == []
 
 
 # ========================================

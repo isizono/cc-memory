@@ -475,8 +475,9 @@ def search(
         limit: 取得件数上限（デフォルト10件、最大50件）
 
     Returns:
-        検索結果一覧（type, id, title, score, snippet）
+        検索結果一覧（type, id, title, score, snippet, tags）
         snippetは各typeの対応するソースカラムの先頭200文字。
+        tagsはエンティティに紐づくタグ文字列のリスト。
     """
     result = search_service.search(keyword, tags, type_filter, limit)
     if "error" not in result and tags:

@@ -9,6 +9,7 @@ from src.db import execute_query, get_connection, row_to_dict
 from src.services import embedding_service
 from src.services.tag_service import (
     get_entity_tags,
+    get_entity_tags_batch,
     get_effective_tags,
     parse_tag,
 )
@@ -88,6 +89,43 @@ def _attach_snippets(results: list[dict]) -> None:
             for item in items:
                 if not item["title"]:
                     item["title"] = snippet_map.get(item["id"], "")[:50]
+
+
+def _attach_tags(results: list[dict]) -> None:
+    """検索結果にtagsを付与する（in-place）。
+
+    typeごとに適切な方法でタグを取得する:
+    - topic/activity: get_entity_tags_batch でバッチ取得
+    - decision/log: get_effective_tags で1件ずつ取得（UNION継承のため）
+    """
+    if not results:
+        return
+
+    by_type: dict[str, list[dict]] = {}
+    for item in results:
+        by_type.setdefault(item["type"], []).append(item)
+
+    conn = get_connection()
+    try:
+        for type_name, items in by_type.items():
+            if type_name == "topic":
+                ids = [item["id"] for item in items]
+                tag_map = get_entity_tags_batch(conn, "topic_tags", "topic_id", ids)
+                for item in items:
+                    item["tags"] = tag_map.get(item["id"], [])
+            elif type_name == "activity":
+                ids = [item["id"] for item in items]
+                tag_map = get_entity_tags_batch(conn, "activity_tags", "activity_id", ids)
+                for item in items:
+                    item["tags"] = tag_map.get(item["id"], [])
+            elif type_name in ("decision", "log"):
+                for item in items:
+                    item["tags"] = get_effective_tags(conn, type_name, item["id"])
+            else:
+                for item in items:
+                    item["tags"] = []
+    finally:
+        conn.close()
 
 
 def _resolve_tag_ids_readonly(conn, tag_strings: list[str]) -> list[int]:
@@ -415,8 +453,9 @@ def search(
         limit: 取得件数上限（デフォルト10件、最大50件）
 
     Returns:
-        検索結果一覧（type, id, title, score, snippet）
+        検索結果一覧（type, id, title, score, snippet, tags）
         snippetは各typeの対応するソースカラムの先頭200文字。
+        tagsはエンティティに紐づくタグ文字列のリスト。
     """
     # 正規化: str → list[str]
     if isinstance(keyword, str):
@@ -497,6 +536,7 @@ def search(
         results = results[:limit]
 
         _attach_snippets(results)
+        _attach_tags(results)
 
         return {"results": results, "total_count": len(results)}
 
