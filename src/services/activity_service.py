@@ -218,7 +218,7 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
             activities.append({
                 "id": activity["id"],
                 "title": activity["title"],
-                "description": (activity["description"] or "")[:100],
+                "description": (activity["description"] or "")[:200],
                 "status": activity["status"],
                 "tags": tags_map.get(activity["id"], []),
                 "created_at": activity["created_at"],
