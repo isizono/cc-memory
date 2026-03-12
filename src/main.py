@@ -480,8 +480,9 @@ def search(
         keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
 
     Returns:
-        検索結果一覧（type, id, title, score, snippet）
+        検索結果一覧（type, id, title, score, snippet, tags）
         snippetは各typeの対応するソースカラムの先頭200文字。
+        tagsはエンティティに紐づくタグ文字列のリスト。
     """
     result = search_service.search(keyword, tags, type_filter, limit, keyword_mode)
     if "error" not in result and tags:
