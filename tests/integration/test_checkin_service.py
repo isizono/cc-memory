@@ -240,3 +240,65 @@ class TestCheckInTagNotes:
 
         assert "error" not in result
         assert result["tag_notes"] == []
+
+    def test_intent_tag_notes_injected_every_time(self, temp_db):
+        """intent:タグのnotesは毎回注入される（常時注入）"""
+        conn = get_connection()
+        try:
+            conn.execute(
+                "UPDATE tags SET notes = ? WHERE namespace = 'intent' AND name = 'design'",
+                ("設計の教訓",),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        activity = add_activity(
+            title="Design task",
+            description="Desc",
+            tags=["intent:design"],
+        )
+        aid = activity["activity_id"]
+
+        # 1回目
+        result1 = check_in(aid)
+        assert "error" not in result1
+        intent_notes1 = [n for n in result1["tag_notes"] if n["tag"] == "intent:design"]
+        assert len(intent_notes1) == 1
+
+        # 2回目: intent: は常時注入なので再度返る
+        result2 = check_in(aid)
+        assert "error" not in result2
+        intent_notes2 = [n for n in result2["tag_notes"] if n["tag"] == "intent:design"]
+        assert len(intent_notes2) == 1
+
+    def test_non_intent_tag_notes_injected_once(self, temp_db):
+        """intent:以外のタグのnotesはセッション初回のみ注入される"""
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO tags (namespace, name, notes) VALUES (?, ?, ?)",
+                ("domain", "once", "1回だけの教訓"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        activity = add_activity(
+            title="Domain task",
+            description="Desc",
+            tags=["domain:once"],
+        )
+        aid = activity["activity_id"]
+
+        # 1回目: 注入される
+        result1 = check_in(aid)
+        assert "error" not in result1
+        domain_notes1 = [n for n in result1["tag_notes"] if n["tag"] == "domain:once"]
+        assert len(domain_notes1) == 1
+
+        # 2回目: domain: は通常タグなので注入されない
+        result2 = check_in(aid)
+        assert "error" not in result2
+        domain_notes2 = [n for n in result2["tag_notes"] if n["tag"] == "domain:once"]
+        assert len(domain_notes2) == 0

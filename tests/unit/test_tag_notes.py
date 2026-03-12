@@ -176,13 +176,13 @@ class TestTagNotesInjection:
 
     def test_mixed_tags_with_and_without_notes(self, temp_db):
         """notes があるタグとないタグの混在"""
-        add_topic(title="Test", description="Desc", tags=["domain:test", "intent:design"])
+        add_topic(title="Test", description="Desc", tags=["domain:test", "domain:empty"])
         update_tag("domain:test", "テスト教訓")
-        # intent:design には notes を設定しない
+        # domain:empty には notes を設定しない
 
         conn = get_connection()
         try:
-            result = collect_tag_notes_for_injection(conn, ["domain:test", "intent:design"])
+            result = collect_tag_notes_for_injection(conn, ["domain:test", "domain:empty"])
             assert result is not None
             assert len(result) == 1
             assert result[0]["tag"] == "domain:test"
@@ -231,6 +231,138 @@ class TestTagNotesInjection:
         try:
             result = collect_tag_notes_for_injection(conn, ["domain:nonexistent"])
             assert result is None
+        finally:
+            conn.close()
+
+
+# ========================================
+# 常時注入（always_inject_namespaces）テスト
+# ========================================
+
+
+class TestAlwaysInjectNamespaces:
+    """always_inject_namespaces パラメータのテスト"""
+
+    def test_always_inject_returns_notes_every_time(self, temp_db):
+        """always_inject_namespaces 対象のタグは毎回 notes を返す"""
+        add_topic(title="Test", description="Desc", tags=["intent:design"])
+        update_tag("intent:design", "設計の教訓")
+
+        conn = get_connection()
+        try:
+            # 1回目
+            result1 = collect_tag_notes_for_injection(
+                conn, ["intent:design"], always_inject_namespaces=["intent"]
+            )
+            assert result1 is not None
+            assert len(result1) == 1
+            assert result1[0]["tag"] == "intent:design"
+
+            # 2回目: 通常なら None だが、always_inject なので返る
+            result2 = collect_tag_notes_for_injection(
+                conn, ["intent:design"], always_inject_namespaces=["intent"]
+            )
+            assert result2 is not None
+            assert len(result2) == 1
+            assert result2[0]["tag"] == "intent:design"
+        finally:
+            conn.close()
+
+    def test_always_inject_does_not_register_in_injected_tags(self, temp_db):
+        """always_inject 対象のタグは _injected_tags に登録されない"""
+        add_topic(title="Test", description="Desc", tags=["intent:design"])
+        update_tag("intent:design", "設計の教訓")
+
+        conn = get_connection()
+        try:
+            collect_tag_notes_for_injection(
+                conn, ["intent:design"], always_inject_namespaces=["intent"]
+            )
+            assert "intent:design" not in _injected_tags
+        finally:
+            conn.close()
+
+    def test_normal_tags_still_deduplicated(self, temp_db):
+        """always_inject_namespaces を使っても通常タグは従来通り重複防止される"""
+        add_topic(title="Test", description="Desc", tags=["domain:test", "intent:design"])
+        update_tag("domain:test", "テスト教訓")
+        update_tag("intent:design", "設計の教訓")
+
+        conn = get_connection()
+        try:
+            # 1回目: 両方返る
+            result1 = collect_tag_notes_for_injection(
+                conn, ["domain:test", "intent:design"],
+                always_inject_namespaces=["intent"],
+            )
+            assert result1 is not None
+            assert len(result1) == 2
+
+            # 2回目: domain:test は既に注入済みなので intent:design だけ
+            result2 = collect_tag_notes_for_injection(
+                conn, ["domain:test", "intent:design"],
+                always_inject_namespaces=["intent"],
+            )
+            assert result2 is not None
+            assert len(result2) == 1
+            assert result2[0]["tag"] == "intent:design"
+        finally:
+            conn.close()
+
+    def test_always_inject_no_notes_returns_none(self, temp_db):
+        """always_inject 対象でも notes がなければ None が返る"""
+        # domain:nonotes に notes を設定しない
+        add_topic(title="Test", description="Desc", tags=["domain:nonotes"])
+
+        conn = get_connection()
+        try:
+            result = collect_tag_notes_for_injection(
+                conn, ["domain:nonotes"], always_inject_namespaces=["domain"]
+            )
+            assert result is None
+        finally:
+            conn.close()
+
+    def test_always_inject_with_no_parameter(self, temp_db):
+        """always_inject_namespaces 未指定の場合、従来通りの動作"""
+        add_topic(title="Test", description="Desc", tags=["intent:design"])
+        update_tag("intent:design", "設計の教訓")
+
+        conn = get_connection()
+        try:
+            # 1回目
+            result1 = collect_tag_notes_for_injection(conn, ["intent:design"])
+            assert result1 is not None
+
+            # 2回目: 従来通り None
+            result2 = collect_tag_notes_for_injection(conn, ["intent:design"])
+            assert result2 is None
+        finally:
+            conn.close()
+
+    def test_multiple_always_inject_namespaces(self, temp_db):
+        """複数の namespace を always_inject に指定できる"""
+        add_topic(title="Test", description="Desc", tags=["intent:design", "domain:test"])
+        update_tag("intent:design", "設計の教訓")
+        update_tag("domain:test", "テスト教訓")
+
+        conn = get_connection()
+        try:
+            # 1回目
+            result1 = collect_tag_notes_for_injection(
+                conn, ["intent:design", "domain:test"],
+                always_inject_namespaces=["intent", "domain"],
+            )
+            assert result1 is not None
+            assert len(result1) == 2
+
+            # 2回目: 両方 always なので両方返る
+            result2 = collect_tag_notes_for_injection(
+                conn, ["intent:design", "domain:test"],
+                always_inject_namespaces=["intent", "domain"],
+            )
+            assert result2 is not None
+            assert len(result2) == 2
         finally:
             conn.close()
 

@@ -346,7 +346,12 @@ def build_instructions() -> str:
 
 
 def _maybe_inject_tag_notes(result: dict, tag_strings: list[str]) -> dict:
-    """結果dictにtag_notesを注入する（notes があれば）"""
+    """結果dictにtag_notesを注入する（notes があれば）
+
+    Note: always_inject_namespacesは渡さない（意図的）。
+    intent:タグがこの経路で_injected_tagsに登録されるが、
+    check_in経路はalways_inject_namespacesで常時注入が保証されるため問題ない。
+    """
     conn = get_connection()
     try:
         notes = collect_tag_notes_for_injection(conn, tag_strings)

@@ -571,26 +571,51 @@ def update_tag(tag: str, notes: str) -> dict:
 _injected_tags: set[str] = set()
 
 
-def collect_tag_notes_for_injection(conn: sqlite3.Connection, tag_strings: list[str]) -> list[dict] | None:
+def collect_tag_notes_for_injection(
+    conn: sqlite3.Connection,
+    tag_strings: list[str],
+    always_inject_namespaces: list[str] | None = None,
+) -> list[dict] | None:
     """未注入タグの notes を収集し、注入済みとしてマークする。
 
     Args:
         conn: DB接続
         tag_strings: タグ文字列リスト（例: ["domain:cc-memory", "intent:design"]）
+        always_inject_namespaces: 常時注入するnamespaceのリスト（例: ["intent"]）。
+            このnamespaceに属するタグは _injected_tags チェックをスキップし、
+            毎回 notes を返す。_injected_tags には登録しない。
 
     Returns:
         notes があるタグの一覧。なければ None
         [{"tag": "domain:cc-memory", "notes": "..."}, ...]
     """
-    new_tags = [t for t in tag_strings if t not in _injected_tags]
-    if not new_tags:
+    always_ns = set(always_inject_namespaces) if always_inject_namespaces else set()
+
+    # always_inject対象とそれ以外を分離（パース結果も保持）
+    always_parsed = []
+    normal_tags = []
+    normal_parsed = []
+    for t in tag_strings:
+        ns, name = parse_tag(t)
+        if ns in always_ns:
+            always_parsed.append((ns, name))
+        else:
+            normal_tags.append(t)
+            normal_parsed.append((ns, name))
+
+    # 通常タグ: 未注入のもののみ
+    new_normal = [
+        (t, p) for t, p in zip(normal_tags, normal_parsed)
+        if t not in _injected_tags
+    ]
+
+    # 通常タグをすべてマーク（notes の有無に関わらず）
+    _injected_tags.update(t for t, _ in new_normal)
+
+    # クエリ対象: new_normal + always（always_tagsは毎回クエリ）
+    parsed = [p for _, p in new_normal] + always_parsed
+    if not parsed:
         return None
-
-    # 新規遭遇タグをすべてマーク（notes の有無に関わらず）
-    _injected_tags.update(new_tags)
-
-    # notes がある分だけ取得（バッチクエリ）
-    parsed = [parse_tag(t) for t in new_tags]
     placeholders = " OR ".join(["(namespace = ? AND name = ?)"] * len(parsed))
     params = [v for pair in parsed for v in pair]
     rows = conn.execute(
