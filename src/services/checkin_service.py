@@ -50,34 +50,20 @@ def _extract_intent_tag(tags: list[str]) -> str:
     return "(未設定)"
 
 
-def _count_notes_lines(tag_notes: list[dict]) -> int:
-    """tag_notesの合計行数を数える。"""
-    total = 0
-    for note in tag_notes:
-        text = note["notes"]
-        total += text.count("\n") + 1 if text else 0
-    return total
-
-
 def _build_summary(
     activity: dict,
     tags: list[str],
-    tag_notes: list[dict],
-    materials: list[dict],
 ) -> str:
     """summary文字列を生成する。
 
     フォーマット:
         check-in: タイトル
-          notes: N件 (M行) | intent: xxx | 資材: N件
+          intent: xxx
     """
     intent = _extract_intent_tag(tags)
-    notes_count = len(tag_notes)
-    notes_lines = _count_notes_lines(tag_notes)
-    materials_count = len(materials)
 
     line1 = f"check-in: {activity['title']}"
-    line2 = f"  notes: {notes_count}件 ({notes_lines}行) | intent: {intent} | 資材: {materials_count}件"
+    line2 = f"  intent: {intent}"
 
     return f"{line1}\n{line2}"
 
@@ -165,7 +151,7 @@ def check_in(activity_id: int) -> dict:
                 activity["status"] = "in_progress"
 
         # 7. summary生成
-        summary = _build_summary(activity, tags, tag_notes, materials)
+        summary = _build_summary(activity, tags)
 
         # 戻り値組み立て
         result = {
