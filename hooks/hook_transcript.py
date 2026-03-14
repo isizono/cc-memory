@@ -126,6 +126,7 @@ def has_activity_checkin_calls(entries: list[dict]) -> bool:
 
 
 _CHECKIN_TOOL = "mcp__plugin_claude-code-memory_cc-memory__check_in"
+_ADD_ACTIVITY_TOOL = "mcp__plugin_claude-code-memory_cc-memory__add_activity"
 
 
 def extract_checkin_activity_id(entries: list[dict]) -> int | None:
@@ -148,6 +149,98 @@ def extract_checkin_activity_id(entries: list[dict]) -> int | None:
                 if aid is not None:
                     return int(aid)
 
+    return None
+
+
+def extract_last_activity_id(transcript_path: str) -> int | None:
+    """transcriptからcheck_in/add_activityのactivity_idを取得する。
+
+    check_in: tool_useのinput.activity_idから取得
+    add_activity: tool_use_idを記録し、対応するtool_resultのactivity_idから取得
+    順序通りに走査し、最後に見つかったactivity_idを返す。
+    """
+    path = Path(transcript_path).expanduser()
+    if not path.exists():
+        return None
+
+    last_activity_id = None
+    add_activity_use_ids: set[str] = set()
+
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                message = entry.get("message", {})
+                content = message.get("content", [])
+                if isinstance(content, str):
+                    continue
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+
+                    if block_type == "tool_use":
+                        name = block.get("name", "")
+                        if name == _CHECKIN_TOOL:
+                            aid = block.get("input", {}).get("activity_id")
+                            if aid is not None:
+                                try:
+                                    last_activity_id = int(aid)
+                                except (ValueError, TypeError):
+                                    pass
+                        elif name == _ADD_ACTIVITY_TOOL:
+                            use_id = block.get("id")
+                            if use_id:
+                                add_activity_use_ids.add(use_id)
+
+                    elif block_type == "tool_result":
+                        use_id = block.get("tool_use_id")
+                        if use_id not in add_activity_use_ids:
+                            continue
+                        result_content = block.get("content", "")
+                        aid = _parse_activity_id_from_result(result_content)
+                        if aid is not None:
+                            last_activity_id = aid
+
+    except Exception:
+        pass
+
+    return last_activity_id
+
+
+def _parse_activity_id_from_result(result_content) -> int | None:
+    """tool_resultのcontentからactivity_idをパースする。
+
+    contentは文字列（JSON）またはリスト（contentブロック配列）の場合がある。
+    """
+    if isinstance(result_content, str):
+        return _try_parse_activity_id(result_content)
+    if isinstance(result_content, list):
+        for item in result_content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                aid = _try_parse_activity_id(item.get("text", ""))
+                if aid is not None:
+                    return aid
+    return None
+
+
+def _try_parse_activity_id(text: str) -> int | None:
+    """JSON文字列からactivity_idを抽出する"""
+    try:
+        data = json.loads(text)
+        aid = data.get("activity_id")
+        if aid is not None:
+            return int(aid)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
     return None
 
 

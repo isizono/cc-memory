@@ -12,6 +12,7 @@ from src.services import (
     knowledge_service,
     material_service,
 )
+from src.services.activity_service import HEARTBEAT_TIMEOUT_MINUTES
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import list_tags as _list_tags, update_tag as _update_tag, collect_tag_notes_for_injection
 from src.db import execute_query, get_connection, row_to_dict
@@ -81,7 +82,7 @@ def _get_active_activities_by_tag(tag_id: int) -> list[dict]:
     rows = execute_query(
         """
         SELECT a.id, a.title, a.status,
-               CASE WHEN a.last_heartbeat_at > datetime('now', '-20 minutes') THEN 1 ELSE 0 END AS is_heartbeat_active
+               CASE WHEN a.last_heartbeat_at > datetime('now', '-' || ? || ' minutes') THEN 1 ELSE 0 END AS is_heartbeat_active
         FROM activities a
         JOIN activity_tags at ON a.id = at.activity_id
         WHERE at.tag_id = ?
@@ -89,7 +90,7 @@ def _get_active_activities_by_tag(tag_id: int) -> list[dict]:
         ORDER BY CASE a.status WHEN 'in_progress' THEN 0 ELSE 1 END,
                  a.updated_at DESC
         """,
-        (tag_id,),
+        (HEARTBEAT_TIMEOUT_MINUTES, tag_id),
     )
     result = []
     for r in rows:

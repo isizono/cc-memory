@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from hooks.hook_state import HookState
-from hooks.hook_transcript import extract_checkin_activity_id
+from hooks.hook_transcript import extract_checkin_activity_id, extract_last_activity_id
 from src.db import init_database, get_connection
 
 
@@ -60,15 +60,34 @@ class TestCheckedInActivity:
 # ========================================
 
 
-def _make_assistant_entry(tool_calls=None, text="", tool_inputs=None):
+def _make_assistant_entry(tool_calls=None, text="", tool_inputs=None, tool_ids=None):
     content = []
     if text:
         content.append({"type": "text", "text": text})
     if tool_calls:
         for i, tool in enumerate(tool_calls):
             inp = tool_inputs[i] if tool_inputs and i < len(tool_inputs) else {}
-            content.append({"type": "tool_use", "name": tool, "input": inp})
+            block = {"type": "tool_use", "name": tool, "input": inp}
+            if tool_ids and i < len(tool_ids):
+                block["id"] = tool_ids[i]
+            content.append(block)
     return {"type": "assistant", "message": {"content": content}}
+
+
+def _make_tool_result_entry(tool_use_id: str, result_data: dict):
+    """tool_resultのuserエントリを生成する"""
+    return {
+        "type": "human",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [{"type": "text", "text": json.dumps(result_data)}],
+                }
+            ]
+        },
+    }
 
 
 _CHECKIN_TOOL = "mcp__plugin_claude-code-memory_cc-memory__check_in"
@@ -153,6 +172,110 @@ class TestExtractCheckinActivityId:
             ),
         ]
         assert extract_checkin_activity_id(entries) == 55
+
+
+# ========================================
+# hook_transcript: extract_last_activity_id
+# ========================================
+
+
+def _write_transcript(tmp_path, entries: list[dict]) -> str:
+    """テスト用transcriptファイルを書き出す"""
+    path = tmp_path / "transcript.jsonl"
+    with open(path, "w") as f:
+        for entry in entries:
+            f.write(json.dumps(entry) + "\n")
+    return str(path)
+
+
+class TestExtractLastActivityId:
+    def test_check_in_tool(self, tmp_path):
+        """check_inのtool_use inputからactivity_idを取得"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{"activity_id": 42}],
+                tool_ids=["toolu_1"],
+            ),
+        ]
+        path = _write_transcript(tmp_path, entries)
+        assert extract_last_activity_id(path) == 42
+
+    def test_add_activity_tool(self, tmp_path):
+        """add_activityのtool_resultからactivity_idを取得"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_ADD_ACTIVITY_TOOL],
+                tool_inputs=[{"title": "new", "description": "d", "tags": ["domain:t"]}],
+                tool_ids=["toolu_add_1"],
+            ),
+            _make_tool_result_entry("toolu_add_1", {"activity_id": 99, "title": "new"}),
+        ]
+        path = _write_transcript(tmp_path, entries)
+        assert extract_last_activity_id(path) == 99
+
+    def test_add_activity_without_matching_result(self, tmp_path):
+        """add_activityのtool_resultがない場合はNone"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_ADD_ACTIVITY_TOOL],
+                tool_inputs=[{"title": "new", "description": "d", "tags": ["domain:t"]}],
+                tool_ids=["toolu_add_2"],
+            ),
+        ]
+        path = _write_transcript(tmp_path, entries)
+        assert extract_last_activity_id(path) is None
+
+    def test_check_in_overrides_add_activity(self, tmp_path):
+        """add_activityの後にcheck_inがあれば、check_inのactivity_idが優先"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_ADD_ACTIVITY_TOOL],
+                tool_inputs=[{"title": "a", "description": "d", "tags": ["domain:t"]}],
+                tool_ids=["toolu_add_3"],
+            ),
+            _make_tool_result_entry("toolu_add_3", {"activity_id": 10}),
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{"activity_id": 20}],
+                tool_ids=["toolu_ci_1"],
+            ),
+        ]
+        path = _write_transcript(tmp_path, entries)
+        assert extract_last_activity_id(path) == 20
+
+    def test_no_transcript_file(self, tmp_path):
+        """transcriptファイルが存在しない場合はNone"""
+        assert extract_last_activity_id(str(tmp_path / "nonexistent.jsonl")) is None
+
+    def test_empty_transcript(self, tmp_path):
+        """空のtranscriptファイルの場合はNone"""
+        path = _write_transcript(tmp_path, [])
+        assert extract_last_activity_id(path) is None
+
+    def test_result_content_as_string(self, tmp_path):
+        """tool_resultのcontentが文字列（JSON）の場合もパースできる"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_ADD_ACTIVITY_TOOL],
+                tool_inputs=[{"title": "a", "description": "d", "tags": ["domain:t"]}],
+                tool_ids=["toolu_str_1"],
+            ),
+            {
+                "type": "human",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_str_1",
+                            "content": json.dumps({"activity_id": 77}),
+                        }
+                    ]
+                },
+            },
+        ]
+        path = _write_transcript(tmp_path, entries)
+        assert extract_last_activity_id(path) == 77
 
 
 # ========================================
