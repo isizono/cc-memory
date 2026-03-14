@@ -191,8 +191,7 @@ description: "topic_id:135で議論中。ステップ4のdecision記録はその
 
 **記録先の判断（エージェント裁量）:**
 - 短い（数行）→ MEMORY.mdに直接追記
-- 中程度 → auto memoryの別ファイル（例: patterns.md）に書き、MEMORY.mdにリンク
-- 長い → `add_knowledge` で保存し、MEMORY.mdにリンク
+- 長い → auto memoryの別ファイルに書き、MEMORY.mdにリンク
 
 記録すべきものがなければ7bは空とする。
 
