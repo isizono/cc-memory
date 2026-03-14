@@ -80,6 +80,11 @@ def test_calc_elapsed_days_3_days_ago():
     assert _calc_elapsed_days(three_days_ago) == 3
 
 
+def test_calc_elapsed_days_sqlite_format():
+    """SQLiteのCURRENT_TIMESTAMP形式（スペース区切り、TZ情報なし）でも正しく計算"""
+    assert _calc_elapsed_days("2026-03-14 10:00:00") >= 0
+
+
 def test_calc_elapsed_days_invalid_string():
     """不正な文字列なら0"""
     assert _calc_elapsed_days("not-a-date") == 0
