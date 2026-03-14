@@ -191,7 +191,7 @@ class TestBuildActiveContextHeartbeat:
         assert "[作業] HB機能実装" in result
 
     def test_normal_activity_in_hot_section(self, temp_db):
-        """heartbeat非活性アクティビティは通常の「ホットアクティビティ」セクションに表示"""
+        """heartbeat非活性アクティビティは●/○マーカーで表示"""
         add_topic(title="Topic", description="Desc", tags=["domain:hb-ctx2"])
         add_activity(
             title="[作業] 通常タスク", description="Desc", tags=["domain:hb-ctx2"], check_in=False,
@@ -199,7 +199,7 @@ class TestBuildActiveContextHeartbeat:
 
         result = _build_active_context()
 
-        assert "ホットアクティビティ:" in result
+        assert "○" in result
         assert "[作業] 通常タスク" in result
         assert "作業中（別セッション）:" not in result
 
@@ -229,7 +229,7 @@ class TestBuildActiveContextHeartbeat:
         result = _build_active_context()
 
         assert "作業中（別セッション）:" in result
-        assert "ホットアクティビティ:" in result
+        assert "○" in result
         assert "[作業] HB活性" in result
         assert "[作業] 通常" in result
 
@@ -252,6 +252,6 @@ class TestBuildActiveContextHeartbeat:
 
         result = _build_active_context()
 
-        assert "ホットアクティビティ:" in result
+        assert "○" in result
         assert "作業中（別セッション）:" not in result
         assert "[作業] 期限切れHB" in result

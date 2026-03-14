@@ -1,6 +1,7 @@
 """MCPサーバーのメインエントリーポイント"""
 import logging
 import random
+from datetime import datetime, timezone
 from fastmcp import FastMCP
 from typing import Optional
 from src.services import (
@@ -19,13 +20,12 @@ from src.db import execute_query, get_connection, row_to_dict
 logger = logging.getLogger(__name__)
 
 # アクティブコンテキスト用の定数
-ACTIVE_DAYS = 7
-RECENT_TOPICS_LIMIT = 3
-DESC_MAX_LEN = 30
+IN_PROGRESS_LIMIT = 3
+PENDING_LIMIT = 2
 
 
 def _get_active_domains() -> list[dict]:
-    """直近7日でトピック更新があったdomain:タグを取得する。
+    """アクティブなアクティビティ（in_progress/pending）があるdomain:タグを取得する。
 
     Returns:
         [{"tag_id": int, "name": str}, ...]（name順ソート）
@@ -34,36 +34,12 @@ def _get_active_domains() -> list[dict]:
         """
         SELECT DISTINCT t.id AS tag_id, t.name
         FROM tags t
-        JOIN topic_tags tt ON t.id = tt.tag_id
-        JOIN discussion_topics dt ON tt.topic_id = dt.id
+        JOIN activity_tags at ON t.id = at.tag_id
+        JOIN activities a ON at.activity_id = a.id
         WHERE t.namespace = 'domain'
-          AND dt.created_at > datetime('now', ? || ' days')
+          AND a.status IN ('in_progress', 'pending')
         ORDER BY t.name
         """,
-        (f"-{ACTIVE_DAYS}",),
-    )
-    return [row_to_dict(r) for r in rows]
-
-
-def _get_recent_topics_by_tag(tag_id: int) -> list[dict]:
-    """domain:タグに紐づく最新トピック3件を取得する。
-
-    Args:
-        tag_id: タグID
-
-    Returns:
-        [{"id": int, "title": str, "description": str}, ...]（新しい順）
-    """
-    rows = execute_query(
-        """
-        SELECT dt.id, dt.title, dt.description
-        FROM discussion_topics dt
-        JOIN topic_tags tt ON dt.id = tt.topic_id
-        WHERE tt.tag_id = ?
-        ORDER BY dt.created_at DESC, dt.id DESC
-        LIMIT ?
-        """,
-        (tag_id, RECENT_TOPICS_LIMIT),
     )
     return [row_to_dict(r) for r in rows]
 
@@ -75,12 +51,12 @@ def _get_active_activities_by_tag(tag_id: int) -> list[dict]:
         tag_id: タグID
 
     Returns:
-        [{"id": int, "title": str, "status": str, "is_heartbeat_active": bool}, ...]
+        [{"id": int, "title": str, "status": str, "updated_at": str, "is_heartbeat_active": bool}, ...]
         （in_progress優先、updated_at降順）
     """
     rows = execute_query(
         """
-        SELECT a.id, a.title, a.status,
+        SELECT a.id, a.title, a.status, a.updated_at,
                CASE WHEN a.last_heartbeat_at > datetime('now', '-' || ? || ' minutes') THEN 1 ELSE 0 END AS is_heartbeat_active
         FROM activities a
         JOIN activity_tags at ON a.id = at.activity_id
@@ -99,117 +75,74 @@ def _get_active_activities_by_tag(tag_id: int) -> list[dict]:
     return result
 
 
-def _get_recent_non_domain_tags() -> list[str]:
-    """直近7日で使われたdomain:以外のタグをフラット列挙する。
-
-    topic_tags経由でトピックの作成日が直近7日のタグを取得する。
-
-    Returns:
-        ["intent:design", "intent:discuss", "hooks", ...]（使用頻度降順）
-    """
-    rows = execute_query(
-        """
-        SELECT t.namespace, t.name, COUNT(DISTINCT tt.topic_id) AS freq
-        FROM tags t
-        JOIN topic_tags tt ON t.id = tt.tag_id
-        JOIN discussion_topics dt ON tt.topic_id = dt.id
-        WHERE t.namespace != 'domain'
-          AND dt.created_at > datetime('now', ? || ' days')
-        GROUP BY t.id
-        ORDER BY freq DESC, t.name ASC
-        """,
-        (f"-{ACTIVE_DAYS}",),
-    )
-    tags = []
-    for row in rows:
-        r = row_to_dict(row)
-        ns = r["namespace"]
-        name = r["name"]
-        if ns:
-            tags.append(f"{ns}:{name}")
-        else:
-            tags.append(name)
-    return tags
-
-
-def _truncate_desc(desc: str) -> str:
-    """descriptionをDESC_MAX_LEN文字に切り詰める。"""
-    if not desc:
-        return ""
-    if len(desc) <= DESC_MAX_LEN:
-        return desc
-    return desc[:DESC_MAX_LEN] + "..."
+def _calc_elapsed_days(updated_at_str: str) -> int:
+    """updated_atからの経過日数を計算する。"""
+    try:
+        updated = datetime.fromisoformat(updated_at_str).replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return (now - updated).days
+    except (ValueError, TypeError):
+        return 0
 
 
 def _build_active_context() -> str:
     """アクティブコンテキスト文字列を組み立てる。
 
-    domain:タグごとに旧subject形式を再現（最新トピック3件 + ホットアクティビティ一覧）し、
-    末尾にdomain:以外のタグを直近7日の使用頻度でフラット列挙する。
+    domain:タグごとにホットアクティビティ（in_progress/pending）を表示する。
+    in_progress枠は上位IN_PROGRESS_LIMIT件、pending枠は上位PENDING_LIMIT件に制限し、
+    残りは(+N件)表記でまとめる。
     """
     try:
-        # domain:タグのセクション
         domains = _get_active_domains()
         domain_sections = []
 
         for domain in domains:
             tag_id = domain["tag_id"]
             name = domain["name"]
-
-            topics = _get_recent_topics_by_tag(tag_id)
             activities = _get_active_activities_by_tag(tag_id)
-
-            # トピックもアクティビティもなければスキップ
-            if not topics and not activities:
+            if not activities:
                 continue
-
-            lines = [f"## {name} (domain)"]
-
-            if topics:
-                lines.append("最新トピック:")
-                for t in topics:
-                    desc = _truncate_desc(t["description"])
-                    desc_part = f": {desc}" if desc else ""
-                    lines.append(f"- [{t['id']}] {t['title']}{desc_part}")
 
             heartbeat_activities = [a for a in activities if a.get("is_heartbeat_active")]
             normal_activities = [a for a in activities if not a.get("is_heartbeat_active")]
 
+            in_progress = [a for a in normal_activities if a["status"] == "in_progress"]
+            pending = [a for a in normal_activities if a["status"] == "pending"]
+
+            shown_ip = in_progress[:IN_PROGRESS_LIMIT]
+            shown_pending = pending[:PENDING_LIMIT]
+            overflow = len(normal_activities) - len(shown_ip) - len(shown_pending)
+
+            lines = [f"## {name} (domain)"]
+
             if heartbeat_activities:
                 lines.append("作業中（別セッション）:")
-                for t in heartbeat_activities:
-                    lines.append(f"- [{t['id']}] {t['title']} ({t['status']})")
+                for a in heartbeat_activities:
+                    days = _calc_elapsed_days(a["updated_at"])
+                    lines.append(f"- [{a['id']}] {a['title']} ({days}d)")
 
-            if normal_activities:
-                lines.append("ホットアクティビティ:")
-                for t in normal_activities:
-                    lines.append(f"- [{t['id']}] {t['title']} ({t['status']})")
+            for a in shown_ip:
+                days = _calc_elapsed_days(a["updated_at"])
+                lines.append(f"\u25cf [{a['id']}] {a['title']} ({days}d)")
+            for a in shown_pending:
+                days = _calc_elapsed_days(a["updated_at"])
+                lines.append(f"\u25cb [{a['id']}] {a['title']} ({days}d)")
+
+            if overflow > 0:
+                lines.append(f"  (+{overflow}件)")
 
             domain_sections.append("\n".join(lines))
 
-        # domain:以外のタグセクション
-        non_domain_tags = _get_recent_non_domain_tags()
-
-        # 何も表示するものがなければ空文字列
-        if not domain_sections and not non_domain_tags:
+        if not domain_sections:
             return ""
 
-        # 組み立て
         parts = ["# アクティブコンテキスト", ""]
-        if domain_sections:
-            parts.append(domain_sections[0])
-            for section in domain_sections[1:]:
-                parts.append("")
-                parts.append(section)
-
-        if non_domain_tags:
-            if domain_sections:
-                parts.append("")
-            parts.append("## 最近使われたタグ")
-            parts.append(", ".join(non_domain_tags))
+        parts.append(domain_sections[0])
+        for section in domain_sections[1:]:
+            parts.append("")
+            parts.append(section)
 
         return "\n".join(parts) + "\n"
-
     except Exception:
         logger.exception("Failed to build active context")
         return ""

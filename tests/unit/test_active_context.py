@@ -1,6 +1,9 @@
 """_build_active_context および関連ヘルパー関数のユニットテスト"""
 import os
 import tempfile
+from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
+
 import pytest
 from src.db import init_database, get_connection
 from src.services.topic_service import add_topic
@@ -9,13 +12,10 @@ import src.services.embedding_service as emb
 from src.main import (
     _build_active_context,
     _get_active_domains,
-    _get_recent_topics_by_tag,
     _get_active_activities_by_tag,
-    _get_recent_non_domain_tags,
-    _truncate_desc,
-    ACTIVE_DAYS,
-    RECENT_TOPICS_LIMIT,
-    DESC_MAX_LEN,
+    _calc_elapsed_days,
+    IN_PROGRESS_LIMIT,
+    PENDING_LIMIT,
 )
 
 
@@ -58,42 +58,46 @@ def _get_tag_id(namespace: str, name: str) -> int:
 
 
 def test_constants():
-    """定数値が旧実装と同じ"""
-    assert ACTIVE_DAYS == 7
-    assert RECENT_TOPICS_LIMIT == 3
-    assert DESC_MAX_LEN == 30
+    """定数値が仕様通り"""
+    assert IN_PROGRESS_LIMIT == 3
+    assert PENDING_LIMIT == 2
 
 
 # ========================================
-# _truncate_desc のテスト
+# _calc_elapsed_days のテスト
 # ========================================
 
 
-def test_truncate_desc_short():
-    """30文字以下はそのまま"""
-    assert _truncate_desc("短い説明") == "短い説明"
+def test_calc_elapsed_days_today():
+    """本日更新なら0日"""
+    now = datetime.now(timezone.utc).isoformat()
+    assert _calc_elapsed_days(now) == 0
 
 
-def test_truncate_desc_exact():
-    """ちょうど30文字はそのまま"""
-    text = "a" * 30
-    assert _truncate_desc(text) == text
+def test_calc_elapsed_days_3_days_ago():
+    """3日前なら3"""
+    three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    assert _calc_elapsed_days(three_days_ago) == 3
 
 
-def test_truncate_desc_long():
-    """31文字以上は切り詰め+..."""
-    text = "a" * 31
-    assert _truncate_desc(text) == "a" * 30 + "..."
+def test_calc_elapsed_days_sqlite_format():
+    """SQLiteのCURRENT_TIMESTAMP形式（スペース区切り、TZ情報なし）でも正しく計算"""
+    assert _calc_elapsed_days("2026-03-14 10:00:00") >= 0
 
 
-def test_truncate_desc_empty():
-    """空文字列"""
-    assert _truncate_desc("") == ""
+def test_calc_elapsed_days_invalid_string():
+    """不正な文字列なら0"""
+    assert _calc_elapsed_days("not-a-date") == 0
 
 
-def test_truncate_desc_none():
-    """None"""
-    assert _truncate_desc(None) == ""
+def test_calc_elapsed_days_none():
+    """Noneなら0"""
+    assert _calc_elapsed_days(None) == 0
+
+
+def test_calc_elapsed_days_empty():
+    """空文字列なら0"""
+    assert _calc_elapsed_days("") == 0
 
 
 # ========================================
@@ -101,18 +105,37 @@ def test_truncate_desc_none():
 # ========================================
 
 
-def test_get_active_domains_basic(temp_db):
-    """domain:タグのあるトピックがあれば返る"""
-    add_topic(title="Topic 1", description="Desc", tags=["domain:myproject"])
+def test_get_active_domains_with_active_activity(temp_db):
+    """アクティブなアクティビティがあるdomainが返る"""
+    add_activity(
+        title="Activity 1", description="Desc",
+        tags=["domain:myproject"], check_in=False,
+    )
 
     domains = _get_active_domains()
     names = [d["name"] for d in domains]
     assert "myproject" in names
 
 
+def test_get_active_domains_excludes_completed(temp_db):
+    """completedアクティビティのみのdomainは返らない"""
+    result = add_activity(
+        title="Done", description="Desc",
+        tags=["domain:completed-proj"], check_in=False,
+    )
+    update_activity(result["activity_id"], new_status="completed")
+
+    domains = _get_active_domains()
+    names = [d["name"] for d in domains]
+    assert "completed-proj" not in names
+
+
 def test_get_active_domains_excludes_non_domain(temp_db):
     """domain以外のnamespaceは返らない"""
-    add_topic(title="Topic 1", description="Desc", tags=["intent:design"])
+    add_activity(
+        title="Activity 1", description="Desc",
+        tags=["intent:design"], check_in=False,
+    )
 
     domains = _get_active_domains()
     names = [d["name"] for d in domains]
@@ -121,108 +144,33 @@ def test_get_active_domains_excludes_non_domain(temp_db):
 
 def test_get_active_domains_sorted_by_name(temp_db):
     """name順ソート"""
-    add_topic(title="Topic Z", description="Desc", tags=["domain:zzz"])
-    add_topic(title="Topic A", description="Desc", tags=["domain:aaa"])
+    add_activity(title="Z", description="Desc", tags=["domain:zzz"], check_in=False)
+    add_activity(title="A", description="Desc", tags=["domain:aaa"], check_in=False)
 
     domains = _get_active_domains()
-    # defaultも含む可能性があるのでフィルタ
     names = [d["name"] for d in domains]
     aaa_idx = names.index("aaa")
     zzz_idx = names.index("zzz")
     assert aaa_idx < zzz_idx
 
 
-def test_get_active_domains_excludes_old_topics(temp_db):
-    """7日以上前のトピックのdomain:タグは返らない"""
-    # 古いトピックを直接INSERTする
-    conn = get_connection()
-    try:
-        conn.execute(
-            "INSERT INTO discussion_topics (title, description, created_at) "
-            "VALUES (?, ?, datetime('now', '-8 days'))",
-            ("Old Topic", "Desc"),
-        )
-        topic_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        from src.services.tag_service import ensure_tag_ids, link_tags
-        tag_ids = ensure_tag_ids(conn, [("domain", "old-project")])
-        link_tags(conn, "topic_tags", "topic_id", topic_id, tag_ids)
-
-        conn.commit()
-    finally:
-        conn.close()
-
-    domains = _get_active_domains()
-    names = [d["name"] for d in domains]
-    assert "old-project" not in names
-
-
 def test_get_active_domains_deduplicates(temp_db):
-    """同じdomain:タグを持つ複数トピックで重複しない"""
-    add_topic(title="Topic 1", description="Desc 1", tags=["domain:myproject"])
-    add_topic(title="Topic 2", description="Desc 2", tags=["domain:myproject"])
+    """同じdomain:タグを持つ複数アクティビティで重複しない"""
+    add_activity(title="A1", description="Desc", tags=["domain:myproject"], check_in=False)
+    add_activity(title="A2", description="Desc", tags=["domain:myproject"], check_in=False)
 
     domains = _get_active_domains()
     myproject_domains = [d for d in domains if d["name"] == "myproject"]
     assert len(myproject_domains) == 1
 
 
-# ========================================
-# _get_recent_topics_by_tag のテスト
-# ========================================
+def test_get_active_domains_no_activities(temp_db):
+    """アクティビティがないdomainは返らない（トピックだけでは返らない）"""
+    add_topic(title="Topic Only", description="Desc", tags=["domain:topic-only-proj"])
 
-
-def test_get_recent_topics_by_tag_basic(temp_db):
-    """domain:タグに紐づくトピックが返る"""
-    add_topic(title="Topic A", description="Desc A", tags=["domain:test-proj"])
-
-    tag_id = _get_tag_id("domain", "test-proj")
-    topics = _get_recent_topics_by_tag(tag_id)
-
-    assert len(topics) >= 1
-    titles = [t["title"] for t in topics]
-    assert "Topic A" in titles
-
-
-def test_get_recent_topics_by_tag_limit(temp_db):
-    """最大RECENT_TOPICS_LIMIT件"""
-    for i in range(5):
-        add_topic(title=f"Topic {i}", description=f"Desc {i}", tags=["domain:test-proj"])
-
-    tag_id = _get_tag_id("domain", "test-proj")
-    topics = _get_recent_topics_by_tag(tag_id)
-
-    assert len(topics) == RECENT_TOPICS_LIMIT
-
-
-def test_get_recent_topics_by_tag_order(temp_db):
-    """新しい順"""
-    add_topic(title="First", description="Desc 1", tags=["domain:test-proj"])
-    add_topic(title="Second", description="Desc 2", tags=["domain:test-proj"])
-    add_topic(title="Third", description="Desc 3", tags=["domain:test-proj"])
-
-    tag_id = _get_tag_id("domain", "test-proj")
-    topics = _get_recent_topics_by_tag(tag_id)
-
-    assert topics[0]["title"] == "Third"
-    assert topics[1]["title"] == "Second"
-    assert topics[2]["title"] == "First"
-
-
-def test_get_recent_topics_by_tag_empty(temp_db):
-    """紐づくトピックがなければ空リスト"""
-    # タグだけ作成
-    conn = get_connection()
-    try:
-        from src.services.tag_service import ensure_tag_ids
-        tag_ids = ensure_tag_ids(conn, [("domain", "empty-proj")])
-        conn.commit()
-    finally:
-        conn.close()
-
-    tag_id = _get_tag_id("domain", "empty-proj")
-    topics = _get_recent_topics_by_tag(tag_id)
-    assert topics == []
+    domains = _get_active_domains()
+    names = [d["name"] for d in domains]
+    assert "topic-only-proj" not in names
 
 
 # ========================================
@@ -240,6 +188,17 @@ def test_get_active_activities_by_tag_basic(temp_db):
     assert len(activities) == 1
     assert activities[0]["title"] == "Activity 1"
     assert activities[0]["status"] == "pending"
+
+
+def test_get_active_activities_by_tag_has_updated_at(temp_db):
+    """updated_atフィールドが含まれる"""
+    add_activity(title="Activity 1", description="Desc", tags=["domain:test-proj"], check_in=False)
+
+    tag_id = _get_tag_id("domain", "test-proj")
+    activities = _get_active_activities_by_tag(tag_id)
+
+    assert "updated_at" in activities[0]
+    assert activities[0]["updated_at"] is not None
 
 
 def test_get_active_activities_by_tag_excludes_completed(temp_db):
@@ -278,134 +237,176 @@ def test_get_active_activities_by_tag_empty(temp_db):
 
 
 # ========================================
-# _get_recent_non_domain_tags のテスト
-# ========================================
-
-
-def test_get_recent_non_domain_tags_basic(temp_db):
-    """domain:以外のタグが返る"""
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "intent:design", "hooks"])
-
-    tags = _get_recent_non_domain_tags()
-    assert "intent:design" in tags
-    assert "hooks" in tags
-    # domain:は含まれない
-    assert "domain:test" not in tags
-
-
-def test_get_recent_non_domain_tags_frequency_order(temp_db):
-    """使用頻度降順"""
-    # intent:designを2回使用、intent:discussを1回使用
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test", "intent:design"])
-    add_topic(title="Topic 2", description="Desc", tags=["domain:test", "intent:design"])
-    add_topic(title="Topic 3", description="Desc", tags=["domain:test", "intent:discuss"])
-
-    tags = _get_recent_non_domain_tags()
-    design_idx = tags.index("intent:design")
-    discuss_idx = tags.index("intent:discuss")
-    assert design_idx < discuss_idx
-
-
-def test_get_recent_non_domain_tags_empty(temp_db):
-    """domain:タグのみの場合は空"""
-    add_topic(title="Topic 1", description="Desc", tags=["domain:test"])
-
-    tags = _get_recent_non_domain_tags()
-    assert tags == []
-
-
-def test_get_recent_non_domain_tags_excludes_old(temp_db):
-    """7日以上前のトピックのタグは返らない"""
-    conn = get_connection()
-    try:
-        conn.execute(
-            "INSERT INTO discussion_topics (title, description, created_at) "
-            "VALUES (?, ?, datetime('now', '-8 days'))",
-            ("Old Topic", "Desc"),
-        )
-        topic_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        from src.services.tag_service import ensure_tag_ids, link_tags
-        tag_ids = ensure_tag_ids(conn, [("intent", "old-intent")])
-        link_tags(conn, "topic_tags", "topic_id", topic_id, tag_ids)
-
-        conn.commit()
-    finally:
-        conn.close()
-
-    tags = _get_recent_non_domain_tags()
-    assert "intent:old-intent" not in tags
-
-
-# ========================================
 # _build_active_context のテスト
 # ========================================
 
 
 def test_build_active_context_empty(temp_db):
-    """全トピックが期限切れで非domainタグもない場合は空文字列"""
-    conn = get_connection()
-    try:
-        conn.execute("UPDATE discussion_topics SET created_at = datetime('now', '-8 days')")
-        conn.commit()
-    finally:
-        conn.close()
+    """アクティブなアクティビティがない場合は空文字列"""
     result = _build_active_context()
     assert result == ""
 
 
-def test_build_active_context_with_domain_topics(temp_db):
-    """domainトピックがある場合、セクションが生成される"""
-    add_topic(title="My Topic", description="Topic description here", tags=["domain:myapp"])
+def test_build_active_context_empty_with_only_topics(temp_db):
+    """トピックだけでアクティビティがない場合も空文字列"""
+    add_topic(title="Topic Only", description="Desc", tags=["domain:myapp"])
+
+    result = _build_active_context()
+    assert result == ""
+
+
+def test_build_active_context_with_activities(temp_db):
+    """アクティビティがある場合、domainセクションが生成される"""
+    add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
 
     result = _build_active_context()
 
     assert "# アクティブコンテキスト" in result
     assert "## myapp (domain)" in result
-    assert "最新トピック:" in result
-    assert "My Topic" in result
+    assert "[作業] 実装する" in result
 
 
-def test_build_active_context_with_activities(temp_db):
-    """アクティビティがある場合、ホットアクティビティセクションが生成される"""
-    add_topic(title="Topic", description="Desc", tags=["domain:myapp"])
+def test_build_active_context_status_marker_pending(temp_db):
+    """pendingアクティビティに○マーカーが付く"""
     add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
 
     result = _build_active_context()
 
-    assert "ホットアクティビティ:" in result
-    assert "[作業] 実装する" in result
-    assert "(pending)" in result
+    assert "○" in result
 
 
-def test_build_active_context_description_truncated(temp_db):
-    """descriptionが30文字を超えたら切り詰め"""
-    long_desc = "a" * 50
-    add_topic(title="Topic", description=long_desc, tags=["domain:myapp"])
+def test_build_active_context_status_marker_in_progress(temp_db):
+    """in_progressアクティビティに●マーカーが付く"""
+    r = add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
+    update_activity(r["activity_id"], new_status="in_progress")
 
     result = _build_active_context()
 
-    # 30文字 + "..." が含まれる
-    assert "a" * 30 + "..." in result
-    # 50文字のフルテキストは含まれない
-    assert "a" * 50 not in result
+    assert "●" in result
 
 
-def test_build_active_context_non_domain_tags(temp_db):
-    """domain:以外のタグが「最近使われたタグ」セクションに列挙される"""
+def test_build_active_context_elapsed_days(temp_db):
+    """経過日数が(Nd)形式で表示される"""
+    add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
+
+    result = _build_active_context()
+
+    # 作成直後なので(0d)が表示される
+    assert "(0d)" in result
+
+
+def test_build_active_context_no_topic_section(temp_db):
+    """トピックセクション（最新トピック:）が出力されない"""
+    add_topic(title="My Topic", description="Desc", tags=["domain:myapp"])
+    add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
+
+    result = _build_active_context()
+
+    assert "最新トピック:" not in result
+    assert "My Topic" not in result
+
+
+def test_build_active_context_no_recent_tags_section(temp_db):
+    """最近使われたタグセクションが出力されない"""
     add_topic(title="Topic", description="Desc", tags=["domain:myapp", "intent:design", "hooks"])
+    add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
 
     result = _build_active_context()
 
-    assert "## 最近使われたタグ" in result
-    assert "intent:design" in result
-    assert "hooks" in result
+    assert "## 最近使われたタグ" not in result
+
+
+def test_build_active_context_in_progress_limit(temp_db):
+    """in_progress枠は上位IN_PROGRESS_LIMIT件に制限される"""
+    for i in range(5):
+        r = add_activity(
+            title=f"[作業] IP Activity {i}", description="Desc",
+            tags=["domain:myapp"], check_in=False,
+        )
+        update_activity(r["activity_id"], new_status="in_progress")
+
+    result = _build_active_context()
+
+    # IN_PROGRESS_LIMIT=3件分の●が表示される
+    assert result.count("●") == IN_PROGRESS_LIMIT
+
+
+def test_build_active_context_pending_limit(temp_db):
+    """pending枠は上位PENDING_LIMIT件に制限される"""
+    for i in range(5):
+        add_activity(
+            title=f"[作業] Pending Activity {i}", description="Desc",
+            tags=["domain:myapp"], check_in=False,
+        )
+
+    result = _build_active_context()
+
+    # PENDING_LIMIT=2件分の○が表示される
+    assert result.count("○") == PENDING_LIMIT
+
+
+def test_build_active_context_overflow_count(temp_db):
+    """制限を超えた分が(+N件)で表示される"""
+    # in_progress 4件 + pending 3件 = 合計7件
+    for i in range(4):
+        r = add_activity(
+            title=f"[作業] IP {i}", description="Desc",
+            tags=["domain:myapp"], check_in=False,
+        )
+        update_activity(r["activity_id"], new_status="in_progress")
+    for i in range(3):
+        add_activity(
+            title=f"[作業] Pending {i}", description="Desc",
+            tags=["domain:myapp"], check_in=False,
+        )
+
+    result = _build_active_context()
+
+    # 表示: IP 3件 + Pending 2件 = 5件、overflow = 7 - 5 = 2件
+    assert "(+2件)" in result
+
+
+def test_build_active_context_no_overflow_when_within_limits(temp_db):
+    """件数が制限内の場合は(+N件)が出ない"""
+    r = add_activity(
+        title="[作業] IP 1", description="Desc",
+        tags=["domain:myapp"], check_in=False,
+    )
+    update_activity(r["activity_id"], new_status="in_progress")
+    add_activity(
+        title="[作業] Pending 1", description="Desc",
+        tags=["domain:myapp"], check_in=False,
+    )
+
+    result = _build_active_context()
+
+    assert "(+" not in result
+
+
+def test_build_active_context_domain_with_zero_activities_skipped(temp_db):
+    """アクティビティ0件のdomainセクションはスキップ"""
+    # domain:myappにはアクティビティあり、domain:emptyにはなし
+    add_activity(title="Activity", description="Desc", tags=["domain:myapp"], check_in=False)
+
+    # domain:emptyのタグだけ作成（アクティビティなし）
+    conn = get_connection()
+    try:
+        from src.services.tag_service import ensure_tag_ids
+        ensure_tag_ids(conn, [("domain", "empty-domain")])
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = _build_active_context()
+
+    assert "## myapp (domain)" in result
+    assert "empty-domain" not in result
 
 
 def test_build_active_context_multiple_domains(temp_db):
     """複数domainが個別セクションとして表示される"""
-    add_topic(title="App Topic", description="Desc", tags=["domain:app"])
-    add_topic(title="Lib Topic", description="Desc", tags=["domain:lib"])
+    add_activity(title="App Activity", description="Desc", tags=["domain:app"], check_in=False)
+    add_activity(title="Lib Activity", description="Desc", tags=["domain:lib"], check_in=False)
 
     result = _build_active_context()
 
@@ -413,19 +414,8 @@ def test_build_active_context_multiple_domains(temp_db):
     assert "## lib (domain)" in result
 
 
-def test_build_active_context_topic_id_in_bracket(temp_db):
-    """トピックIDが[id]形式で表示される"""
-    topic = add_topic(title="My Topic", description="Desc", tags=["domain:myapp"])
-    topic_id = topic["topic_id"]
-
-    result = _build_active_context()
-
-    assert f"[{topic_id}]" in result
-
-
 def test_build_active_context_activity_id_in_bracket(temp_db):
     """アクティビティIDが[id]形式で表示される"""
-    add_topic(title="Topic", description="Desc", tags=["domain:myapp"])
     activity = add_activity(title="Activity 1", description="Desc", tags=["domain:myapp"], check_in=False)
     activity_id = activity["activity_id"]
 
@@ -448,8 +438,7 @@ def test_build_active_context_no_crash_on_error(temp_db):
 
 
 def test_build_active_context_completed_activities_excluded(temp_db):
-    """completedアクティビティはホットアクティビティに含まれない"""
-    add_topic(title="Topic", description="Desc", tags=["domain:myapp"])
+    """completedアクティビティは表示されない"""
     result = add_activity(title="Done Activity", description="Desc", tags=["domain:myapp"], check_in=False)
     update_activity(result["activity_id"], new_status="completed")
 
@@ -458,41 +447,29 @@ def test_build_active_context_completed_activities_excluded(temp_db):
     assert "Done Activity" not in ctx
 
 
-def test_build_active_context_domain_no_topics_no_activities_skipped(temp_db):
-    """domain:タグはあるがtopic_tagsに紐付けないとdomainsに出てこない"""
-    # domain:emptyタグだけ作成してトピックに紐付けない
-    conn = get_connection()
-    try:
-        from src.services.tag_service import ensure_tag_ids
-        ensure_tag_ids(conn, [("domain", "empty-domain")])
-        conn.commit()
-    finally:
-        conn.close()
-
-    result = _build_active_context()
-    # topic_tagsにJOINしないdomainは表示されない
-    assert "empty-domain" not in result
-
-
-def test_build_active_context_only_non_domain_tags(temp_db):
-    """domain:タグがなくnon-domainタグのみの場合"""
-    # まずinit_databaseのfirst_topicを古くする
-    conn = get_connection()
-    try:
-        conn.execute(
-            "UPDATE discussion_topics SET created_at = datetime('now', '-8 days')"
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    # non-domainタグのみのトピックを追加
-    add_topic(title="Topic", description="Desc", tags=["intent:design"])
+def test_build_active_context_format(temp_db):
+    """出力フォーマットが仕様通り"""
+    r = add_activity(
+        title="[議論] stop_hookのスキップ機能", description="Desc",
+        tags=["domain:cc-memory"], check_in=False,
+    )
+    update_activity(r["activity_id"], new_status="in_progress")
+    add_activity(
+        title="[作業] アクティブコンテキスト改善", description="Desc",
+        tags=["domain:cc-memory"], check_in=False,
+    )
 
     result = _build_active_context()
 
-    # domain:セクションはないがnon-domainタグセクションはある
-    # ただしintent:designのトピックにはdomain:タグがないので
-    # domainセクションは生成されない
-    assert "## 最近使われたタグ" in result
-    assert "intent:design" in result
+    lines = result.strip().split("\n")
+    assert lines[0] == "# アクティブコンテキスト"
+    assert lines[1] == ""
+    assert lines[2] == "## cc-memory (domain)"
+    # in_progressが先に来る
+    assert lines[3].startswith("●")
+    assert "[議論] stop_hookのスキップ機能" in lines[3]
+    assert lines[3].endswith("(0d)")
+    # pendingが後に来る
+    assert lines[4].startswith("○")
+    assert "[作業] アクティブコンテキスト改善" in lines[4]
+    assert lines[4].endswith("(0d)")
