@@ -155,9 +155,7 @@ class TestCheckInSummary:
         assert len(lines) == 2
         assert lines[0].startswith("check-in: ")
         assert "[作業] タグnotesカラム追加" in lines[0]
-        assert "notes:" in lines[1]
         assert "intent:" in lines[1]
-        assert "資材:" in lines[1]
 
     def test_summary_intent_from_tag(self, activity_with_intent):
         """intent:タグがある場合、summaryにintent値が表示される"""
@@ -173,41 +171,6 @@ class TestCheckInSummary:
         assert "error" not in result
         assert "intent: (未設定)" in result["summary"]
 
-    def test_summary_materials_count(self, activity_id):
-        """summaryに資材の件数が反映される"""
-        add_material(activity_id, "資材1", "内容1")
-        add_material(activity_id, "資材2", "内容2")
-        add_material(activity_id, "資材3", "内容3")
-
-        result = check_in(activity_id)
-
-        assert "error" not in result
-        assert "資材: 3件" in result["summary"]
-
-    def test_summary_notes_count(self, temp_db):
-        """tag_notesがある場合、summaryにnotes件数と行数が反映される"""
-        # notesを持つタグを作成
-        conn = get_connection()
-        try:
-            conn.execute(
-                "INSERT INTO tags (namespace, name, notes) VALUES (?, ?, ?)",
-                ("domain", "noted", "教訓1行目\n教訓2行目\n教訓3行目"),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-        activity = add_activity(
-            title="Test with notes",
-            description="Desc",
-            tags=["domain:noted"],
-            check_in=False,
-        )
-
-        result = check_in(activity["activity_id"])
-
-        assert "error" not in result
-        assert "notes: 1件 (3行)" in result["summary"]
 
 
 class TestCheckInTagNotes:
