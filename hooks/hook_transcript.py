@@ -177,6 +177,10 @@ def get_transcript_info(transcript_path: str) -> tuple[list[dict], bool]:
                     if entry_type == "assistant":
                         entries.append(entry)
                     elif entry_type in ("user", "human"):
+                        # tool_resultエントリはスキップ（skill検出を上書きしないため）
+                        content = entry.get("message", {}).get("content", "")
+                        if isinstance(content, list) and content and isinstance(content[0], dict) and content[0].get("type") == "tool_result":
+                            continue
                         text = _extract_user_content_text(entry)
                         last_user_has_command = "<command-name>" in text
                 except json.JSONDecodeError:

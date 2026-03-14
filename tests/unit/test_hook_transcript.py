@@ -319,6 +319,47 @@ class TestGetTranscriptInfo:
         entries, has_skill = get_transcript_info(str(path))
         assert has_skill is True
 
+    def test_tool_result_does_not_overwrite_skill_detection(self, tmp_path):
+        """tool_resultエントリがskill検出を上書きしない"""
+        path = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry_real(
+                '<command-message>sync-memory</command-message>\n'
+                '<command-name>/claude-code-memory:sync-memory</command-name>'
+            ),
+            _make_assistant_entry(text="calling tools"),
+            # tool_result: type="user"だがskill検出を上書きしてはいけない
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_123", "content": "result"},
+            ]}},
+            _make_assistant_entry(text="more tools"),
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_456", "content": "result2"},
+            ]}},
+            _make_assistant_entry(text="final response"),
+        ], path)
+        entries, has_skill = get_transcript_info(str(path))
+        assert len(entries) == 3
+        assert has_skill is True
+
+    def test_real_user_message_after_tool_result_overrides_skill(self, tmp_path):
+        """tool_result後の本物のuserメッセージはskill検出を上書きする"""
+        path = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry_real(
+                '<command-name>/sync-memory</command-name>'
+            ),
+            _make_assistant_entry(text="skill response"),
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_123", "content": "result"},
+            ]}},
+            _make_assistant_entry(text="more response"),
+            _make_user_entry_real("normal follow-up message"),
+            _make_assistant_entry(text="normal response"),
+        ], path)
+        entries, has_skill = get_transcript_info(str(path))
+        assert has_skill is False
+
     def test_file_not_found(self, tmp_path):
         """ファイルが存在しない場合"""
         path = tmp_path / "nonexistent.jsonl"
