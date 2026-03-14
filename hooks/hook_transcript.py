@@ -125,6 +125,32 @@ def has_activity_checkin_calls(entries: list[dict]) -> bool:
     return _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS)
 
 
+_CHECKIN_TOOL = "mcp__plugin_claude-code-memory_cc-memory__check_in"
+
+
+def extract_checkin_activity_id(entries: list[dict]) -> int | None:
+    """transcriptからcheck_inのtool_use入力を逆順走査し、最後のactivity_idを返す"""
+    for entry in reversed(entries):
+        message = entry.get("message", {})
+        content = message.get("content", [])
+
+        if isinstance(content, str):
+            continue
+
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_use":
+                continue
+            if block.get("name") == _CHECKIN_TOOL:
+                tool_input = block.get("input", {})
+                aid = tool_input.get("activity_id")
+                if aid is not None:
+                    return int(aid)
+
+    return None
+
+
 _CONTEXT_RETRIEVAL_TOOLS = [
     "mcp__plugin_claude-code-memory_cc-memory__search",
     "mcp__plugin_claude-code-memory_cc-memory__get_topics",

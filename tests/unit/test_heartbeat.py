@@ -1,0 +1,242 @@
+"""ハートビート機能のユニットテスト
+
+hooks/heartbeat.py, hook_state.py (checked_in_activity), hook_transcript.py (extract_checkin_activity_id)
+"""
+import json
+import os
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from hooks.hook_state import HookState
+from hooks.hook_transcript import extract_checkin_activity_id
+from src.db import init_database, get_connection
+
+
+# ========================================
+# hook_state: checked_in_activity
+# ========================================
+
+
+@pytest.fixture
+def hook_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
+    return HookState("test-session-hb")
+
+
+class TestCheckedInActivity:
+    def test_get_returns_none_when_no_file(self, hook_state):
+        assert hook_state.get_checked_in_activity() is None
+
+    def test_set_then_get(self, hook_state):
+        hook_state.set_checked_in_activity(42)
+        assert hook_state.get_checked_in_activity() == 42
+
+    def test_overwrite(self, hook_state):
+        """別activityにcheck_inしたらHookStateが上書きされる"""
+        hook_state.set_checked_in_activity(10)
+        hook_state.set_checked_in_activity(20)
+        assert hook_state.get_checked_in_activity() == 20
+
+    def test_empty_file_returns_none(self, hook_state):
+        path = hook_state._path("checked_in_activity")
+        path.write_text("")
+        assert hook_state.get_checked_in_activity() is None
+
+    def test_clear_session_clears_checked_in_activity(self, tmp_path, monkeypatch):
+        """clear_sessionでchecked_in_activityも削除される"""
+        monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
+        state = HookState("sess-hb-clear")
+        state.set_checked_in_activity(99)
+
+        HookState.clear_session("sess-hb-clear")
+
+        assert state.get_checked_in_activity() is None
+
+
+# ========================================
+# hook_transcript: extract_checkin_activity_id
+# ========================================
+
+
+def _make_assistant_entry(tool_calls=None, text="", tool_inputs=None):
+    content = []
+    if text:
+        content.append({"type": "text", "text": text})
+    if tool_calls:
+        for i, tool in enumerate(tool_calls):
+            inp = tool_inputs[i] if tool_inputs and i < len(tool_inputs) else {}
+            content.append({"type": "tool_use", "name": tool, "input": inp})
+    return {"type": "assistant", "message": {"content": content}}
+
+
+_CHECKIN_TOOL = "mcp__plugin_claude-code-memory_cc-memory__check_in"
+_ADD_ACTIVITY_TOOL = "mcp__plugin_claude-code-memory_cc-memory__add_activity"
+
+
+class TestExtractCheckinActivityId:
+    def test_no_entries(self):
+        assert extract_checkin_activity_id([]) is None
+
+    def test_no_checkin_calls(self):
+        entries = [_make_assistant_entry(text="hello")]
+        assert extract_checkin_activity_id(entries) is None
+
+    def test_checkin_with_activity_id(self):
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{"activity_id": 42}],
+            ),
+        ]
+        assert extract_checkin_activity_id(entries) == 42
+
+    def test_returns_last_checkin(self):
+        """複数check_inがあった場合、最後のactivity_idを返す"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{"activity_id": 10}],
+            ),
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{"activity_id": 20}],
+            ),
+        ]
+        assert extract_checkin_activity_id(entries) == 20
+
+    def test_ignores_add_activity(self):
+        """add_activityはcheck_inではないので無視"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_ADD_ACTIVITY_TOOL],
+                tool_inputs=[{"title": "new", "description": "desc", "tags": ["domain:test"]}],
+            ),
+        ]
+        assert extract_checkin_activity_id(entries) is None
+
+    def test_checkin_without_activity_id(self):
+        """activity_idがない場合はNone"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{}],
+            ),
+        ]
+        assert extract_checkin_activity_id(entries) is None
+
+    def test_activity_id_as_string(self):
+        """activity_idが文字列でもint変換される"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{"activity_id": "42"}],
+            ),
+        ]
+        assert extract_checkin_activity_id(entries) == 42
+
+    def test_mixed_tools(self):
+        """check_in以外のツールが混在しても正しく動く"""
+        entries = [
+            _make_assistant_entry(
+                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__search"],
+                tool_inputs=[{"keyword": "test"}],
+            ),
+            _make_assistant_entry(
+                tool_calls=[_CHECKIN_TOOL],
+                tool_inputs=[{"activity_id": 55}],
+            ),
+            _make_assistant_entry(
+                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_log"],
+                tool_inputs=[{"topic_id": 1, "content": "log"}],
+            ),
+        ]
+        assert extract_checkin_activity_id(entries) == 55
+
+
+# ========================================
+# hooks/heartbeat: update_heartbeat (DB統合)
+# ========================================
+
+
+@pytest.fixture
+def temp_db():
+    """テスト用の一時的なデータベースを作成する"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test.db")
+        os.environ["DISCUSSION_DB_PATH"] = db_path
+        init_database()
+        yield db_path
+        if "DISCUSSION_DB_PATH" in os.environ:
+            del os.environ["DISCUSSION_DB_PATH"]
+
+
+class TestUpdateHeartbeat:
+    def test_updates_last_heartbeat_at(self, temp_db):
+        """update_heartbeatでlast_heartbeat_atが更新される"""
+        from src.services.activity_service import add_activity
+        from hooks.heartbeat import update_heartbeat
+
+        result = add_activity(
+            title="Heartbeat Test",
+            description="Desc",
+            tags=["domain:test"],
+            check_in=False,
+        )
+        activity_id = result["activity_id"]
+
+        # 初期状態ではlast_heartbeat_atはNULL
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT last_heartbeat_at FROM activities WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        conn.close()
+        assert row["last_heartbeat_at"] is None
+
+        # heartbeat更新
+        update_heartbeat(activity_id)
+
+        # 更新後はlast_heartbeat_atが設定されている
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT last_heartbeat_at FROM activities WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        conn.close()
+        assert row["last_heartbeat_at"] is not None
+
+    def test_multiple_updates(self, temp_db):
+        """複数回呼び出しても最新の時刻に更新される"""
+        from src.services.activity_service import add_activity
+        from hooks.heartbeat import update_heartbeat
+
+        result = add_activity(
+            title="Heartbeat Test 2",
+            description="Desc",
+            tags=["domain:test"],
+            check_in=False,
+        )
+        activity_id = result["activity_id"]
+
+        update_heartbeat(activity_id)
+
+        conn = get_connection()
+        row1 = conn.execute(
+            "SELECT last_heartbeat_at FROM activities WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        conn.close()
+
+        update_heartbeat(activity_id)
+
+        conn = get_connection()
+        row2 = conn.execute(
+            "SELECT last_heartbeat_at FROM activities WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        conn.close()
+
+        # 2回目のheartbeatは1回目以降（同一秒の可能性があるので>=）
+        assert row2["last_heartbeat_at"] >= row1["last_heartbeat_at"]

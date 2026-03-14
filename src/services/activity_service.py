@@ -224,7 +224,9 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
         # 2. LIMIT付きでデータ取得
         rows = conn.execute(
             f"""
-            SELECT * FROM activities
+            SELECT *,
+                   CASE WHEN last_heartbeat_at > datetime('now', '-20 minutes') THEN 1 ELSE 0 END AS is_heartbeat_active
+            FROM activities
             {where_clause}
             ORDER BY {order_clause}
             LIMIT ?
@@ -247,6 +249,7 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
                 "tags": tags_map.get(activity["id"], []),
                 "created_at": activity["created_at"],
                 "updated_at": activity["updated_at"],
+                "is_heartbeat_active": bool(activity["is_heartbeat_active"]),
             })
 
         return {"activities": activities, "total_count": total_count}
