@@ -1,4 +1,5 @@
 """議論ログ管理サービス"""
+import re
 import sqlite3
 from typing import Optional
 from src.db import get_connection, row_to_dict
@@ -32,7 +33,7 @@ def add_log(
     """
     if not title or not title.strip():
         # titleが未指定・空の場合、contentから自動生成を試みる
-        first_line = content.strip().split('\n', 1)[0].strip()
+        first_line = re.split(r'\n|\\n', content.strip(), maxsplit=1)[0].strip()
         title = first_line[:50] if len(first_line) > 50 else first_line
         if not title:
             return {
