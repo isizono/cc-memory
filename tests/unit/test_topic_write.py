@@ -264,6 +264,19 @@ def test_add_log_title_auto_uses_first_line_only(temp_db):
     assert result["title"] == "1行目のタイトル"
 
 
+def test_add_log_title_auto_splits_on_literal_backslash_n(temp_db):
+    """contentにリテラルな\\nが含まれる場合もそこでtitleを分割する"""
+    topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
+
+    result = add_log(
+        topic_id=topic["topic_id"],
+        content="1行目のタイトル\\n2行目の内容",
+    )
+
+    assert "error" not in result
+    assert result["title"] == "1行目のタイトル"
+
+
 def test_add_log_title_none_content_empty_error(temp_db):
     """title=Noneかつcontent=""の場合にエラーが返る"""
     topic = add_topic(title="テストトピック", description="Test description", tags=DEFAULT_TAGS)
