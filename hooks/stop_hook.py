@@ -35,7 +35,7 @@ from hooks.hook_transcript import (
     parse_meta_tag,
 )
 
-_BLOCK_LIMIT = 2
+_BLOCK_LIMIT = 1
 _NUDGE_INTERVAL = 2
 _CHECKIN_DEFER_TURNS = 2
 _SKILL_SKIP_TURNS = 3
