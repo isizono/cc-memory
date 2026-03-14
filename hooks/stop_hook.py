@@ -24,8 +24,11 @@ _project_root = Path(__file__).resolve().parents[1]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+from hooks.heartbeat import update_heartbeat
 from hooks.hook_state import HookState
 from hooks.hook_transcript import (
+    extract_checkin_activity_id,
+    extract_last_activity_id,
     extract_text_from_entry,
     get_last_assistant_entry,
     get_transcript_info,
@@ -137,8 +140,14 @@ def main() -> None:
 
         # 6. Activity check-in チェック（2ターン目）
         if not state.has_activity_checkin():
-            if has_activity_checkin_calls(all_entries):
+            has_checkin = has_activity_checkin_calls(all_entries)
+            if has_checkin:
                 state.set_activity_checkin()
+                activity_id = extract_checkin_activity_id(all_entries)
+                if activity_id is None:
+                    activity_id = extract_last_activity_id(transcript_path)
+                if activity_id is not None:
+                    state.set_checked_in_activity(activity_id)
             elif state.get_approved_turns() >= _CHECKIN_DEFER_TURNS:
                 state.set_activity_checkin()  # one-shot: 次回はスキップ
                 state.increment_block_count()
@@ -178,6 +187,10 @@ def main() -> None:
             state.set_activity_nudge_pending()
 
         # 9. 状態更新 + approve
+        activity_id = state.get_checked_in_activity()
+        if activity_id is not None:
+            update_heartbeat(activity_id)
+
         state.set_prev_topic(current_topic_name)
         state.reset_block_count()
         state.increment_approved_turns()

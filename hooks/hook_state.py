@@ -146,6 +146,21 @@ class HookState:
         else:
             self._write(self._path("skill_skip"), str(n))
 
+    # --- checked_in_activity ---
+
+    def get_checked_in_activity(self) -> int | None:
+        """checked_in_activity_{session_id} を読む"""
+        path = self._path("checked_in_activity")
+        try:
+            content = path.read_text().strip()
+            return int(content) if content else None
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def set_checked_in_activity(self, activity_id: int) -> None:
+        """checked_in_activity_{session_id} に書く"""
+        self._write(self._path("checked_in_activity"), str(activity_id))
+
     # --- context_retrieved ---
 
     def has_context_retrieval(self) -> bool:

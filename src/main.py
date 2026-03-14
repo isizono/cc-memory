@@ -11,6 +11,7 @@ from src.services import (
     activity_service,
     material_service,
 )
+from src.services.activity_service import HEARTBEAT_TIMEOUT_MINUTES
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import list_tags as _list_tags, update_tag as _update_tag, collect_tag_notes_for_injection
 from src.db import execute_query, get_connection, row_to_dict
@@ -74,11 +75,13 @@ def _get_active_activities_by_tag(tag_id: int) -> list[dict]:
         tag_id: タグID
 
     Returns:
-        [{"id": int, "title": str, "status": str}, ...]（in_progress優先、updated_at降順）
+        [{"id": int, "title": str, "status": str, "is_heartbeat_active": bool}, ...]
+        （in_progress優先、updated_at降順）
     """
     rows = execute_query(
         """
-        SELECT a.id, a.title, a.status
+        SELECT a.id, a.title, a.status,
+               CASE WHEN a.last_heartbeat_at > datetime('now', '-' || ? || ' minutes') THEN 1 ELSE 0 END AS is_heartbeat_active
         FROM activities a
         JOIN activity_tags at ON a.id = at.activity_id
         WHERE at.tag_id = ?
@@ -86,9 +89,14 @@ def _get_active_activities_by_tag(tag_id: int) -> list[dict]:
         ORDER BY CASE a.status WHEN 'in_progress' THEN 0 ELSE 1 END,
                  a.updated_at DESC
         """,
-        (tag_id,),
+        (HEARTBEAT_TIMEOUT_MINUTES, tag_id),
     )
-    return [row_to_dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = row_to_dict(r)
+        d["is_heartbeat_active"] = bool(d["is_heartbeat_active"])
+        result.append(d)
+    return result
 
 
 def _get_recent_non_domain_tags() -> list[str]:
@@ -164,9 +172,17 @@ def _build_active_context() -> str:
                     desc_part = f": {desc}" if desc else ""
                     lines.append(f"- [{t['id']}] {t['title']}{desc_part}")
 
-            if activities:
+            heartbeat_activities = [a for a in activities if a.get("is_heartbeat_active")]
+            normal_activities = [a for a in activities if not a.get("is_heartbeat_active")]
+
+            if heartbeat_activities:
+                lines.append("作業中（別セッション）:")
+                for t in heartbeat_activities:
+                    lines.append(f"- [{t['id']}] {t['title']} ({t['status']})")
+
+            if normal_activities:
                 lines.append("ホットアクティビティ:")
-                for t in activities:
+                for t in normal_activities:
                     lines.append(f"- [{t['id']}] {t['title']} ({t['status']})")
 
             domain_sections.append("\n".join(lines))

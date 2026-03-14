@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 # get_activitiesでdescriptionを切り詰める上限文字数
 ACTIVITY_DESC_MAX_LEN = 200
+# ハートビートのタイムアウト（分）。この時間以内のheartbeatを「活性」と判定する
+HEARTBEAT_TIMEOUT_MINUTES = 20
 # DB格納可能なステータス値
 REAL_STATUSES = {"pending", "in_progress", "completed"}
 # "active"エイリアスが展開されるステータス
@@ -224,12 +226,14 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
         # 2. LIMIT付きでデータ取得
         rows = conn.execute(
             f"""
-            SELECT * FROM activities
+            SELECT *,
+                   CASE WHEN last_heartbeat_at > datetime('now', '-' || ? || ' minutes') THEN 1 ELSE 0 END AS is_heartbeat_active
+            FROM activities
             {where_clause}
             ORDER BY {order_clause}
             LIMIT ?
             """,
-            (*where_params, limit),
+            (HEARTBEAT_TIMEOUT_MINUTES, *where_params, limit),
         ).fetchall()
 
         # バッチでタグ取得
@@ -247,6 +251,7 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
                 "tags": tags_map.get(activity["id"], []),
                 "created_at": activity["created_at"],
                 "updated_at": activity["updated_at"],
+                "is_heartbeat_active": bool(activity["is_heartbeat_active"]),
             })
 
         return {"activities": activities, "total_count": total_count}
