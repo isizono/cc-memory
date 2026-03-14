@@ -2,7 +2,7 @@
 
 処理フロー:
 1. stdin読み込み → JSON parse
-2. ブロック上限チェック（2回で強制approve）
+2. ブロック上限チェック（1回で強制approve）
 3. スキルスキップ判定（<command-name>検出 or 残りターン → 即approve）
 4. メタタグparse（一次ソース: stdinのlast_assistant_message、フォールバック: transcript）
    → 1ターン目（approved_turns == 0）は猶予。2ターン目以降はなければblock
@@ -69,7 +69,7 @@ def main() -> None:
         # 2. ブロック上限チェック
         if state.get_block_count() >= _BLOCK_LIMIT:
             state.reset_block_count()
-            _output("approve", "ブロック上限（2回）に達しました。強制的に通します。")
+            _output("approve", "ブロック上限（{_BLOCK_LIMIT}回）に達しました。強制的に通します。")
             return
 
         # 3. スキルスキップ判定
