@@ -482,6 +482,70 @@ def _vector_search(
         return None
 
 
+def find_similar_topics(text: str, exclude_id: int, limit: int = 3) -> list[dict]:
+    """テキストに類似するトピックをベクトル検索で取得する（自身を除外）。
+
+    add_topic のレスポンスに含めるサジェスト用。
+    embedding サーバー未起動時は空リストを返す。
+
+    Args:
+        text: 検索テキスト（title + description）
+        exclude_id: 除外するトピックID（新規作成された自身）
+        limit: 最大取得件数
+
+    Returns:
+        類似トピックのリスト [{id, title, distance}, ...]
+    """
+    try:
+        query_embedding = embedding_service.encode_query(text)
+        if query_embedding is None:
+            return []
+
+        blob = serialize_float32(query_embedding)
+        # 自身除外 + type フィルタ分を考慮して多めに取得
+        vec_rows = execute_query(
+            "SELECT rowid, distance FROM vec_index WHERE embedding MATCH ? AND k = ?",
+            (blob, limit + 10),
+        )
+        if not vec_rows:
+            return []
+
+        vec_data = {}
+        for row in vec_rows:
+            r = row_to_dict(row)
+            vec_data[r["rowid"]] = r["distance"]
+
+        rowids = list(vec_data.keys())
+        rowid_placeholders = ",".join("?" * len(rowids))
+
+        filter_rows = execute_query(
+            f"""
+            SELECT id, source_type, source_id, title
+            FROM search_index
+            WHERE id IN ({rowid_placeholders})
+              AND source_type = 'topic'
+              AND source_id != ?
+            """,
+            (*rowids, exclude_id),
+        )
+
+        results = []
+        for row in filter_rows:
+            r = row_to_dict(row)
+            results.append({
+                "id": r["source_id"],
+                "title": r["title"],
+                "distance": round(vec_data[r["id"]], 4),
+            })
+
+        results.sort(key=lambda x: x["distance"])
+        return results[:limit]
+
+    except (ValueError, RuntimeError, OSError):
+        logger.warning("find_similar_topics failed", exc_info=True)
+        return []
+
+
 def _apply_recency_boost(results: list[dict], now: datetime | None = None) -> None:
     """RRFスコアにrecency boost（時間減衰）を適用する（in-place）。
 

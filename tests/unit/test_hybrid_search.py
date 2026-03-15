@@ -11,7 +11,7 @@ import numpy as np
 
 from src.db import init_database, get_connection
 from src.services.search_service import (
-    _rrf_merge, _apply_recency_boost,
+    _rrf_merge, _apply_recency_boost, find_similar_topics,
     RRF_K, RRF_W_FTS, RRF_W_VEC, RECENCY_DECAY_RATE,
 )
 from src.services import search_service
@@ -739,3 +739,119 @@ def test_search_methods_used_fts_only_vec_disabled(temp_db, disable_embedding):
     assert "error" not in result
     assert "search_methods_used" in result
     assert result["search_methods_used"] == ["fts5"]
+
+
+# ========================================
+# find_similar_topics テスト
+# ========================================
+
+
+def test_find_similar_topics_returns_results(temp_db, mock_embedding_model):
+    """find_similar_topics: 類似トピックが返る"""
+    t1 = add_topic(title="検索機能の設計", description="全文検索とベクトル検索のハイブリッド", tags=DEFAULT_TAGS)
+    t2 = add_topic(title="検索UIの改善", description="検索結果の表示を改善する", tags=DEFAULT_TAGS)
+
+    results = find_similar_topics("検索機能の設計と実装", exclude_id=999)
+
+    assert len(results) >= 1
+    ids = [r["id"] for r in results]
+    assert t1["topic_id"] in ids or t2["topic_id"] in ids
+
+
+def test_find_similar_topics_excludes_self(temp_db, mock_embedding_model):
+    """find_similar_topics: exclude_idで自身が除外される"""
+    t1 = add_topic(title="類似除外テスト用トピック", description="自身を除外するテスト", tags=DEFAULT_TAGS)
+
+    results = find_similar_topics("類似除外テスト用トピック", exclude_id=t1["topic_id"])
+
+    ids = [r["id"] for r in results]
+    assert t1["topic_id"] not in ids
+
+
+def test_find_similar_topics_limit(temp_db, mock_embedding_model):
+    """find_similar_topics: limit件数に制限される"""
+    for i in range(5):
+        add_topic(title=f"リミットテスト用トピック{i}", description="リミットテスト用", tags=DEFAULT_TAGS)
+
+    results = find_similar_topics("リミットテスト用", exclude_id=999, limit=2)
+
+    assert len(results) <= 2
+
+
+def test_find_similar_topics_has_distance(temp_db, mock_embedding_model):
+    """find_similar_topics: 結果にdistanceが含まれる"""
+    add_topic(title="距離テスト用トピック", description="距離が含まれることを確認", tags=DEFAULT_TAGS)
+
+    results = find_similar_topics("距離テスト用", exclude_id=999)
+
+    assert len(results) >= 1
+    assert "distance" in results[0]
+    assert isinstance(results[0]["distance"], float)
+
+
+def test_find_similar_topics_sorted_by_distance(temp_db, mock_embedding_model):
+    """find_similar_topics: distanceの昇順（類似度の高い順）にソートされる"""
+    for i in range(3):
+        add_topic(title=f"ソートテスト用トピック{i}", description=f"ソートテスト用の説明{i}", tags=DEFAULT_TAGS)
+
+    results = find_similar_topics("ソートテスト用", exclude_id=999)
+
+    if len(results) >= 2:
+        for i in range(len(results) - 1):
+            assert results[i]["distance"] <= results[i + 1]["distance"]
+
+
+def test_find_similar_topics_only_topics(temp_db, mock_embedding_model):
+    """find_similar_topics: topicのみ返り、decision/activityは含まれない"""
+    t = add_topic(title="型フィルタテスト用トピック", description="topicのみ返ることを確認", tags=DEFAULT_TAGS)
+    add_decision(topic_id=t["topic_id"], decision="型フィルタテスト用決定", reason="テスト用")
+    add_activity(title="型フィルタテスト用アクティビティ", description="テスト用", tags=DEFAULT_TAGS, check_in=False)
+
+    results = find_similar_topics("型フィルタテスト用", exclude_id=999)
+
+    for r in results:
+        assert "id" in r
+        assert "title" in r
+        # decision/activityのIDが混入していないことを確認
+        assert r["title"] != "型フィルタテスト用決定"
+        assert r["title"] != "型フィルタテスト用アクティビティ"
+
+
+def test_find_similar_topics_embedding_disabled(temp_db, disable_embedding):
+    """find_similar_topics: embedding無効時は空リストが返る"""
+    add_topic(title="無効時テスト用", description="embedding無効", tags=DEFAULT_TAGS)
+
+    results = find_similar_topics("無効時テスト用", exclude_id=999)
+
+    assert results == []
+
+
+# ========================================
+# add_topic similar_topics 統合テスト
+# ========================================
+
+
+def test_add_topic_includes_similar_topics(temp_db, mock_embedding_model):
+    """add_topic: レスポンスにsimilar_topicsが含まれる"""
+    add_topic(title="類似サジェストテスト用の既存トピック", description="ベクトル検索でヒットする", tags=DEFAULT_TAGS)
+
+    result = add_topic(title="類似サジェストテスト用の新規トピック", description="類似が見つかるはず", tags=DEFAULT_TAGS)
+
+    assert "error" not in result
+    assert "topic_id" in result
+    if "similar_topics" in result:
+        assert isinstance(result["similar_topics"], list)
+        for item in result["similar_topics"]:
+            assert "id" in item
+            assert "title" in item
+            assert "distance" in item
+
+
+def test_add_topic_no_similar_when_embedding_disabled(temp_db, disable_embedding):
+    """add_topic: embedding無効時はsimilar_topicsが含まれない"""
+    add_topic(title="既存トピック", description="embedding無効", tags=DEFAULT_TAGS)
+
+    result = add_topic(title="新規トピック", description="類似なし", tags=DEFAULT_TAGS)
+
+    assert "error" not in result
+    assert "similar_topics" not in result

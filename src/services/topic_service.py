@@ -3,6 +3,7 @@ import sqlite3
 from typing import Optional
 from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
+from src.services.search_service import find_similar_topics
 from src.services.tag_service import (
     validate_and_parse_tags,
     ensure_tag_ids,
@@ -63,15 +64,22 @@ def add_topic(
         topic = row_to_dict(row)
 
         # embedding生成（失敗してもtopic作成には影響しない）
-        generate_and_store_embedding("topic", topic_id, build_embedding_text(title, description))
+        embedding_text = build_embedding_text(title, description)
+        generate_and_store_embedding("topic", topic_id, embedding_text)
 
-        return {
+        # 類似トピックをサジェスト
+        similar = find_similar_topics(embedding_text, exclude_id=topic_id)
+
+        result = {
             "topic_id": topic["id"],
             "title": topic["title"],
             "description": topic["description"],
             "tags": tag_strings,
             "created_at": topic["created_at"],
         }
+        if similar:
+            result["similar_topics"] = similar
+        return result
 
     except sqlite3.IntegrityError as e:
         conn.rollback()
