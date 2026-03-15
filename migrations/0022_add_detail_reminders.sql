@@ -18,3 +18,10 @@ INSERT INTO reminders (content) VALUES
 
 INSERT INTO reminders (content) VALUES
 ('資材はアクティビティに紐づくため、logには資材のIDと概要だけを記載します。紐づけるべきアクティビティが存在しないと感じたら、会話を振り返って現在どんなアクティビティの実行中かを確認してcheck-inしてください。「SA案を採択した」というdecisionだけ残しても、SA案そのものはセッション終了で揮発します。資材として保存しておけば、check-in時にカタログとして一覧され、get_materialで全文取得できます。');
+
+-- memory.md feedback由来
+INSERT INTO reminders (content) VALUES
+('materialは決定事項と違って「双方の合意」が不要な成果物の保存。調査結果・分析結果・ドキュメント等の成果物が出た時点で、ユーザーに確認せずadd_materialを呼ぶ。');
+
+INSERT INTO reminders (content) VALUES
+('アクティビティのタイトルはupdate_activityで積極的に更新する。作業が進むとタイトルが実態を表さなくなるため、内容や方向性が変わったと感じたら更新する。');
