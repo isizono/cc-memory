@@ -581,8 +581,13 @@ JUNCTION_TABLES = [
 ]
 
 
-def update_tag(tag: str, notes: str | None = None, canonical: str | None = None) -> dict:
-    """既存タグの notes（教訓・運用ルール）またはcanonical（エイリアス先）を更新する。
+def update_tag(
+    tag: str,
+    notes: str | None = None,
+    canonical: str | None = None,
+    rename: str | None = None,
+) -> dict:
+    """既存タグの notes（教訓・運用ルール）、canonical（エイリアス先）、またはname（リネーム）を更新する。
 
     Args:
         tag: タグ文字列（例: "domain:cc-memory", "hooks"）
@@ -590,27 +595,31 @@ def update_tag(tag: str, notes: str | None = None, canonical: str | None = None)
         canonical: エイリアス先タグ文字列。設定するとtagがcanonicalのエイリアスになる。
                    ""（空文字）でエイリアス解除。上書き可能だが、旧canonical先に
                    付け替え済みの紐付けは戻らない。
+        rename: 新しいタグ名。namespace変更も可能（例: "hooks" → "domain:hooks"）。
+                新名が既存タグと衝突する場合はエラー。
 
     Returns:
         成功時: {"tag": str, "notes": str, "updated": True} (notes更新時)
                 {"tag": str, "canonical": str | None, "updated": True} (canonical更新時)
+                {"tag": str, "renamed_to": str, "updated": True} (rename時)
         失敗時: {"error": {"code": ..., "message": ...}}
     """
-    # バリデーション: 同時指定禁止
-    if notes is not None and canonical is not None:
+    # バリデーション: 相互排他（notes, canonical, rename は1つだけ指定可能）
+    specified = [p for p in (notes, canonical, rename) if p is not None]
+    if len(specified) > 1:
         return {
             "error": {
                 "code": "CONFLICTING_PARAMS",
-                "message": "Cannot specify both 'notes' and 'canonical'. Use separate calls.",
+                "message": "Only one of 'notes', 'canonical', or 'rename' can be specified. Use separate calls.",
             }
         }
 
     # 少なくとも1つは指定必須
-    if notes is None and canonical is None:
+    if not specified:
         return {
             "error": {
                 "code": "MISSING_PARAMS",
-                "message": "At least one of 'notes' or 'canonical' must be specified.",
+                "message": "At least one of 'notes', 'canonical', or 'rename' must be specified.",
             }
         }
 
@@ -637,6 +646,51 @@ def update_tag(tag: str, notes: str | None = None, canonical: str | None = None)
 
         tag_id = row["id"]
         tag_str = f"{namespace}:{name}" if namespace else name
+
+        # --- rename ---
+        if rename is not None:
+            parsed_new = validate_and_parse_tags([rename])
+            if isinstance(parsed_new, dict):
+                return parsed_new
+            if not parsed_new:
+                return {
+                    "error": {
+                        "code": "INVALID_TAG_NAME",
+                        "message": "rename cannot be empty.",
+                    }
+                }
+            new_namespace, new_name = parsed_new[0]
+
+            # 同一名へのリネームは無意味
+            if new_namespace == namespace and new_name == name:
+                return {
+                    "error": {
+                        "code": "SAME_NAME",
+                        "message": f"New name is the same as current name: '{tag_str}'",
+                    }
+                }
+
+            # 新名が既存タグと衝突するかチェック
+            existing = conn.execute(
+                "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+                (new_namespace, new_name),
+            ).fetchone()
+            if existing:
+                new_display = f"{new_namespace}:{new_name}" if new_namespace else new_name
+                return {
+                    "error": {
+                        "code": "ALREADY_EXISTS",
+                        "message": f"Tag '{new_display}' already exists.",
+                    }
+                }
+
+            conn.execute(
+                "UPDATE tags SET namespace = ?, name = ? WHERE id = ?",
+                (new_namespace, new_name, tag_id),
+            )
+            conn.commit()
+            new_tag_str = f"{new_namespace}:{new_name}" if new_namespace else new_name
+            return {"tag": tag_str, "renamed_to": new_tag_str, "updated": True}
 
         # --- notes 更新 ---
         if notes is not None:

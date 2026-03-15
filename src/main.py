@@ -494,11 +494,12 @@ def update_tag(
     tag: str,
     notes: Optional[str] = None,
     canonical: Optional[str] = None,
+    rename: Optional[str] = None,
 ) -> dict:
     """
-    既存タグの notes（教訓・運用ルール）またはcanonical（エイリアス先）を更新する。
+    既存タグの notes（教訓・運用ルール）、canonical（エイリアス先）、またはname（リネーム）を更新する。
 
-    notesとcanonicalは排他（同時指定不可）。少なくとも1つを指定する。
+    notes / canonical / rename は相互排他（1つだけ指定可能）。少なくとも1つを指定する。
 
     notes: タグに紐づく教訓や運用ルールを記録する。CLAUDE.mdのタグ版として機能し、
     そのタグの文脈で作業するときに自動的にAIに注入される。上書き方式（全文置換）。
@@ -510,15 +511,20 @@ def update_tag(
     canonical=""で解除。連鎖（エイリアスのエイリアス）は禁止。
     notes付きタグはエイリアスにできない（先にnotesを除去すること）。
 
+    rename: 新しいタグ名。namespace変更も可能（例: "hooks" → "domain:hooks"）。
+    IDベースの参照なので紐付けはそのまま維持される。
+    新名が既存タグと衝突する場合はエラー。
+
     Args:
         tag: 対象タグ（例: "domain:cc-memory", "hooks"）
         notes: 教訓・運用ルールのテキスト（全文置換）
         canonical: エイリアス先タグ（""で解除）
+        rename: 新しいタグ名（例: "domain:hooks"）
 
     Returns:
         更新結果
     """
-    return _update_tag(tag, notes=notes, canonical=canonical)
+    return _update_tag(tag, notes=notes, canonical=canonical, rename=rename)
 
 
 @mcp.tool()
