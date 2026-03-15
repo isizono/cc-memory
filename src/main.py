@@ -15,6 +15,7 @@ from src.services import (
 from src.services.activity_service import HEARTBEAT_TIMEOUT_MINUTES
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import list_tags as _list_tags, update_tag as _update_tag, collect_tag_notes_for_injection
+from src.services.tag_analysis_service import analyze_tags as _analyze_tags
 from src.db import execute_query, get_connection, row_to_dict
 
 logger = logging.getLogger(__name__)
@@ -525,6 +526,32 @@ def update_tag(
         更新結果
     """
     return _update_tag(tag, notes=notes, canonical=canonical, rename=rename)
+
+
+@mcp.tool()
+def analyze_tags(
+    domain: Optional[str] = None,
+    include_domain_tags: bool = False,
+    focus_tag: Optional[str] = None,
+    min_usage: int = 2,
+    top_n: int = 20,
+) -> dict:
+    """タグの共起分析を実行する。PMIで共起の重みを計算し、クラスタ検出・孤児タグ検出・重複候補検出を行う。
+
+    Args:
+        domain: domainフィルタ（例: "cc-memory"）。指定時はそのdomainに属するエンティティのみを分析対象にする
+        include_domain_tags: Trueの場合、domain:タグも分析対象に含める（デフォルトFalse）
+        focus_tag: 特定タグにフォーカス。指定時はco_occurrencesをそのタグを含むペアのみに絞る
+        min_usage: 孤児判定の閾値。usage_countがこの値未満のタグを孤児とする（デフォルト2）
+        top_n: co_occurrencesの返却件数上限（デフォルト20）
+
+    Returns:
+        co_occurrences: 共起ペア（PMI降順）
+        clusters: PMI閾値ベースの連結成分クラスタ
+        orphans: 使用頻度が低い孤児タグ
+        suspected_duplicates: embedding類似度ベースの重複候補
+    """
+    return _analyze_tags(domain, include_domain_tags, focus_tag, min_usage, top_n)
 
 
 @mcp.tool()
