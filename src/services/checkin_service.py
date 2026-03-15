@@ -136,7 +136,7 @@ def check_in(activity_id: int) -> dict:
 
     Returns:
         check-in結果（activity, related_topics, related_activities, tag_notes,
-        reminders, materials, recent_decisions, catalog, summary）
+        materials, recent_decisions, catalog, summary）
     """
     conn = get_connection()
     try:
@@ -168,22 +168,16 @@ def check_in(activity_id: int) -> dict:
         # 3. tag_notes収集
         tag_notes = collect_tag_notes_for_injection(conn, tags, always_inject_namespaces=["intent"]) or []
 
-        # 4. reminders取得
-        reminder_rows = conn.execute(
-            "SELECT content FROM reminders WHERE active = 1"
-        ).fetchall()
-        active_reminders = [r["content"] for r in reminder_rows]
-
-        # 5. materials取得（カタログ形式、共有コネクション使用）
+        # 4. materials取得（カタログ形式、共有コネクション使用）
         materials = get_materials_by_activity_with_conn(conn, activity_id)
 
-        # 6. recent_decisions取得（関連topic横断、フラット15件）
+        # 5. recent_decisions取得（関連topic横断、フラット15件）
         recent_decisions = _get_decisions_from_topics(conn, direct["topic"])
 
-        # 7. 2次カタログ取得（depth 1-2）
+        # 6. 2次カタログ取得（depth 1-2）
         catalog = _get_map_with_conn(conn, "activity", activity_id, min_depth=1, max_depth=2)
 
-        # 8. status自動更新（in_progress以外ならin_progressに変更）
+        # 7. status自動更新（in_progress以外ならin_progressに変更）
         # NOTE: update_activityは内部で別コネクションを使用する（既存APIの制約）。
         # check_inのトランザクションとは独立してコミットされる。
         if activity["status"] != "in_progress":
@@ -197,7 +191,7 @@ def check_in(activity_id: int) -> dict:
             else:
                 activity["status"] = "in_progress"
 
-        # 9. summary生成
+        # 8. summary生成
         summary = _build_summary(activity, tags)
 
         # 戻り値組み立て
@@ -220,7 +214,6 @@ def check_in(activity_id: int) -> dict:
             result["related_activities"] = related_activities
 
         result["tag_notes"] = tag_notes
-        result["reminders"] = active_reminders
         result["materials"] = materials
         result["recent_decisions"] = recent_decisions
         if catalog:

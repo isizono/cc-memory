@@ -14,6 +14,19 @@ from src.services.tag_service import (
 )
 
 
+def get_recent_topics_with_conn(conn, limit: int = 10) -> list[dict]:
+    """最近作成されたトピックのID・タイトルを取得する（conn共有版）。
+
+    Returns:
+        [{"id": int, "title": str}, ...]（created_at降順）
+    """
+    rows = conn.execute(
+        "SELECT id, title FROM discussion_topics ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [row_to_dict(r) for r in rows]
+
+
 def add_topic(
     title: str,
     description: str,

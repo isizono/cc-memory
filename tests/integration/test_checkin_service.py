@@ -7,7 +7,6 @@ from src.services.activity_service import add_activity, update_activity
 from src.services.decision_service import add_decision
 from src.services.material_service import add_material
 from src.services.relation_service import add_relation
-from src.services.reminder_service import add_reminder, update_reminder
 from src.services.topic_service import add_topic
 from src.services.checkin_service import check_in, DECISIONS_FULL_LIMIT
 from src.services.tag_service import _injected_tags
@@ -277,66 +276,6 @@ class TestCheckInTagNotes:
         domain_notes2 = [n for n in result2["tag_notes"] if n["tag"] == "domain:once"]
         assert len(domain_notes2) == 0
 
-
-class TestCheckInReminders:
-    """check-in時のreminders注入テスト"""
-
-    def test_check_in_has_reminders_field(self, activity_id):
-        """check-in結果にremindersフィールドが含まれる"""
-        result = check_in(activity_id)
-
-        assert "error" not in result
-        assert "reminders" in result
-        assert isinstance(result["reminders"], list)
-
-    def test_check_in_includes_initial_reminder(self, activity_id):
-        """マイグレーションで投入された初期リマインダーがremindersに含まれる"""
-        result = check_in(activity_id)
-
-        assert "error" not in result
-        assert len(result["reminders"]) >= 1
-        assert any("IDを指示語代わりにしない" in r for r in result["reminders"])
-
-    def test_check_in_includes_added_reminder(self, temp_db):
-        """add_reminderで追加したリマインダーがcheck-inのremindersに含まれる"""
-        add_reminder("テスト用カスタムリマインダー")
-
-        activity = add_activity(
-            title="Reminders test",
-            description="Desc",
-            tags=DEFAULT_TAGS,
-            check_in=False,
-        )
-
-        result = check_in(activity["activity_id"])
-
-        assert "error" not in result
-        assert "テスト用カスタムリマインダー" in result["reminders"]
-
-    def test_check_in_excludes_inactive_reminder(self, temp_db):
-        """active=0のリマインダーはcheck-inのremindersに含まれない"""
-        created = add_reminder("無効化されるリマインダー")
-        update_reminder(created["reminder_id"], active=0)
-
-        activity = add_activity(
-            title="Inactive reminders test",
-            description="Desc",
-            tags=DEFAULT_TAGS,
-            check_in=False,
-        )
-
-        result = check_in(activity["activity_id"])
-
-        assert "error" not in result
-        assert "無効化されるリマインダー" not in result["reminders"]
-
-    def test_check_in_reminders_content_only(self, activity_id):
-        """remindersはcontent文字列のリストである（dictではない）"""
-        result = check_in(activity_id)
-
-        assert "error" not in result
-        for reminder in result["reminders"]:
-            assert isinstance(reminder, str)
 
 
 class TestCheckInRelations:

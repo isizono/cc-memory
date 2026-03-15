@@ -267,6 +267,72 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
         conn.close()
 
 
+def get_active_domains_with_conn(conn) -> list[dict]:
+    """アクティブなアクティビティ（in_progress/pending）があるdomain:タグを取得する（conn共有版）。
+
+    Returns:
+        [{"tag_id": int, "name": str}, ...]（name順ソート）
+    """
+    rows = conn.execute(
+        """
+        SELECT DISTINCT t.id AS tag_id, t.name
+        FROM tags t
+        JOIN activity_tags at ON t.id = at.tag_id
+        JOIN activities a ON at.activity_id = a.id
+        WHERE t.namespace = 'domain'
+          AND a.status IN ('in_progress', 'pending')
+        ORDER BY t.name
+        """,
+    ).fetchall()
+    return [row_to_dict(r) for r in rows]
+
+
+def get_active_domains() -> list[dict]:
+    """アクティブなアクティビティ（in_progress/pending）があるdomain:タグを取得する。"""
+    conn = get_connection()
+    try:
+        return get_active_domains_with_conn(conn)
+    finally:
+        conn.close()
+
+
+def get_active_activities_by_tag_with_conn(conn, tag_id: int) -> list[dict]:
+    """domain:タグに紐づくホットアクティビティを取得する（conn共有版）。
+
+    Returns:
+        [{"id": int, "title": str, "status": str, "updated_at": str, "is_heartbeat_active": bool}, ...]
+        （in_progress優先、updated_at降順）
+    """
+    rows = conn.execute(
+        """
+        SELECT a.id, a.title, a.status, a.updated_at,
+               CASE WHEN a.last_heartbeat_at > datetime('now', '-' || ? || ' minutes') THEN 1 ELSE 0 END AS is_heartbeat_active
+        FROM activities a
+        JOIN activity_tags at ON a.id = at.activity_id
+        WHERE at.tag_id = ?
+          AND a.status IN ('in_progress', 'pending')
+        ORDER BY CASE a.status WHEN 'in_progress' THEN 0 ELSE 1 END,
+                 a.updated_at DESC
+        """,
+        (HEARTBEAT_TIMEOUT_MINUTES, tag_id),
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = row_to_dict(r)
+        d["is_heartbeat_active"] = bool(d["is_heartbeat_active"])
+        result.append(d)
+    return result
+
+
+def get_active_activities_by_tag(tag_id: int) -> list[dict]:
+    """domain:タグに紐づくホットアクティビティ（pending + in_progress）を取得する。"""
+    conn = get_connection()
+    try:
+        return get_active_activities_by_tag_with_conn(conn, tag_id)
+    finally:
+        conn.close()
+
+
 def update_activity(
     activity_id: int,
     new_status: Optional[str] = None,

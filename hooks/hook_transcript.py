@@ -11,17 +11,6 @@ from pathlib import Path
 
 _CC_MEMORY_PREFIX = "mcp__plugin_claude-code-memory_cc-memory__"
 
-# --- コンテキスト取得ツール ---
-
-_CONTEXT_RETRIEVAL_TOOLS = {
-    "search",
-    "get_topics",
-    "get_decisions",
-    "get_logs",
-    "get_activities",
-    "get_by_ids",
-}
-
 # --- 記録ツール ---
 
 _RECORDING_TOOLS = {

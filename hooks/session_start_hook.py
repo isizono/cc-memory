@@ -1,25 +1,174 @@
-"""SessionStart hook: コンテキスト取得リマインダー注入"""
+"""SessionStart hook: セッションレベル文脈注入
+
+サービス層経由でDBからデータを取得し、セッション開始時のコンテキストを注入する。
+- アクティビティ一覧（active = in_progress + pending）
+- トピック一覧
+- リマインダー（active=1）
+"""
 import json
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
-_SESSION_START_MESSAGE = (
-    "<system-reminder>"
-    "Session started. Before composing your first response, retrieve past context. "
-    "Steps: (1) Use get_topics to review the topic list. "
-    "(2) If a relevant topic exists, use get_by_ids to fetch details. "
-    "(3) Use get_decisions / get_logs as needed for further details. "
-    "Skipping this will cause the stop hook to block you."
-    "</system-reminder>"
+# プロジェクトルートをパスに追加（src.db等の参照用）
+_project_root = Path(__file__).resolve().parents[1]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+from src.db import get_connection
+from src.services.activity_service import (
+    get_active_domains_with_conn,
+    get_active_activities_by_tag_with_conn,
 )
+from src.services.topic_service import get_recent_topics_with_conn
+from src.services.reminder_service import get_active_reminder_contents_with_conn
+
+# 表示用の定数
+IN_PROGRESS_LIMIT = 3
+PENDING_LIMIT = 2
+TOPICS_LIMIT = 10
+
+
+def _calc_elapsed_days(updated_at_str: str) -> int:
+    """updated_atからの経過日数を計算する。"""
+    try:
+        updated = datetime.fromisoformat(updated_at_str).replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return (now - updated).days
+    except (ValueError, TypeError):
+        return 0
+
+
+def _build_activities_section(conn) -> str:
+    """アクティビティ一覧をdomain:タグごとに組み立てる。"""
+    domains = get_active_domains_with_conn(conn)
+
+    if not domains:
+        return ""
+
+    domain_sections = []
+    for domain in domains:
+        tag_id = domain["tag_id"]
+        name = domain["name"]
+
+        activities = get_active_activities_by_tag_with_conn(conn, tag_id)
+        if not activities:
+            continue
+
+        heartbeat_activities = [a for a in activities if a.get("is_heartbeat_active")]
+        normal_activities = [a for a in activities if not a.get("is_heartbeat_active")]
+
+        in_progress = [a for a in normal_activities if a["status"] == "in_progress"]
+        pending = [a for a in normal_activities if a["status"] == "pending"]
+
+        shown_ip = in_progress[:IN_PROGRESS_LIMIT]
+        shown_pending = pending[:PENDING_LIMIT]
+        overflow = len(normal_activities) - len(shown_ip) - len(shown_pending)
+
+        lines = [f"## {name} (domain)"]
+
+        if heartbeat_activities:
+            lines.append("作業中（別セッション）:")
+            for a in heartbeat_activities:
+                days = _calc_elapsed_days(a["updated_at"])
+                lines.append(f"- [{a['id']}] {a['title']} ({days}d)")
+
+        for a in shown_ip:
+            days = _calc_elapsed_days(a["updated_at"])
+            lines.append(f"\u25cf [{a['id']}] {a['title']} ({days}d)")
+        for a in shown_pending:
+            days = _calc_elapsed_days(a["updated_at"])
+            lines.append(f"\u25cb [{a['id']}] {a['title']} ({days}d)")
+
+        if overflow > 0:
+            lines.append(f"  (+{overflow}件)")
+
+        domain_sections.append("\n".join(lines))
+
+    if not domain_sections:
+        return ""
+
+    parts = ["# アクティビティ一覧", ""]
+    parts.append(domain_sections[0])
+    for section in domain_sections[1:]:
+        parts.append("")
+        parts.append(section)
+
+    return "\n".join(parts) + "\n"
+
+
+def _build_topics_section(conn) -> str:
+    """トピック一覧を組み立てる（最近作成された順）。"""
+    topics = get_recent_topics_with_conn(conn, limit=TOPICS_LIMIT)
+
+    if not topics:
+        return ""
+
+    lines = [f"# トピック一覧（最新{TOPICS_LIMIT}件）"]
+    for t in topics:
+        lines.append(f"- [{t['id']}] {t['title']}")
+
+    return "\n".join(lines) + "\n"
+
+
+def _build_reminders_section(conn) -> str:
+    """リマインダー一覧を組み立てる。"""
+    contents = get_active_reminder_contents_with_conn(conn)
+
+    if not contents:
+        return ""
+
+    lines = ["# リマインダー"]
+    for content in contents:
+        lines.append(f"- {content}")
+
+    return "\n".join(lines) + "\n"
+
+
+def _build_session_context() -> str:
+    """サービス層経由でセッション開始時のコンテキストを組み立てる。
+
+    各セクションは独立してtry/exceptで保護し、
+    一部のセクションが失敗しても残りは返す。
+    """
+    conn = get_connection()
+    try:
+        sections = []
+        builders = [
+            _build_activities_section,
+            _build_topics_section,
+            _build_reminders_section,
+        ]
+        for builder in builders:
+            try:
+                result = builder(conn)
+                if result:
+                    sections.append(result)
+            except Exception:
+                # セクション単位で失敗を許容し、残りのセクションは返す
+                pass
+
+        if not sections:
+            return ""
+
+        context = "\n".join(sections)
+        context += "\n詳細はsearch / get_decisions / get_logs / check_in等で取得してください。"
+        return context
+
+    finally:
+        conn.close()
 
 
 def main() -> None:
     try:
         sys.stdin.read()  # stdinを消費（session_id等が渡されるが今は不使用）
+
+        context = _build_session_context()
+
         output = {
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": _SESSION_START_MESSAGE,
+                "additionalContext": context,
             }
         }
         print(json.dumps(output, ensure_ascii=False))

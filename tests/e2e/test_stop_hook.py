@@ -206,14 +206,14 @@ class TestNoMetaTag:
 
 
 class TestMetaTagApproves:
-    """メタタグあり + コンテキスト取得済み → approve"""
+    """メタタグあり → approve"""
 
-    def test_meta_tag_with_context_retrieval_approves(self, env_setup):
+    def test_meta_tag_approves(self, env_setup):
+        """メタタグがあればapprove"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
                 _make_assistant_entry(text=f"{META_TAG}\nresponse"),
             ],
             transcript,
@@ -426,11 +426,11 @@ class TestExceptionFailOpen:
         assert "post-approve error" in result.stderr
 
 
-class TestContextRetrievalCheck:
-    """コンテキスト取得ツール呼び出しチェック"""
+class TestMetaTagWithToolCalls:
+    """メタタグ + ツール呼び出しの組み合わせテスト"""
 
-    def test_no_context_retrieval_blocks(self, env_setup):
-        """コンテキスト取得ツール未呼出 + メタタグあり → block"""
+    def test_meta_tag_approves_without_context_retrieval(self, env_setup):
+        """メタタグあり → context retrieval不要でapprove"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -444,116 +444,7 @@ class TestContextRetrievalCheck:
             str(transcript), "test-session", env_setup["env_override"],
             last_assistant_message=f"response\n{META_TAG}",
         )
-        assert result["decision"] == "block"
-        assert "コンテキスト" in result["reason"]
-
-    def test_get_topics_call_approves(self, env_setup):
-        """get_topics呼出済み → approve"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_search_call_approves(self, env_setup):
-        """search呼出済み → approve"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                _make_assistant_entry(
-                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__search"],
-                ),
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_get_by_ids_call_approves(self, env_setup):
-        """get_by_ids呼出済み → approve"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                _make_assistant_entry(
-                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_by_ids"],
-                ),
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_add_topic_does_not_count_as_retrieval(self, env_setup):
-        """add_topicは記録ツールでありコンテキスト取得とみなさない → block"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                _make_assistant_entry(
-                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_topic"],
-                ),
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "block"
-        assert "コンテキスト" in result["reason"]
-
-    def test_context_retrieval_persists_in_events(self, env_setup):
-        """過去turnでコンテキスト取得済み → 新turnでも有効"""
-        state_dir = env_setup["state_dir"]
-
-        _write_events(
-            [
-                {"e": "tool", "name": "get_topics", "turn": 1},
-                {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
-                {"e": "meta", "topic": "test-topic", "turn": 1},
-            ],
-            state_dir, "test-session",
-        )
-        Path(state_dir, "current_turn_test-session").write_text("1")
-        Path(state_dir, "prev_topic_test-session").write_text("test-topic")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
+        # context retrieval判定が廃止されたため、メタタグだけでapprove
         assert result["decision"] == "approve"
 
 

@@ -6,6 +6,18 @@ from src.db import get_connection, row_to_dict
 logger = logging.getLogger(__name__)
 
 
+def get_active_reminder_contents_with_conn(conn) -> list[str]:
+    """有効なリマインダーのcontent一覧を取得する（conn共有版）。
+
+    Returns:
+        [content, ...]
+    """
+    rows = conn.execute(
+        "SELECT content FROM reminders WHERE active = 1"
+    ).fetchall()
+    return [r["content"] for r in rows]
+
+
 def add_reminder(content: str) -> dict:
     """リマインダーを追加する。
 

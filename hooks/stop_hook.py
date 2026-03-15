@@ -7,10 +7,9 @@
 4. events.jsonl全読み
 5. Skill Span判定 → Span中なら即approve（安全弁: MAX_SKILL_SPAN_TURNS）
 6. メタタグ判定（最新e:metaイベント、初期ターン猶予あり）
-7. context retrieval判定（e:toolで取得系ツールが1件でもあるか）
-8. check-in判定（e:toolでcheck_in/add_activityが1件でもあるか、猶予あり）
-9. トピック変更 → 記録チェック（prev_topic比較 + 初回遷移許容 + e:toolで直近N turn）
-10. nudge判定 + 状態更新 → approve
+7. check-in判定（e:toolでcheck_in/add_activityが1件でもあるか、猶予あり）
+8. トピック変更 → 記録チェック（prev_topic比較 + 初回遷移許容 + e:toolで直近N turn）
+9. nudge判定 + 状態更新 → approve
 """
 import json
 import os
@@ -27,7 +26,6 @@ from hooks.heartbeat import update_heartbeat
 from hooks.hook_state import HookState
 from hooks.hook_transcript import (
     _CHECKIN_TOOLS,
-    _CONTEXT_RETRIEVAL_TOOLS,
     _RECORDING_TOOLS,
     extract_events,
     extract_last_activity_id,
@@ -149,22 +147,7 @@ def main() -> None:
 
         current_topic_name = latest_meta
 
-        # 7. context retrieval判定
-        has_retrieval = any(
-            e["e"] == "tool" and e.get("name") in _CONTEXT_RETRIEVAL_TOOLS
-            for e in all_events
-        )
-        if not has_retrieval:
-            state.increment_block_count()
-            _output(
-                "block",
-                "応答の前に過去のコンテキストを取得してください。"
-                "search / get_topics / get_decisions / get_logs / get_activities / get_by_ids "
-                "のいずれかを使ってください。",
-            )
-            return
-
-        # 8. check-in判定
+        # 7. check-in判定
         has_checkin = any(
             e["e"] == "tool" and e.get("name") in _CHECKIN_TOOLS
             for e in all_events
@@ -182,7 +165,7 @@ def main() -> None:
             )
             return
 
-        # 9. トピック変更チェック
+        # 8. トピック変更チェック
         prev_topic = state.get_prev_topic()
         if prev_topic is not None and prev_topic != current_topic_name:
             # 初回遷移判定: 過去turnのmetaイベントに異なるtopicが2つ以上あるか
@@ -210,7 +193,7 @@ def main() -> None:
                     )
                     return
 
-        # 10. nudge判定 + 状態更新 + approve
+        # 9. nudge判定 + 状態更新 + approve
         state.reset_block_count()
         _output("approve")
         _safe_post_approve(
