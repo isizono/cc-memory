@@ -52,11 +52,15 @@ RRF_W_TAG = 0.5
 
 # Adaptive RRF: FTS/ベクトルのヒット数比率に応じて重みを動的調整
 ADAPTIVE_RRF_ENABLED = True
-ADAPTIVE_RRF_THRESHOLDS = [
+ADAPTIVE_RRF_THRESHOLDS: tuple[tuple[float, float, float], ...] = (
     # (ratio上限, w_fts, w_vec) — ratioが小さい順に評価
     (0.2, 0.5, 1.5),
     (0.5, 0.8, 1.2),
-]
+)
+assert all(
+    ADAPTIVE_RRF_THRESHOLDS[i][0] < ADAPTIVE_RRF_THRESHOLDS[i + 1][0]
+    for i in range(len(ADAPTIVE_RRF_THRESHOLDS) - 1)
+), "ADAPTIVE_RRF_THRESHOLDS must be sorted in ascending order of threshold"
 
 # Recency boost パラメータ
 # 半年(182日)で約0.80倍、1年(365日)で約0.66倍
@@ -835,6 +839,7 @@ def _compute_adaptive_weights(fts_count: int, vec_count: int) -> tuple[float, fl
     """FTS/ベクトルのヒット数比率に応じてRRF重みを動的に算出する。
 
     ADAPTIVE_RRF_ENABLED=Falseまたはvec_count=0のときはデフォルト重みを返す。
+    fts_count=0かつvec_count>0の場合はratio=0.0となり最もベクトル寄りの重みが適用される。
     タグLIKEの重み(RRF_W_TAG)は適応対象外。
 
     Returns:
