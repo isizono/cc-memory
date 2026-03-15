@@ -391,6 +391,21 @@ class TestGetMap:
         assert "error" in result
         assert result["error"]["code"] == "INVALID_PARAMETER"
 
+    def test_get_map_max_depth_exceeds_limit(self, temp_db):
+        """max_depth > 10でエラー"""
+        result = get_map("topic", 1, min_depth=0, max_depth=11)
+
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_PARAMETER"
+        assert "10" in result["error"]["message"]
+
+    def test_get_map_max_depth_at_limit(self, sample_entities):
+        """max_depth=10は許可される"""
+        e = sample_entities
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=10)
+
+        assert "error" not in result
+
     def test_get_map_no_relations(self, sample_entities):
         """リレーションなしの場合、起点のみ返る"""
         e = sample_entities
