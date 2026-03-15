@@ -5,41 +5,84 @@ import sqlite3
 from src.db import get_connection, row_to_dict
 from src.services import activity_service, decision_service
 from src.services.material_service import get_materials_by_activity_with_conn
+from src.services.relation_service import _get_map_with_conn
 from src.services.tag_service import (
     collect_tag_notes_for_injection,
     get_entity_tags,
+    get_entity_tags_batch,
 )
 
 logger = logging.getLogger(__name__)
 
+# 1次 decisions の展開上限
+DECISIONS_FULL_LIMIT = 15
 
-def _get_topic_id(conn, activity_id: int) -> int | None:
-    """activitiesテーブルからtopic_idを取得する。
 
-    topic_idカラムが存在しない場合やNULLの場合はNoneを返す。
+def _get_direct_relations(conn: sqlite3.Connection, entity_type: str, entity_id: int) -> dict[str, list[int]]:
+    """relations_viewから直接関連エンティティのIDをtype別に取得する。
+
+    Returns:
+        {"topic": [id, ...], "activity": [id, ...]}
     """
-    try:
-        row = conn.execute(
-            "SELECT topic_id FROM activities WHERE id = ?",
-            (activity_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return row["topic_id"]
-    except sqlite3.OperationalError:
-        # topic_idカラムが存在しない場合（migration 0010で削除済み）
-        return None
+    rows = conn.execute(
+        "SELECT target_type, target_id FROM relations_view WHERE source_type = ? AND source_id = ?",
+        (entity_type, entity_id),
+    ).fetchall()
+
+    result: dict[str, list[int]] = {"topic": [], "activity": []}
+    for row in rows:
+        target_type = row["target_type"]
+        if target_type in result:
+            result[target_type].append(row["target_id"])
+    return result
 
 
-def _get_topic_info(conn, topic_id: int) -> dict | None:
-    """discussion_topicsからトピック情報を取得する。"""
-    row = conn.execute(
-        "SELECT id, title FROM discussion_topics WHERE id = ?",
-        (topic_id,),
-    ).fetchone()
-    if row is None:
-        return None
-    return {"id": row["id"], "title": row["title"]}
+def _get_topics_info(conn: sqlite3.Connection, topic_ids: list[int]) -> list[dict]:
+    """複数トピックの基本情報を取得する。"""
+    if not topic_ids:
+        return []
+    placeholders = ",".join("?" * len(topic_ids))
+    rows = conn.execute(
+        f"SELECT id, title FROM discussion_topics WHERE id IN ({placeholders})",
+        tuple(topic_ids),
+    ).fetchall()
+    return [{"id": row["id"], "title": row["title"]} for row in rows]
+
+
+def _get_activities_overview(conn: sqlite3.Connection, activity_ids: list[int]) -> list[dict]:
+    """複数アクティビティの概要を取得する（1次展開用）。"""
+    if not activity_ids:
+        return []
+    placeholders = ",".join("?" * len(activity_ids))
+    rows = conn.execute(
+        f"SELECT id, title, status FROM activities WHERE id IN ({placeholders})",
+        tuple(activity_ids),
+    ).fetchall()
+    return [{"id": row["id"], "title": row["title"], "status": row["status"]} for row in rows]
+
+
+def _get_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -> list[dict]:
+    """複数トピックのdecisionsを横断取得し、新しい順にフラット化する。
+
+    上位DECISIONS_FULL_LIMIT件はid+title、超過分はid+titleのみ。
+    """
+    if not topic_ids:
+        return []
+    placeholders = ",".join("?" * len(topic_ids))
+    rows = conn.execute(
+        f"""
+        SELECT id, decision, topic_id
+        FROM decisions
+        WHERE topic_id IN ({placeholders})
+        ORDER BY id DESC
+        """,
+        tuple(topic_ids),
+    ).fetchall()
+
+    decisions = []
+    for row in rows:
+        decisions.append({"id": row["id"], "title": row["decision"]})
+    return decisions
 
 
 def _extract_intent_tag(tags: list[str]) -> str:
@@ -71,8 +114,12 @@ def _build_summary(
 def check_in(activity_id: int) -> dict:
     """アクティビティにcheck-inする。
 
-    関連情報（tag_notes, materials, decisions）を集約取得し、
+    関連情報（tag_notes, materials, decisions, catalog）を集約取得し、
     status自動更新とsummary生成を行う。
+
+    リレーション対応:
+    - 1次（直接関連）: 関連topicのdecisions（フラット15件、新しい順）+ 関連activityの概要
+    - 2次: get_mapによるカタログ（id, type, title, tags）
 
     statusがin_progress以外（pending, completed含む）の場合はin_progressに自動更新する。
     completedのアクティビティも再オープンされる（追加作業が発生したケースに対応）。
@@ -88,7 +135,8 @@ def check_in(activity_id: int) -> dict:
         activity_id: アクティビティID
 
     Returns:
-        check-in結果（activity, topic, tag_notes, reminders, materials, recent_decisions, summary）
+        check-in結果（activity, related_topics, related_activities, tag_notes,
+        reminders, materials, recent_decisions, catalog, summary）
     """
     conn = get_connection()
     try:
@@ -108,11 +156,14 @@ def check_in(activity_id: int) -> dict:
         activity = row_to_dict(row)
         tags = get_entity_tags(conn, "activity_tags", "activity_id", activity_id)
 
-        # 2. topic取得（NULLなら省略）
-        topic_id = _get_topic_id(conn, activity_id)
-        topic_info = None
-        if topic_id is not None:
-            topic_info = _get_topic_info(conn, topic_id)
+        # 2. 直接関連エンティティ取得（1次）
+        direct = _get_direct_relations(conn, "activity", activity_id)
+
+        # 2a. 関連トピック情報
+        related_topics = _get_topics_info(conn, direct["topic"])
+
+        # 2b. 関連アクティビティ概要
+        related_activities = _get_activities_overview(conn, direct["activity"])
 
         # 3. tag_notes収集
         tag_notes = collect_tag_notes_for_injection(conn, tags, always_inject_namespaces=["intent"]) or []
@@ -126,23 +177,13 @@ def check_in(activity_id: int) -> dict:
         # 5. materials取得（カタログ形式、共有コネクション使用）
         materials = get_materials_by_activity_with_conn(conn, activity_id)
 
-        # 6. recent_decisions取得（topic_idがある場合のみ）
-        recent_decisions = []
-        if topic_id is not None:
-            decisions_result = decision_service.get_decisions(topic_id)
-            if "error" in decisions_result:
-                logger.warning(
-                    "Failed to get decisions for topic %d: %s",
-                    topic_id,
-                    decisions_result["error"],
-                )
-            else:
-                recent_decisions = [
-                    {"id": d["id"], "title": d["decision"]}
-                    for d in decisions_result.get("decisions", [])
-                ]
+        # 6. recent_decisions取得（関連topic横断、フラット15件）
+        recent_decisions = _get_decisions_from_topics(conn, direct["topic"])
 
-        # 7. status自動更新（in_progress以外ならin_progressに変更）
+        # 7. 2次カタログ取得（depth 1-2）
+        catalog = _get_map_with_conn(conn, "activity", activity_id, min_depth=1, max_depth=2)
+
+        # 8. status自動更新（in_progress以外ならin_progressに変更）
         # NOTE: update_activityは内部で別コネクションを使用する（既存APIの制約）。
         # check_inのトランザクションとは独立してコミットされる。
         if activity["status"] != "in_progress":
@@ -156,7 +197,7 @@ def check_in(activity_id: int) -> dict:
             else:
                 activity["status"] = "in_progress"
 
-        # 8. summary生成
+        # 9. summary生成
         summary = _build_summary(activity, tags)
 
         # 戻り値組み立て
@@ -170,13 +211,16 @@ def check_in(activity_id: int) -> dict:
             },
         }
 
-        if topic_info is not None:
-            result["topic"] = topic_info
+        if related_topics:
+            result["topic"] = related_topics[0] if len(related_topics) == 1 else None
+            result["related_topics"] = related_topics
 
         result["tag_notes"] = tag_notes
         result["reminders"] = active_reminders
         result["materials"] = materials
         result["recent_decisions"] = recent_decisions
+        if catalog:
+            result["catalog"] = catalog
         result["summary"] = summary
 
         return result

@@ -104,13 +104,13 @@ class TestCheckIn:
         assert result["error"]["code"] == "NOT_FOUND"
         assert "9999" in result["error"]["message"]
 
-    def test_check_in_topic_omitted_when_no_topic_id(self, activity_id):
-        """topic_idがない場合、topicフィールドが結果に含まれない"""
+    def test_check_in_no_related_topics_when_no_relations(self, activity_id):
+        """リレーションがない場合、related_topicsが結果に含まれない"""
         result = check_in(activity_id)
 
         assert "error" not in result
-        # topic_idが未指定（NULL）のため、topicは省略される
-        assert "topic" not in result
+        # リレーションが未設定のため、related_topicsは省略される
+        assert "related_topics" not in result
 
     def test_check_in_materials_empty(self, activity_id):
         """materials 0件の場合、空リストが返る"""
@@ -135,8 +135,8 @@ class TestCheckIn:
             assert "created_at" in m
             assert "content" not in m
 
-    def test_check_in_recent_decisions_empty_without_topic(self, activity_id):
-        """topic_idがない場合、recent_decisionsは空リスト"""
+    def test_check_in_recent_decisions_empty_without_relations(self, activity_id):
+        """リレーションがない場合、recent_decisionsは空リスト"""
         result = check_in(activity_id)
 
         assert "error" not in result

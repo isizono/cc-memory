@@ -111,8 +111,8 @@ class TestAddActivity:
         assert result["status"] == "pending"
         assert "check_in_result" not in result
 
-    def test_add_activity_with_topic_id(self, temp_db):
-        """topic_id指定でアクティビティが作成される"""
+    def test_add_activity_with_related(self, temp_db):
+        """related指定でアクティビティ作成時にリレーションが張られる"""
         # トピックを作成
         conn = get_connection()
         try:
@@ -129,26 +129,26 @@ class TestAddActivity:
             title="Activity with topic",
             description="Description",
             tags=DEFAULT_TAGS,
-            topic_id=topic_id,
+            related=[{"type": "topic", "ids": [topic_id]}],
             check_in=False,
         )
 
         assert "error" not in result
         assert result["activity_id"] > 0
 
-        # DBでtopic_idが保存されていることを確認
+        # topic_activity_relationsにリレーションが保存されていることを確認
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT topic_id FROM activities WHERE id = ?",
-                (result["activity_id"],),
+                "SELECT * FROM topic_activity_relations WHERE topic_id = ? AND activity_id = ?",
+                (topic_id, result["activity_id"]),
             ).fetchone()
-            assert row["topic_id"] == topic_id
+            assert row is not None
         finally:
             conn.close()
 
-    def test_add_activity_without_topic_id(self, temp_db):
-        """topic_id未指定でtopic_idがNULLのアクティビティが作成される"""
+    def test_add_activity_without_related(self, temp_db):
+        """related未指定でリレーションなしのアクティビティが作成される"""
         result = add_activity(
             title="Activity no topic",
             description="Description",
@@ -161,15 +161,15 @@ class TestAddActivity:
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT topic_id FROM activities WHERE id = ?",
+                "SELECT COUNT(*) as cnt FROM topic_activity_relations WHERE activity_id = ?",
                 (result["activity_id"],),
             ).fetchone()
-            assert row["topic_id"] is None
+            assert row["cnt"] == 0
         finally:
             conn.close()
 
-    def test_add_activity_with_topic_id_and_check_in(self, temp_db):
-        """topic_id + check_in=Trueでrecent_decisionsが取得される"""
+    def test_add_activity_with_related_and_check_in(self, temp_db):
+        """related + check_in=Trueでrelated_topicsが取得される"""
         # トピックを作成
         conn = get_connection()
         try:
@@ -186,16 +186,16 @@ class TestAddActivity:
             title="Activity with topic and check-in",
             description="Description",
             tags=DEFAULT_TAGS,
-            topic_id=topic_id,
+            related=[{"type": "topic", "ids": [topic_id]}],
         )
 
         assert "error" not in result
         assert "check_in_result" in result
         check_in_result = result["check_in_result"]
         assert "error" not in check_in_result
-        # topic_idがあるのでtopicフィールドが含まれる
-        assert "topic" in check_in_result
-        assert check_in_result["topic"]["id"] == topic_id
+        # related_topicsに関連トピックが含まれる
+        assert "related_topics" in check_in_result
+        assert any(t["id"] == topic_id for t in check_in_result["related_topics"])
         assert "recent_decisions" in check_in_result
 
 

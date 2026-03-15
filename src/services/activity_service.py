@@ -5,6 +5,7 @@ from typing import Optional
 
 from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
+from src.services.relation_service import _add_relation_with_conn
 from src.services.tag_service import (
     validate_and_parse_tags,
     ensure_tag_ids,
@@ -45,7 +46,7 @@ def add_activity(
     title: str,
     description: str,
     tags: list[str],
-    topic_id: int | None = None,
+    related: list[dict] | None = None,
     check_in: bool = True,
 ) -> dict:
     """
@@ -55,7 +56,7 @@ def add_activity(
         title: アクティビティのタイトル
         description: アクティビティの説明
         tags: タグ配列（必須、1個以上）
-        topic_id: 関連トピックID（optional）
+        related: 関連エンティティ [{"type": "topic", "ids": [1, 2]}, ...] (optional)
         check_in: 作成後にcheck_inを実行するか（デフォルト: True）
 
     Returns:
@@ -69,21 +70,19 @@ def add_activity(
     conn = get_connection()
     try:
         # アクティビティをINSERT
-        if topic_id is not None:
-            cursor = conn.execute(
-                "INSERT INTO activities (title, description, status, topic_id) VALUES (?, ?, ?, ?)",
-                (title, description, 'pending', topic_id),
-            )
-        else:
-            cursor = conn.execute(
-                "INSERT INTO activities (title, description, status) VALUES (?, ?, ?)",
-                (title, description, 'pending'),
-            )
+        cursor = conn.execute(
+            "INSERT INTO activities (title, description, status) VALUES (?, ?, ?)",
+            (title, description, 'pending'),
+        )
         activity_id = cursor.lastrowid
 
         # タグをリンク
         tag_ids = ensure_tag_ids(conn, parsed_tags)
         link_tags(conn, "activity_tags", "activity_id", activity_id, tag_ids)
+
+        # リレーションを追加
+        if related:
+            _add_relation_with_conn(conn, "activity", activity_id, related)
 
         conn.commit()
 

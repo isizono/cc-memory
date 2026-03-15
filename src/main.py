@@ -12,6 +12,7 @@ from src.services import (
     activity_service,
     material_service,
     reminder_service,
+    relation_service,
 )
 from src.services.activity_service import HEARTBEAT_TIMEOUT_MINUTES
 from src.services.checkin_service import check_in as _check_in
@@ -560,7 +561,7 @@ def add_activity(
     title: str,
     description: str,
     tags: list[str],
-    topic_id: int | None = None,
+    related: list[dict] | None = None,
     check_in: bool = True,
 ) -> dict:
     """
@@ -568,21 +569,22 @@ def add_activity(
 
     典型的な使い方:
     - 作業アクティビティを作成: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement", "search", "ranking"])
-    - トピック紐付け: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement"], topic_id=123)
+    - トピック紐付け: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement"], related=[{"type": "topic", "ids": [123]}])
+    - 複数関連: add_activity("...", "...", [...], related=[{"type": "topic", "ids": [1, 2]}, {"type": "activity", "ids": [3]}])
     - check_inなしで作成: add_activity("○○機能を実装", "詳細説明...", ["domain:cc-memory", "intent:implement"], check_in=False)
 
     Args:
         title: アクティビティのタイトル
         description: アクティビティの詳細説明（必須）
         tags: タグ配列（必須、1個以上）。domain:タグとintent:タグは必須。素タグも積極的に付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["domain:cc-memory", "intent:implement", "search", "ranking"]
-        topic_id: 関連トピックID（optional）。指定するとcheck_in時にrecent_decisionsが取得される
+        related: 関連エンティティ（optional）。[{"type": "topic"|"activity", "ids": [int, ...]}] 形式。作成と同時にリレーションを張る
         check_in: 作成後にcheck_inを実行するか（デフォルト: True）。Trueの場合、返り値にcheck_in_resultが含まれる
 
     Returns:
         作成されたアクティビティ情報（check_in=Trueの場合はcheck_in_resultにtag_notes等を含む）
     """
     result = activity_service.add_activity(
-        title, description, tags, topic_id=topic_id, check_in=check_in,
+        title, description, tags, related=related, check_in=check_in,
     )
     if "error" not in result:
         # check_in=Trueの場合、check_in_resultにtag_notesが含まれるため
@@ -736,10 +738,83 @@ def check_in(
         activity_id: アクティビティID
 
     Returns:
-        check-in結果（activity, topic（topic_idがある場合のみ）, tag_notes, reminders, materials, recent_decisions, summary）
+        check-in結果（activity, related_topics, related_activities, tag_notes, reminders, materials, recent_decisions, catalog, summary）
     """
     return _check_in(activity_id)
 
+
+
+@mcp.tool()
+def add_relation(
+    source_type: str,
+    source_id: int,
+    targets: list[dict],
+) -> dict:
+    """
+    エンティティ間のリレーションを追加する。
+
+    典型的な使い方:
+    - トピック同士を関連付け: add_relation("topic", 1, [{"type": "topic", "ids": [2, 3]}])
+    - アクティビティとトピックを関連付け: add_relation("activity", 10, [{"type": "topic", "ids": [1]}])
+    - 複数タイプを一度に: add_relation("topic", 1, [{"type": "topic", "ids": [2]}, {"type": "activity", "ids": [10, 11]}])
+
+    Args:
+        source_type: 起点エンティティのタイプ（"topic" or "activity"）
+        source_id: 起点エンティティのID
+        targets: ターゲットリスト [{"type": "topic"|"activity", "ids": [int, ...]}, ...]
+
+    Returns:
+        成功時: {"added": int}（実際に追加された件数。重複はカウントしない）
+        失敗時: {"error": {"code": ..., "message": ...}}
+    """
+    return relation_service.add_relation(source_type, source_id, targets)
+
+
+@mcp.tool()
+def remove_relation(
+    source_type: str,
+    source_id: int,
+    targets: list[dict],
+) -> dict:
+    """
+    エンティティ間のリレーションを削除する。
+
+    Args:
+        source_type: 起点エンティティのタイプ（"topic" or "activity"）
+        source_id: 起点エンティティのID
+        targets: ターゲットリスト [{"type": "topic"|"activity", "ids": [int, ...]}, ...]
+
+    Returns:
+        成功時: {"removed": int}（実際に削除された件数）
+        失敗時: {"error": {"code": ..., "message": ...}}
+    """
+    return relation_service.remove_relation(source_type, source_id, targets)
+
+
+@mcp.tool()
+def get_map(
+    entity_type: str,
+    entity_id: int,
+    min_depth: int = 0,
+    max_depth: int = 2,
+) -> dict:
+    """
+    リレーショングラフを走査し、到達可能エンティティのカタログを返す。
+
+    再帰的にリレーションを辿り、指定深度範囲のエンティティをカタログ形式で返す。
+    check-in時の2次カタログと同じロジックを使用。
+
+    Args:
+        entity_type: 起点エンティティのタイプ（"topic" or "activity"）
+        entity_id: 起点エンティティのID
+        min_depth: 最小深度（デフォルト: 0。0=起点自身を含む）
+        max_depth: 最大深度（デフォルト: 2、上限: 10）
+
+    Returns:
+        成功時: {"entities": [{"type", "id", "title", "tags", "depth"}, ...], "total_count": int}
+        失敗時: {"error": {"code": ..., "message": ...}}
+    """
+    return relation_service.get_map(entity_type, entity_id, min_depth, max_depth)
 
 
 @mcp.tool()
