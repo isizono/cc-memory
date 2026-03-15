@@ -64,7 +64,8 @@ def add_topic(
         topic = row_to_dict(row)
 
         # embedding生成（失敗してもtopic作成には影響しない）
-        embedding_text = build_embedding_text(title, description)
+        tag_text = " ".join(tag_strings) if tag_strings else ""
+        embedding_text = build_embedding_text(title, description, tag_text)
         embedding_vec = generate_and_store_embedding("topic", topic_id, embedding_text)
 
         # 類似トピックをサジェスト（生成済みembeddingを再利用しHTTPリクエストを削減）

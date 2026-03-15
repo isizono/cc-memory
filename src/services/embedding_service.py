@@ -201,6 +201,82 @@ def update_embedding(search_index_id: int, embedding: list[float]) -> None:
         conn.close()
 
 
+_ENTITY_TEXT_QUERIES = {
+    "topic": (
+        "SELECT title, description FROM discussion_topics WHERE id = ?",
+        ("title", "description"),
+    ),
+    "decision": (
+        "SELECT decision, reason FROM decisions WHERE id = ?",
+        ("decision", "reason"),
+    ),
+    "activity": (
+        "SELECT title, description FROM activities WHERE id = ?",
+        ("title", "description"),
+    ),
+    "log": (
+        "SELECT title, content FROM discussion_logs WHERE id = ?",
+        ("title", "content"),
+    ),
+    "material": (
+        "SELECT title, content FROM materials WHERE id = ?",
+        ("title", "content"),
+    ),
+}
+
+
+def regenerate_embedding(source_type: str, source_id: int) -> None:
+    """エンティティのembeddingをタグ含有テキストで再生成する。
+
+    タグ変更時に呼び出される。失敗してもraiseしない。
+    """
+    if source_type not in _ENTITY_TEXT_QUERIES:
+        return
+    try:
+        conn = get_connection()
+        try:
+            query_def = _ENTITY_TEXT_QUERIES[source_type]
+            row = conn.execute(query_def[0], (source_id,)).fetchone()
+            if not row:
+                return
+            field1 = row[query_def[1][0]]
+            field2 = row[query_def[1][1]]
+            tag_text = _get_entity_tag_text(conn, source_type, source_id)
+            text = build_embedding_text(field1, field2, tag_text)
+            if text:
+                generate_and_store_embedding(source_type, source_id, text)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to regenerate embedding for {source_type} {source_id}: {e}")
+
+
+def _get_entity_tag_text(conn, source_type: str, source_id: int) -> str:
+    """エンティティに紐づくタグ文字列をスペース結合で返す（embedding生成・再生成・backfill共通）。"""
+    from src.services.tag_service import get_entity_tags, get_effective_tags
+
+    if source_type == "topic":
+        tags = get_entity_tags(conn, "topic_tags", "topic_id", source_id)
+    elif source_type == "activity":
+        tags = get_entity_tags(conn, "activity_tags", "activity_id", source_id)
+    elif source_type == "decision":
+        tags = get_effective_tags(conn, "decision", source_id)
+    elif source_type == "log":
+        tags = get_effective_tags(conn, "log", source_id)
+    elif source_type == "material":
+        # materialはactivity_idを取得してactivityのタグを継承
+        row = conn.execute(
+            "SELECT activity_id FROM materials WHERE id = ?", (source_id,)
+        ).fetchone()
+        if row:
+            tags = get_entity_tags(conn, "activity_tags", "activity_id", row["activity_id"])
+        else:
+            tags = []
+    else:
+        tags = []
+    return " ".join(tags) if tags else ""
+
+
 def backfill_embeddings() -> int:
     """search_indexにあってvec_indexにないレコードのembeddingを一括生成する。
 
@@ -212,35 +288,35 @@ def backfill_embeddings() -> int:
     # リソースタイプごとのクエリ（バッチ推論のためにグループ化）
     type_queries = {
         "topic": """
-            SELECT si.id, dt.title, dt.description
+            SELECT si.id, si.source_id, dt.title, dt.description
             FROM search_index si
             INNER JOIN discussion_topics dt ON si.source_id = dt.id
             LEFT JOIN vec_index vi ON si.id = vi.rowid
             WHERE si.source_type = 'topic' AND vi.rowid IS NULL
         """,
         "decision": """
-            SELECT si.id, d.decision, d.reason
+            SELECT si.id, si.source_id, d.decision, d.reason
             FROM search_index si
             INNER JOIN decisions d ON si.source_id = d.id
             LEFT JOIN vec_index vi ON si.id = vi.rowid
             WHERE si.source_type = 'decision' AND vi.rowid IS NULL
         """,
         "activity": """
-            SELECT si.id, a.title, a.description
+            SELECT si.id, si.source_id, a.title, a.description
             FROM search_index si
             INNER JOIN activities a ON si.source_id = a.id
             LEFT JOIN vec_index vi ON si.id = vi.rowid
             WHERE si.source_type = 'activity' AND vi.rowid IS NULL
         """,
         "log": """
-            SELECT si.id, dl.title, dl.content
+            SELECT si.id, si.source_id, dl.title, dl.content
             FROM search_index si
             INNER JOIN discussion_logs dl ON si.source_id = dl.id
             LEFT JOIN vec_index vi ON si.id = vi.rowid
             WHERE si.source_type = 'log' AND vi.rowid IS NULL
         """,
         "material": """
-            SELECT si.id, m.title, m.content
+            SELECT si.id, si.source_id, m.title, m.content
             FROM search_index si
             INNER JOIN materials m ON si.source_id = m.id
             LEFT JOIN vec_index vi ON si.id = vi.rowid
@@ -259,7 +335,8 @@ def backfill_embeddings() -> int:
             ids = []
             texts = []
             for row in rows:
-                text = build_embedding_text(row[1], row[2])
+                tag_text = _get_entity_tag_text(conn, source_type, row[1])
+                text = build_embedding_text(row[2], row[3], tag_text)
                 if text:
                     ids.append(row[0])
                     texts.append(text)  # prefix付与はサーバー側で行う

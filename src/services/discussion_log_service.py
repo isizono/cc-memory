@@ -70,7 +70,8 @@ def add_log(
         effective_tags = get_effective_tags(conn, "log", log_id)
 
         # embedding生成（失敗してもlog作成には影響しない）
-        generate_and_store_embedding("log", log_id, build_embedding_text(title, content))
+        tag_text = " ".join(effective_tags) if effective_tags else ""
+        generate_and_store_embedding("log", log_id, build_embedding_text(title, content, tag_text))
 
         return {
             "log_id": log_id,

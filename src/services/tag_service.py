@@ -780,6 +780,24 @@ def update_tag(
             (canonical_id, tag_id),
         )
 
+        # 影響を受けるエンティティを収集（embedding再生成用）
+        _entity_col_to_type = {
+            "topic_id": "topic",
+            "activity_id": "activity",
+            "decision_id": "decision",
+            "log_id": "log",
+        }
+        affected_entities: list[tuple[str, int]] = []
+        for table, entity_col in JUNCTION_TABLES:
+            rows = conn.execute(
+                f"SELECT {entity_col} FROM {table} WHERE tag_id = ?",
+                (tag_id,),
+            ).fetchall()
+            etype = _entity_col_to_type.get(entity_col)
+            if etype:
+                for r in rows:
+                    affected_entities.append((etype, r[entity_col]))
+
         # 紐付け付け替え: 中間テーブル4つ
         for table, entity_col in JUNCTION_TABLES:
             # 1. 重複する行を削除（canonical側IDが既に存在する場合）
@@ -800,6 +818,19 @@ def update_tag(
             )
 
         conn.commit()
+
+        # タグ変更に伴うembedding再生成（コミット後に同期的に実行）
+        from src.services.embedding_service import regenerate_embedding
+        for etype, eid in affected_entities:
+            regenerate_embedding(etype, eid)
+            # activityに紐づくmaterialのembeddingも再生成
+            if etype == "activity":
+                mat_rows = conn.execute(
+                    "SELECT id FROM materials WHERE activity_id = ?",
+                    (eid,),
+                ).fetchall()
+                for mat_row in mat_rows:
+                    regenerate_embedding("material", mat_row["id"])
 
         c_tag_str = f"{c_namespace}:{c_name}" if c_namespace else c_name
         return {"tag": tag_str, "canonical": c_tag_str, "updated": True}

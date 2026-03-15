@@ -1005,3 +1005,71 @@ def test_get_by_ids_single_material(temp_db):
     assert item["data"]["title"] == "詳細取得テスト素材"
     assert "tags" in item["data"]
     assert "domain:test" in item["data"]["tags"]
+
+
+# ========================================
+# タグLIKE検索テスト（FTS5テスト内）
+# ========================================
+
+
+def test_search_tag_like_topic_direct_tag(temp_db):
+    """タグLIKE検索: topicの直接タグにマッチ"""
+    add_topic(
+        title="タグLIKEトピック直接テスト",
+        description="テスト",
+        tags=["domain:fts-tag-like-test"],
+    )
+    result = search_service.search(keyword="fts-tag-like-test")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    assert "tag_like" in result["search_methods_used"]
+    titles = [r["title"] for r in result["results"]]
+    assert any("タグLIKEトピック直接テスト" in t for t in titles)
+
+
+def test_search_tag_like_activity_direct_tag(temp_db):
+    """タグLIKE検索: activityの直接タグにマッチ"""
+    add_activity(
+        title="タグLIKEアクティビティ直接テスト",
+        description="テスト",
+        tags=["domain:fts-activity-tag-test"],
+        check_in=False,
+    )
+    result = search_service.search(keyword="fts-activity-tag-test")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    types = [r["type"] for r in result["results"]]
+    assert "activity" in types
+
+
+def test_search_tag_like_decision_inherited_tag(temp_db):
+    """タグLIKE検索: decisionがtopicのタグを継承してマッチ"""
+    topic = add_topic(
+        title="トピック",
+        description="テスト",
+        tags=["domain:fts-decision-inherit-test"],
+    )
+    add_decision(
+        topic_id=topic["topic_id"],
+        decision="タグLIKE決定継承テスト",
+        reason="テスト",
+    )
+    result = search_service.search(keyword="fts-decision-inherit-test")
+    assert "error" not in result
+    types = [r["type"] for r in result["results"]]
+    assert "decision" in types
+
+
+def test_search_tag_like_2char_keyword(temp_db):
+    """タグLIKE検索: 2文字キーワードでもタグにマッチすればヒット"""
+    add_topic(
+        title="2文字タグマッチテスト",
+        description="テスト",
+        tags=["domain:ab"],
+    )
+    # "ab"は2文字だが、タグ名"ab"にLIKEマッチするのでヒットする
+    result = search_service.search(keyword="ab")
+    assert "error" not in result
+    # tag_like結果がある場合はKEYWORD_TOO_SHORTエラーにならない
+    assert len(result["results"]) >= 1
+    assert "tag_like" in result["search_methods_used"]

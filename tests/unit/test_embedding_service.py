@@ -516,3 +516,118 @@ def test_ensure_server_running_handles_start_failure(temp_db, monkeypatch):
 
     result = emb._ensure_server_running()
     assert result is False
+
+
+# ========================================
+# embedding生成にタグ含有テスト
+# ========================================
+
+
+def test_embedding_text_includes_tags(temp_db, monkeypatch):
+    """embedding生成テキストにタグ文字列が含まれる"""
+    captured_texts = []
+
+    def capturing_encode_batch(texts, prefix):
+        captured_texts.extend(texts)
+        return [np.random.rand(EMBEDDING_DIM).astype(np.float32).tolist() for _ in texts]
+
+    monkeypatch.setattr(emb, '_encode_batch', capturing_encode_batch)
+    monkeypatch.setattr(emb, '_server_initialized', True)
+    monkeypatch.setattr(emb, '_backfill_done', True)
+
+    add_topic(
+        title="タグ含有テストトピック",
+        description="テスト説明",
+        tags=["domain:cc-memory", "intent:design"],
+    )
+
+    # embedding生成テキストにタグ文字列が含まれている
+    assert len(captured_texts) >= 1
+    # 最後のencode_batch呼び出しがtopic用
+    topic_text = captured_texts[-1]
+    assert "domain:cc-memory" in topic_text
+    assert "intent:design" in topic_text
+
+
+def test_regenerate_embedding(temp_db, monkeypatch):
+    """regenerate_embedding: エンティティのembeddingがタグ付きで再生成される"""
+    captured_texts = []
+
+    def capturing_encode_batch(texts, prefix):
+        captured_texts.extend(texts)
+        return [np.random.rand(EMBEDDING_DIM).astype(np.float32).tolist() for _ in texts]
+
+    monkeypatch.setattr(emb, '_encode_batch', capturing_encode_batch)
+    monkeypatch.setattr(emb, '_server_initialized', True)
+    monkeypatch.setattr(emb, '_backfill_done', True)
+
+    topic = add_topic(
+        title="再生成テストトピック",
+        description="再生成テスト説明",
+        tags=["domain:test"],
+    )
+
+    captured_texts.clear()
+
+    # regenerate_embeddingを呼び出す
+    emb.regenerate_embedding("topic", topic["topic_id"])
+
+    # 再生成されたテキストにもタグが含まれる
+    assert len(captured_texts) >= 1
+    regen_text = captured_texts[-1]
+    assert "再生成テストトピック" in regen_text
+    assert "domain:test" in regen_text
+
+
+def test_regenerate_embedding_nonexistent_entity(temp_db, monkeypatch):
+    """regenerate_embedding: 存在しないエンティティでもエラーにならない"""
+    monkeypatch.setattr(emb, '_server_initialized', True)
+    monkeypatch.setattr(emb, '_backfill_done', True)
+
+    def mock_encode_batch(texts, prefix):
+        return [np.random.rand(EMBEDDING_DIM).astype(np.float32).tolist() for _ in texts]
+
+    monkeypatch.setattr(emb, '_encode_batch', mock_encode_batch)
+
+    # 存在しないエンティティでもエラーにならない（graceful degradation）
+    emb.regenerate_embedding("topic", 999999)
+    emb.regenerate_embedding("invalid_type", 1)
+
+
+def test_update_tag_canonical_regenerates_embedding(temp_db, monkeypatch):
+    """update_tag canonical設定時に影響エンティティのembeddingが再生成される（E2E）"""
+    captured_texts = []
+
+    def capturing_encode_batch(texts, prefix):
+        captured_texts.extend(texts)
+        return [np.random.rand(EMBEDDING_DIM).astype(np.float32).tolist() for _ in texts]
+
+    monkeypatch.setattr(emb, '_encode_batch', capturing_encode_batch)
+    monkeypatch.setattr(emb, '_server_initialized', True)
+    monkeypatch.setattr(emb, '_backfill_done', True)
+
+    # canonical先のタグを持つトピックと、エイリアス元のタグを持つトピックを作成
+    # canonical先（new-tag）を先に作っておく必要がある
+    add_topic(
+        title="canonical先トピック",
+        description="new-tagを持つ",
+        tags=["domain:test", "new-tag"],
+    )
+    topic = add_topic(
+        title="canonical再生成テスト",
+        description="テスト説明",
+        tags=["domain:test", "old-tag"],
+    )
+
+    captured_texts.clear()
+
+    # old-tagをnew-tagのcanonicalに設定（old-tag → new-tagに付け替え）
+    from src.services.tag_service import update_tag
+    result = update_tag("old-tag", canonical="new-tag")
+    assert "error" not in result, f"update_tag failed: {result}"
+
+    # 影響エンティティのembeddingが再生成されたことを確認
+    assert len(captured_texts) >= 1
+    # 再生成テキストに元のトピックのタイトルが含まれる
+    all_regen_text = " ".join(captured_texts)
+    assert "canonical再生成テスト" in all_regen_text
