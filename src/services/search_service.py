@@ -56,7 +56,7 @@ RECENCY_DECAY_RATE = 0.0014
 
 # Query Expansion パラメータ
 QE_DISTANCE_THRESHOLD = 0.3   # コサイン距離。これ未満のタグを拡張候補とする
-QE_MAX_EXPANSIONS = 5          # キーワードあたりの最大拡張タグ数
+QE_MAX_EXPANSIONS = 5          # 全キーワード合計での最大拡張タグ数
 QE_EXCLUDE_NAMESPACES = True   # namespace付きタグを除外するか
 
 
@@ -87,46 +87,54 @@ def _expand_query_with_tags(keywords: list[str]) -> list[str]:
     existing = {kw.lower() for kw in keywords}
     expansion_count = 0
 
-    conn = get_connection()
     try:
+        # 全キーワードの類似タグ候補を収集
+        candidate_tag_ids: list[tuple[int, float]] = []
         for kw in keywords:
+            similar = embedding_service.search_similar_tags(kw, k=10)
+            for tag_id, distance in similar:
+                if distance < QE_DISTANCE_THRESHOLD:
+                    candidate_tag_ids.append((tag_id, distance))
+
+        if not candidate_tag_ids:
+            return expanded
+
+        # 候補タグのIDを一括で取得
+        unique_ids = list({tid for tid, _ in candidate_tag_ids})
+        placeholders = ",".join("?" * len(unique_ids))
+        rows = execute_query(
+            f"SELECT id, namespace, name FROM tags WHERE id IN ({placeholders})",
+            tuple(unique_ids),
+        )
+        tag_info_map: dict[int, tuple[str, str]] = {}
+        for row in rows:
+            tag_info_map[row["id"]] = (row["namespace"], row["name"])
+
+        # 距離順でソートして拡張タグを選定
+        candidate_tag_ids.sort(key=lambda x: x[1])
+        for tag_id, _distance in candidate_tag_ids:
             if expansion_count >= QE_MAX_EXPANSIONS:
                 break
 
-            similar = embedding_service.search_similar_tags(kw, k=10)
+            info = tag_info_map.get(tag_id)
+            if not info:
+                continue
 
-            for tag_id, distance in similar:
-                if expansion_count >= QE_MAX_EXPANSIONS:
-                    break
-                if distance >= QE_DISTANCE_THRESHOLD:
-                    continue
+            namespace, name = info
 
-                # タグ情報を取得
-                row = conn.execute(
-                    "SELECT namespace, name FROM tags WHERE id = ?",
-                    (tag_id,),
-                ).fetchone()
-                if not row:
-                    continue
+            # namespace付きタグを除外
+            if QE_EXCLUDE_NAMESPACES and namespace:
+                continue
 
-                namespace = row["namespace"]
-                name = row["name"]
+            # 元のキーワードとの重複チェック
+            if name.lower() in existing:
+                continue
 
-                # namespace付きタグを除外
-                if QE_EXCLUDE_NAMESPACES and namespace:
-                    continue
-
-                # 元のキーワードとの重複チェック
-                if name.lower() in existing:
-                    continue
-
-                expanded.append(name)
-                existing.add(name.lower())
-                expansion_count += 1
+            expanded.append(name)
+            existing.add(name.lower())
+            expansion_count += 1
     except Exception:
         logger.warning("Query expansion failed, using original keywords", exc_info=True)
-    finally:
-        conn.close()
 
     return expanded
 
@@ -984,7 +992,7 @@ def search(
         if keyword_mode == "or":
             # OR時: 3文字以上のキーワードが1つでもあればFTSを使う
             if any(len(kw) >= 3 for kw in fts_keywords):
-                fts_results = _fts_search(fts_keywords, tag_ids, type_filter, fetch_limit, keyword_mode, original_kw_count)
+                fts_results = _fts_search(fts_keywords, tag_ids, type_filter, fetch_limit, keyword_mode, None)
                 methods_used.append("fts5")
         else:
             # AND時（現行通り）: 全キーワードが3文字以上の場合のみ
