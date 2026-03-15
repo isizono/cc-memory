@@ -48,7 +48,7 @@ def _run_session_start_hook(db_path: str) -> dict:
     return json.loads(stdout)
 
 
-def _seed_activity(db_path: str, title: str, status: str = "pending", domain: str = "test") -> int:
+def _seed_activity(title: str, status: str = "pending", domain: str = "test") -> int:
     """テスト用アクティビティを作成"""
     conn = get_connection()
     try:
@@ -82,7 +82,7 @@ def _seed_activity(db_path: str, title: str, status: str = "pending", domain: st
         conn.close()
 
 
-def _seed_topic(db_path: str, title: str) -> int:
+def _seed_topic(title: str) -> int:
     """テスト用トピックを作成"""
     conn = get_connection()
     try:
@@ -97,7 +97,7 @@ def _seed_topic(db_path: str, title: str) -> int:
         conn.close()
 
 
-def _seed_reminder(db_path: str, content: str, active: int = 1) -> int:
+def _seed_reminder(content: str, active: int = 1) -> int:
     """テスト用リマインダーを作成"""
     conn = get_connection()
     try:
@@ -145,7 +145,7 @@ class TestSessionStartHookActivities:
 
     def test_activities_section_present(self, temp_db):
         """アクティブなアクティビティがあればアクティビティ一覧セクションが含まれる"""
-        _seed_activity(temp_db, "[作業] テスト実装", status="in_progress")
+        _seed_activity( "[作業] テスト実装", status="in_progress")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
@@ -155,7 +155,7 @@ class TestSessionStartHookActivities:
 
     def test_pending_activity_shown(self, temp_db):
         """pendingアクティビティも表示される"""
-        _seed_activity(temp_db, "[設計] 設計作業", status="pending")
+        _seed_activity( "[設計] 設計作業", status="pending")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
@@ -164,7 +164,7 @@ class TestSessionStartHookActivities:
 
     def test_completed_activity_not_shown(self, temp_db):
         """completedアクティビティは表示されない"""
-        _seed_activity(temp_db, "[作業] 完了済み", status="completed")
+        _seed_activity( "[作業] 完了済み", status="completed")
 
         # 初期リマインダー削除
         conn = get_connection()
@@ -185,7 +185,7 @@ class TestSessionStartHookTopics:
 
     def test_topics_section_present(self, temp_db):
         """トピックがあればトピック一覧セクションが含まれる"""
-        _seed_topic(temp_db, "テストトピック")
+        _seed_topic( "テストトピック")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
@@ -199,7 +199,7 @@ class TestSessionStartHookReminders:
 
     def test_reminders_section_present(self, temp_db):
         """アクティブなリマインダーがあればリマインダーセクションが含まれる"""
-        _seed_reminder(temp_db, "テスト用リマインダー")
+        _seed_reminder( "テスト用リマインダー")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
@@ -209,7 +209,7 @@ class TestSessionStartHookReminders:
 
     def test_inactive_reminder_not_shown(self, temp_db):
         """inactive(active=0)のリマインダーは表示されない"""
-        _seed_reminder(temp_db, "無効なリマインダー", active=0)
+        _seed_reminder( "無効なリマインダー", active=0)
 
         # 他のアクティブリマインダーも削除
         conn = get_connection()
@@ -230,7 +230,7 @@ class TestSessionStartHookFooter:
 
     def test_footer_present_when_content_exists(self, temp_db):
         """コンテンツがある場合、フッターの案内文が含まれる"""
-        _seed_topic(temp_db, "何かのトピック")
+        _seed_topic( "何かのトピック")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]

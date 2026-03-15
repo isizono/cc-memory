@@ -54,7 +54,10 @@ def _get_active_domains_with_conn(conn) -> list[dict]:
 
 
 def _get_active_domains() -> list[dict]:
-    """アクティブなアクティビティ（in_progress/pending）があるdomain:タグを取得する。"""
+    """アクティブなアクティビティがあるdomain:タグを取得する（テスト用公開API）。
+
+    hook本体は_get_active_domains_with_conn()を使用する。
+    """
     conn = get_connection()
     try:
         return _get_active_domains_with_conn(conn)
@@ -91,7 +94,10 @@ def _get_active_activities_by_tag_with_conn(conn, tag_id: int) -> list[dict]:
 
 
 def _get_active_activities_by_tag(tag_id: int) -> list[dict]:
-    """domain:タグに紐づくホットアクティビティ（pending + in_progress）を取得する。"""
+    """domain:タグに紐づくホットアクティビティを取得する（テスト用公開API）。
+
+    hook本体は_get_active_activities_by_tag_with_conn()を使用する。
+    """
     conn = get_connection()
     try:
         return _get_active_activities_by_tag_with_conn(conn, tag_id)
@@ -195,22 +201,27 @@ def _build_reminders_section(conn) -> str:
 
 
 def _build_session_context() -> str:
-    """DBからセッション開始時のコンテキストを組み立てる。"""
+    """DBからセッション開始時のコンテキストを組み立てる。
+
+    各セクションは独立してtry/exceptで保護し、
+    一部のセクションが失敗しても残りは返す。
+    """
     conn = get_connection()
     try:
         sections = []
-
-        activities = _build_activities_section(conn)
-        if activities:
-            sections.append(activities)
-
-        topics = _build_topics_section(conn)
-        if topics:
-            sections.append(topics)
-
-        reminders = _build_reminders_section(conn)
-        if reminders:
-            sections.append(reminders)
+        builders = [
+            _build_activities_section,
+            _build_topics_section,
+            _build_reminders_section,
+        ]
+        for builder in builders:
+            try:
+                result = builder(conn)
+                if result:
+                    sections.append(result)
+            except Exception:
+                # セクション単位で失敗を許容し、残りのセクションは返す
+                pass
 
         if not sections:
             return ""

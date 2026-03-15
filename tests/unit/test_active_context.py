@@ -436,20 +436,12 @@ def test_build_activities_section_activity_id_in_bracket(temp_db):
     assert f"[{activity_id}]" in result
 
 
-def test_build_activities_section_no_crash_on_error(temp_db):
-    """DB接続失敗などでもクラッシュしない"""
-    # 無効なDB pathを設定
+def test_build_activities_section_raises_on_invalid_db(temp_db):
+    """DB接続失敗時は例外が発生する（hookのmain()がcatchする前提）"""
     os.environ["DISCUSSION_DB_PATH"] = "/nonexistent/path/test.db"
 
-    # _build_activities_section自体はconnを受け取るが、
-    # _build_active_context_wrapperがget_connectionで例外を起こす
-    try:
-        result = _build_active_context_wrapper()
-        # 接続できた場合は空文字列
-        assert result == ""
-    except Exception:
-        # 接続できなかった場合も許容（hookのmain()がcatchする）
-        pass
+    with pytest.raises(Exception):
+        _build_active_context_wrapper()
 
     # 元に戻す
     os.environ["DISCUSSION_DB_PATH"] = temp_db
