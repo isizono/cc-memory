@@ -57,7 +57,8 @@ def add_decision(
         effective_tags = get_effective_tags(conn, "decision", decision_id)
 
         # embedding生成（失敗してもdecision作成には影響しない）
-        generate_and_store_embedding("decision", decision_id, build_embedding_text(decision, reason))
+        tag_text = " ".join(effective_tags) if effective_tags else ""
+        generate_and_store_embedding("decision", decision_id, build_embedding_text(decision, reason, tag_text))
 
         return {
             "decision_id": decision_id,

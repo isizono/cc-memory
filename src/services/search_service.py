@@ -44,6 +44,7 @@ SNIPPET_MAX_LEN = 200
 RRF_K = 60
 RRF_W_FTS = 1.0
 RRF_W_VEC = 1.0
+RRF_W_TAG = 0.5
 
 # Recency boost パラメータ
 # 半年(182日)で約0.80倍、1年(365日)で約0.66倍
@@ -552,6 +553,132 @@ def find_similar_topics(
         return []
 
 
+def _tag_like_search(
+    keywords: list[str],
+    tag_ids: Optional[list[int]],
+    type_filter: Optional[str],
+    limit: int,
+    keyword_mode: str = "and",
+) -> list[dict]:
+    """タグ名のLIKE検索。キーワードにマッチするタグを持つエンティティを返す。
+
+    entity_tagsの各中間テーブルからタグ名LIKE検索し、
+    search_index経由で結果を返す。
+
+    ANDモードでは「全キーワードを名前に含む単一タグ」を探す。
+    FTS/ベクトルのAND（複数語を含む文書）とは異なる意味論であり、
+    マッチするのは "domain:api-design" のような複合タグ名に限られる。
+    """
+    # LIKEワイルドカード文字をエスケープ
+    def _escape_like(s: str) -> str:
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    # 全キーワードのLIKEパターンを作成
+    like_patterns = [f"%{_escape_like(kw)}%" for kw in keywords]
+
+    # タグテーブルからキーワードにマッチするtag_idsを取得
+    # name単体 or namespace:name の結合文字列に対してLIKE検索する
+    tag_full_expr = "CASE WHEN namespace != '' THEN namespace || ':' || name ELSE name END"
+    single_cond = f"(name LIKE ? ESCAPE '\\' OR {tag_full_expr} LIKE ? ESCAPE '\\')"
+    if keyword_mode == "or":
+        # OR: いずれかのキーワードにマッチするタグ
+        conditions = " OR ".join([single_cond] * len(like_patterns))
+        params: list = []
+        for p in like_patterns:
+            params.extend([p, p])
+    else:
+        # AND: すべてのキーワードにマッチするタグ（1つのタグ名が全キーワードを含む）
+        conditions = " AND ".join([single_cond] * len(like_patterns))
+        params = []
+        for p in like_patterns:
+            params.extend([p, p])
+
+    matching_tags = execute_query(
+        f"SELECT id FROM tags WHERE {conditions}",
+        tuple(params),
+    )
+    if not matching_tags:
+        return []
+
+    matched_tag_ids = [r["id"] for r in matching_tags]
+
+    # tag_idsフィルタ: 指定がある場合は交差を取る
+    if tag_ids:
+        matched_tag_ids = [tid for tid in matched_tag_ids if tid in tag_ids]
+        if not matched_tag_ids:
+            return []
+
+    # マッチしたタグを持つエンティティをsearch_index経由で取得
+    tag_placeholders = ",".join("?" * len(matched_tag_ids))
+
+    # 各中間テーブルからエンティティを収集（UNION ALL）
+    query = f"""
+    SELECT DISTINCT si.source_type AS type, si.source_id AS id, si.title
+    FROM search_index si
+    WHERE
+      (? IS NULL OR si.source_type = ?)
+      AND (
+        EXISTS (
+            SELECT 1 FROM topic_tags tt
+            WHERE tt.topic_id = si.source_id AND si.source_type = 'topic'
+              AND tt.tag_id IN ({tag_placeholders})
+        )
+        OR EXISTS (
+            SELECT 1 FROM activity_tags at
+            WHERE at.activity_id = si.source_id AND si.source_type = 'activity'
+              AND at.tag_id IN ({tag_placeholders})
+        )
+        OR EXISTS (
+            SELECT 1 FROM decision_tags dt
+            WHERE dt.decision_id = si.source_id AND si.source_type = 'decision'
+              AND dt.tag_id IN ({tag_placeholders})
+        )
+        OR EXISTS (
+            SELECT 1 FROM log_tags lt
+            WHERE lt.log_id = si.source_id AND si.source_type = 'log'
+              AND lt.tag_id IN ({tag_placeholders})
+        )
+        OR EXISTS (
+            SELECT 1 FROM materials m
+            JOIN activity_tags at2 ON at2.activity_id = m.activity_id
+            WHERE m.id = si.source_id AND si.source_type = 'material'
+              AND at2.tag_id IN ({tag_placeholders})
+        )
+        OR EXISTS (
+            SELECT 1 FROM decisions d
+            JOIN topic_tags tt2 ON tt2.topic_id = d.topic_id
+            WHERE d.id = si.source_id AND si.source_type = 'decision'
+              AND tt2.tag_id IN ({tag_placeholders})
+        )
+        OR EXISTS (
+            SELECT 1 FROM discussion_logs dl
+            JOIN topic_tags tt3 ON tt3.topic_id = dl.topic_id
+            WHERE dl.id = si.source_id AND si.source_type = 'log'
+              AND tt3.tag_id IN ({tag_placeholders})
+        )
+      )
+    ORDER BY si.id DESC
+    LIMIT ?
+    """
+    # パラメータ: type_filter × 2 + matched_tag_ids × 7 + limit
+    query_params = [type_filter, type_filter]
+    for _ in range(7):
+        query_params.extend(matched_tag_ids)
+    query_params.append(limit)
+
+    rows = execute_query(query, tuple(query_params))
+    results = []
+    for row in rows:
+        r = row_to_dict(row)
+        results.append({
+            "type": r["type"],
+            "id": r["id"],
+            "title": r["title"],
+        })
+    return results
+
+
+
 def _apply_recency_boost(results: list[dict], now: datetime | None = None) -> None:
     """RRFスコアにrecency boost（時間減衰）を適用する（in-place）。
 
@@ -596,8 +723,9 @@ def _rrf_merge(
     fts_results: list[dict],
     vec_results: list[dict],
     limit: int,
+    tag_results: Optional[list[dict]] = None,
 ) -> list[dict]:
-    """RRF（Reciprocal Rank Fusion）でFTS5結果とベクトル結果を統合する。"""
+    """RRF（Reciprocal Rank Fusion）でFTS5・ベクトル・タグLIKE結果を統合する。"""
     scores: dict[tuple, dict] = {}  # key: (type, id)
 
     # FTS5結果にRRFスコアを付与（1始まりランク）
@@ -623,6 +751,21 @@ def _rrf_merge(
                 "title": item["title"],
                 "score": vec_score,
             }
+
+    # タグLIKE結果のRRFスコアを加算（1始まりランク）
+    if tag_results:
+        for rank, item in enumerate(tag_results, start=1):
+            key = (item["type"], item["id"])
+            tag_score = RRF_W_TAG / (RRF_K + rank)
+            if key in scores:
+                scores[key]["score"] += tag_score
+            else:
+                scores[key] = {
+                    "type": item["type"],
+                    "id": item["id"],
+                    "title": item["title"],
+                    "score": tag_score,
+                }
 
     # RRFスコア降順でソートし、上位limit件を返す
     merged = sorted(scores.values(), key=lambda x: x["score"], reverse=True)
@@ -745,13 +888,19 @@ def search(
         if vec_results is not None:
             methods_used.append("vector")
 
+        # タグLIKE検索（キーワード長の制限なし）
+        tag_like_results = _tag_like_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+        if tag_like_results:
+            methods_used.append("tag_like")
+
         # 2文字キーワード + ベクトル検索無効 → エラー
         # OR時: 3文字以上が1つでもあればFTSで検索できるのでエラーにしない
+        # タグLIKE検索結果がある場合もエラーにしない
         fts_available = (
             any(len(kw) >= 3 for kw in keywords) if keyword_mode == "or"
             else min_len >= 3
         )
-        if not fts_available and vec_results is None:
+        if not fts_available and vec_results is None and not tag_like_results:
             return {
                 "error": {
                     "code": "KEYWORD_TOO_SHORT",
@@ -761,7 +910,7 @@ def search(
 
         # RRF統合（recency boost前なのでfetch_limitで多めに保持）
         effective_vec = vec_results if vec_results is not None else []
-        results = _rrf_merge(fts_results, effective_vec, fetch_limit)
+        results = _rrf_merge(fts_results, effective_vec, fetch_limit, tag_results=tag_like_results)
 
         _apply_recency_boost(results)
 

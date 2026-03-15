@@ -98,7 +98,8 @@ def add_activity(
         activity = row_to_dict(row)
 
         # embedding生成（失敗してもactivity作成には影響しない）
-        generate_and_store_embedding("activity", activity_id, build_embedding_text(title, description))
+        tag_text = " ".join(tag_strings) if tag_strings else ""
+        generate_and_store_embedding("activity", activity_id, build_embedding_text(title, description, tag_text))
 
         result = _activity_to_response(activity, tag_strings)
 
@@ -381,16 +382,17 @@ def update_activity(
         if not row:
             raise Exception("Failed to retrieve updated activity")
 
-        # title/descriptionが変更された場合、embeddingを再生成
-        if title is not None or description is not None:
-            updated = row_to_dict(row)
-            generate_and_store_embedding(
-                "activity", activity_id,
-                build_embedding_text(updated["title"], updated["description"]),
-            )
-
         # タグを取得
         tag_strings = get_entity_tags(conn, "activity_tags", "activity_id", activity_id)
+
+        # title/description/tagsが変更された場合、embeddingを再生成
+        if title is not None or description is not None or parsed_tags is not None:
+            updated = row_to_dict(row)
+            tag_text = " ".join(tag_strings) if tag_strings else ""
+            generate_and_store_embedding(
+                "activity", activity_id,
+                build_embedding_text(updated["title"], updated["description"], tag_text),
+            )
 
         return _activity_to_response(row_to_dict(row), tag_strings)
 

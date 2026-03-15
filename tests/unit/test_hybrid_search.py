@@ -12,7 +12,7 @@ import numpy as np
 from src.db import init_database, get_connection
 from src.services.search_service import (
     _rrf_merge, _apply_recency_boost, find_similar_topics,
-    RRF_K, RRF_W_FTS, RRF_W_VEC, RECENCY_DECAY_RATE,
+    RRF_K, RRF_W_FTS, RRF_W_VEC, RRF_W_TAG, RECENCY_DECAY_RATE,
 )
 from src.services import search_service
 from src.services.topic_service import add_topic
@@ -741,6 +741,7 @@ def test_search_methods_used_fts_only_vec_disabled(temp_db, disable_embedding):
     assert result["search_methods_used"] == ["fts5"]
 
 
+
 # ========================================
 # find_similar_topics テスト
 # ========================================
@@ -855,3 +856,173 @@ def test_add_topic_no_similar_when_embedding_disabled(temp_db, disable_embedding
 
     assert "error" not in result
     assert "similar_topics" not in result
+
+
+# ========================================
+# _rrf_merge 3ソース（タグLIKE）テスト
+# ========================================
+
+
+def test_rrf_merge_with_tag_results():
+    """RRF統合: 3ソース（FTS + ベクトル + タグLIKE）でスコアが加算される"""
+    fts = [
+        {"type": "topic", "id": 1, "title": "A"},
+    ]
+    vec = [
+        {"type": "topic", "id": 1, "title": "A"},
+    ]
+    tag = [
+        {"type": "topic", "id": 1, "title": "A"},
+    ]
+
+    results = _rrf_merge(fts, vec, limit=10, tag_results=tag)
+
+    assert len(results) == 1
+    expected_score = (
+        RRF_W_FTS / (RRF_K + 1) +
+        RRF_W_VEC / (RRF_K + 1) +
+        RRF_W_TAG / (RRF_K + 1)
+    )
+    assert results[0]["score"] == pytest.approx(expected_score)
+
+
+def test_rrf_merge_tag_only():
+    """RRF統合: タグLIKEのみの結果"""
+    tag = [
+        {"type": "topic", "id": 10, "title": "Tag only"},
+        {"type": "activity", "id": 20, "title": "Tag only 2"},
+    ]
+
+    results = _rrf_merge([], [], limit=10, tag_results=tag)
+
+    assert len(results) == 2
+    assert results[0]["id"] == 10
+    assert results[0]["score"] == pytest.approx(RRF_W_TAG / (RRF_K + 1))
+    assert results[1]["id"] == 20
+    assert results[1]["score"] == pytest.approx(RRF_W_TAG / (RRF_K + 2))
+
+
+def test_rrf_merge_tag_boosts_existing():
+    """RRF統合: タグLIKE結果がFTS/ベクトルのスコアに加算される"""
+    fts = [
+        {"type": "topic", "id": 1, "title": "Both"},
+        {"type": "topic", "id": 2, "title": "FTS only"},
+    ]
+    tag = [
+        {"type": "topic", "id": 1, "title": "Both"},
+        {"type": "topic", "id": 3, "title": "Tag only"},
+    ]
+
+    results = _rrf_merge(fts, [], limit=10, tag_results=tag)
+
+    score_both = next(r["score"] for r in results if r["id"] == 1)
+    score_fts = next(r["score"] for r in results if r["id"] == 2)
+    score_tag = next(r["score"] for r in results if r["id"] == 3)
+
+    # 両方にヒット > 片方のみ
+    assert score_both > score_fts
+    assert score_both > score_tag
+
+
+def test_rrf_merge_no_tag_results():
+    """RRF統合: tag_results=Noneで従来通りの動作"""
+    fts = [
+        {"type": "topic", "id": 1, "title": "A"},
+    ]
+    vec = [
+        {"type": "topic", "id": 1, "title": "A"},
+    ]
+
+    results = _rrf_merge(fts, vec, limit=10, tag_results=None)
+
+    assert len(results) == 1
+    expected_score = RRF_W_FTS / (RRF_K + 1) + RRF_W_VEC / (RRF_K + 1)
+    assert results[0]["score"] == pytest.approx(expected_score)
+
+
+# ========================================
+# タグLIKE検索 統合テスト
+# ========================================
+
+
+def test_search_tag_like_basic(temp_db, disable_embedding):
+    """タグLIKE検索: タグ名にマッチするキーワードでエンティティがヒットする"""
+    add_topic(
+        title="タグLIKE検索テスト用トピック",
+        description="タグ名でのマッチを確認",
+        tags=["domain:test"],
+    )
+
+    result = search_service.search(keyword="domain:test")
+
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    assert "tag_like" in result["search_methods_used"]
+
+
+def test_search_tag_like_partial_match(temp_db, disable_embedding):
+    """タグLIKE検索: タグ名の部分一致でヒットする"""
+    add_topic(
+        title="タグ部分一致テスト用トピック",
+        description="テスト",
+        tags=["domain:cc-memory"],
+    )
+
+    result = search_service.search(keyword="cc-memory")
+
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    assert "tag_like" in result["search_methods_used"]
+
+
+def test_search_tag_like_methods_used(temp_db, mock_embedding_model):
+    """タグLIKE検索: search_methods_usedにtag_likeが含まれる"""
+    add_topic(
+        title="メソッド確認タグLIKEテスト用",
+        description="テスト",
+        tags=["domain:test"],
+    )
+
+    result = search_service.search(keyword="domain:test")
+
+    assert "error" not in result
+    assert "tag_like" in result["search_methods_used"]
+
+
+def test_search_tag_like_with_type_filter(temp_db, disable_embedding):
+    """タグLIKE検索: type_filterとの組み合わせ"""
+    topic = add_topic(
+        title="タグLIKEフィルタテスト用トピック",
+        description="テスト",
+        tags=["domain:unique-tag-filter-test"],
+    )
+    add_activity(
+        title="タグLIKEフィルタテスト用アクティビティ",
+        description="テスト",
+        tags=["domain:unique-tag-filter-test"],
+        check_in=False,
+    )
+
+    result = search_service.search(
+        keyword="unique-tag-filter-test",
+        type_filter="topic",
+    )
+
+    assert "error" not in result
+    for item in result["results"]:
+        assert item["type"] == "topic"
+
+
+def test_search_tag_like_no_match(temp_db, disable_embedding):
+    """タグLIKE検索: マッチなしで空結果"""
+    add_topic(
+        title="タグLIKE不一致テスト",
+        description="テスト",
+        tags=["domain:test"],
+    )
+
+    # 全くマッチしないタグ名で検索
+    result = search_service.search(keyword="zzz存在しないタグ名zzz")
+
+    assert "error" not in result
+    assert "tag_like" not in result.get("search_methods_used", [])

@@ -4,6 +4,7 @@ import sqlite3
 
 from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
+from src.services.tag_service import get_entity_tags
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,10 @@ def add_material(activity_id: int, title: str, content: str) -> dict:
 
         conn.commit()
 
-        generate_and_store_embedding("material", material_id, build_embedding_text(title, content))
+        # materialはactivityのタグを継承
+        tag_strings = get_entity_tags(conn, "activity_tags", "activity_id", activity_id)
+        tag_text = " ".join(tag_strings) if tag_strings else ""
+        generate_and_store_embedding("material", material_id, build_embedding_text(title, content, tag_text))
 
         return _material_to_response(row_to_dict(row))
 
