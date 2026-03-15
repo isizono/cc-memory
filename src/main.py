@@ -11,6 +11,7 @@ from src.services import (
     search_service,
     activity_service,
     material_service,
+    reminder_service,
 )
 from src.services.activity_service import HEARTBEAT_TIMEOUT_MINUTES
 from src.services.checkin_service import check_in as _check_in
@@ -735,10 +736,28 @@ def check_in(
         activity_id: アクティビティID
 
     Returns:
-        check-in結果（activity, topic（topic_idがある場合のみ）, tag_notes, materials, recent_decisions, summary）
+        check-in結果（activity, topic（topic_idがある場合のみ）, tag_notes, reminders, materials, recent_decisions, summary）
     """
     return _check_in(activity_id)
 
+
+
+@mcp.tool()
+def add_reminder(content: str) -> dict:
+    """リマインダーを追加する。check-in時に自動注入される。"""
+    return reminder_service.add_reminder(content)
+
+
+@mcp.tool()
+def list_reminders() -> dict:
+    """リマインダー一覧を取得する。"""
+    return reminder_service.list_reminders()
+
+
+@mcp.tool()
+def update_reminder(reminder_id: int, content: Optional[str] = None, active: Optional[int] = None) -> dict:
+    """リマインダーを更新する。active=0で無効化、active=1で再有効化。"""
+    return reminder_service.update_reminder(reminder_id, content=content, active=active)
 
 
 @mcp.tool()
