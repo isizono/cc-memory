@@ -23,14 +23,14 @@ CLUSTER_PMI_THRESHOLD = 2.0
 DUPLICATE_DISTANCE_THRESHOLD = 0.15
 
 
-def _get_tag_usage_counts(conn, domain_tag_id=None, include_domain_tags=False):
+def _get_tag_usage_counts(conn, domain_tag_id=None, domain_ids=None):
     """各タグのusage_count（出現エンティティ数）を取得する。
 
     Args:
         conn: DB接続
         domain_tag_id: domainフィルタ用タグID。指定時はそのdomainタグと
                        共起するエンティティに限定する
-        include_domain_tags: Trueの場合、domain:namespaceのタグも分析対象に含める
+        domain_ids: 除外するdomain:タグのIDセット。Noneの場合は除外しない
 
     Returns:
         {tag_id: usage_count}
@@ -39,7 +39,6 @@ def _get_tag_usage_counts(conn, domain_tag_id=None, include_domain_tags=False):
 
     for table, entity_col in _JUNCTION_TABLES:
         if domain_tag_id is not None:
-            # domainフィルタ: そのdomainタグを持つエンティティに限定
             sql = f"""
                 SELECT jt.tag_id, COUNT(DISTINCT jt.{entity_col}) AS cnt
                 FROM {table} jt
@@ -60,25 +59,19 @@ def _get_tag_usage_counts(conn, domain_tag_id=None, include_domain_tags=False):
         for row in rows:
             counts[row["tag_id"]] += row["cnt"]
 
-    # domain:タグを除外（include_domain_tags=Falseの場合）
-    if not include_domain_tags:
-        domain_ids = set()
-        rows = conn.execute(
-            "SELECT id FROM tags WHERE namespace = 'domain'"
-        ).fetchall()
-        domain_ids = {row["id"] for row in rows}
+    if domain_ids:
         counts = {tid: cnt for tid, cnt in counts.items() if tid not in domain_ids}
 
     return dict(counts)
 
 
-def _get_co_occurrence_counts(conn, domain_tag_id=None, include_domain_tags=False):
+def _get_co_occurrence_counts(conn, domain_tag_id=None, domain_ids=None):
     """タグペアの共起カウントを集計する。
 
     Args:
         conn: DB接続
         domain_tag_id: domainフィルタ用タグID
-        include_domain_tags: Trueの場合、domain:namespaceのタグも分析対象に含める
+        domain_ids: 除外するdomain:タグのIDセット。Noneの場合は除外しない
 
     Returns:
         {(tag_a, tag_b): co_count} (tag_a < tag_b)
@@ -110,13 +103,7 @@ def _get_co_occurrence_counts(conn, domain_tag_id=None, include_domain_tags=Fals
             key = (row["tag_a"], row["tag_b"])
             co_counts[key] += row["co_count"]
 
-    # domain:タグを除外（include_domain_tags=Falseの場合）
-    if not include_domain_tags:
-        domain_ids = set()
-        rows = conn.execute(
-            "SELECT id FROM tags WHERE namespace = 'domain'"
-        ).fetchall()
-        domain_ids = {row["id"] for row in rows}
+    if domain_ids:
         co_counts = {
             (a, b): cnt for (a, b), cnt in co_counts.items()
             if a not in domain_ids and b not in domain_ids
@@ -168,25 +155,29 @@ def _get_total_entities(conn, domain_tag_id=None):
     return total
 
 
-def _build_tag_name_map(conn, tag_ids):
-    """tag_id → タグ文字列のマッピングを構築する。
+def _build_tag_maps(conn, tag_ids):
+    """tag_id → 表示名・詳細情報のマッピングを構築する。
 
     Returns:
-        {tag_id: "namespace:name" or "name"}
+        (tag_names, tag_info)
+        tag_names: {tag_id: "namespace:name" or "name"}
+        tag_info: {tag_id: {"namespace": str, "name": str}}
     """
     if not tag_ids:
-        return {}
+        return {}, {}
     placeholders = ",".join("?" * len(tag_ids))
     rows = conn.execute(
         f"SELECT id, namespace, name FROM tags WHERE id IN ({placeholders})",
         tuple(tag_ids),
     ).fetchall()
-    result = {}
+    tag_names = {}
+    tag_info = {}
     for row in rows:
         ns = row["namespace"]
         name = row["name"]
-        result[row["id"]] = f"{ns}:{name}" if ns else name
-    return result
+        tag_names[row["id"]] = f"{ns}:{name}" if ns else name
+        tag_info[row["id"]] = {"namespace": ns, "name": name}
+    return tag_names, tag_info
 
 
 def _compute_co_occurrences(co_counts, usage_counts, total, tag_names, focus_tag_id, top_n):
@@ -266,7 +257,6 @@ def _find_clusters(co_counts, usage_counts, total, tag_names, threshold=CLUSTER_
     # 閾値以上のエッジでUnion
     for tag_a, tag_b, pmi in edges:
         if pmi >= threshold:
-            # parentに存在しないタグも初期化
             if tag_a not in parent:
                 parent[tag_a] = tag_a
             if tag_b not in parent:
@@ -279,19 +269,21 @@ def _find_clusters(co_counts, usage_counts, total, tag_names, threshold=CLUSTER_
         root = find(tag)
         clusters_map[root].add(tag)
 
-    # クラスタごとのcohesion（クラスタ内PMIの平均）を計算
+    # クラスタごとのPMI値を1パスで集約
+    cluster_pmis = defaultdict(list)
+    for tag_a, tag_b, pmi in edges:
+        if pmi >= threshold and tag_a in parent and tag_b in parent:
+            root = find(tag_a)
+            cluster_pmis[root].append(pmi)
+
+    # クラスタ結果を構築
     results = []
-    for _root, members in clusters_map.items():
+    for root, members in clusters_map.items():
         if len(members) < 2:
             continue
 
-        # クラスタ内のPMI平均を計算
-        pmi_values = []
-        for tag_a, tag_b, pmi in edges:
-            if tag_a in members and tag_b in members and pmi >= threshold:
-                pmi_values.append(pmi)
-
-        cohesion = sum(pmi_values) / len(pmi_values) if pmi_values else 0.0
+        pmis = cluster_pmis.get(root, [])
+        cohesion = sum(pmis) / len(pmis) if pmis else 0.0
 
         tag_strings = sorted(
             [tag_names.get(tid, str(tid)) for tid in members]
@@ -326,6 +318,12 @@ def _find_orphans(usage_counts, co_counts, total, tag_names, min_usage):
     if not orphan_ids:
         return []
 
+    # 隣接マップを事前構築（O(m) → 各孤児の探索はO(degree)）
+    adjacency = defaultdict(list)
+    for (tag_a, tag_b), co_count in co_counts.items():
+        adjacency[tag_a].append((tag_b, co_count))
+        adjacency[tag_b].append((tag_a, co_count))
+
     results = []
     for orphan_id in orphan_ids:
         name = tag_names.get(orphan_id, str(orphan_id))
@@ -334,16 +332,10 @@ def _find_orphans(usage_counts, co_counts, total, tag_names, min_usage):
         # 最近傍タグを探す（PMIが最大の相手）
         best_pmi = None
         best_neighbor = None
-        for (tag_a, tag_b), co_count in co_counts.items():
-            if tag_a == orphan_id:
-                neighbor_id = tag_b
-            elif tag_b == orphan_id:
-                neighbor_id = tag_a
-            else:
-                continue
-            count_a = usage_counts.get(tag_a, 0)
-            count_b = usage_counts.get(tag_b, 0)
-            pmi = calc_pmi(co_count, count_a, count_b, total)
+        for neighbor_id, co_count in adjacency.get(orphan_id, []):
+            count_orphan = usage_counts.get(orphan_id, 0)
+            count_neighbor = usage_counts.get(neighbor_id, 0)
+            pmi = calc_pmi(co_count, count_orphan, count_neighbor, total)
             if best_pmi is None or pmi > best_pmi:
                 best_pmi = pmi
                 best_neighbor = neighbor_id
@@ -361,16 +353,16 @@ def _find_orphans(usage_counts, co_counts, total, tag_names, min_usage):
     return results
 
 
-def _find_suspected_duplicates(conn, tag_ids, tag_names):
+def _find_suspected_duplicates(tag_ids, tag_names, tag_info):
     """重複候補を検出する（embedding KNN検索）。
 
     各タグについてKNN検索し、同namespace内で距離が近いものをグルーピングする。
     embedding無効時は空配列を返す。
 
     Args:
-        conn: DB接続
         tag_ids: 分析対象タグIDリスト
         tag_names: {tag_id: tag_string}
+        tag_info: {tag_id: {"namespace": str, "name": str}}
 
     Returns:
         [{"tags": [str, ...], "reason": "high_name_similarity"}, ...]
@@ -380,22 +372,9 @@ def _find_suspected_duplicates(conn, tag_ids, tag_names):
     except ImportError:
         return []
 
-    # タグ情報を取得（namespace付き）
     if not tag_ids:
         return []
 
-    placeholders = ",".join("?" * len(tag_ids))
-    rows = conn.execute(
-        f"SELECT id, namespace, name FROM tags WHERE id IN ({placeholders})",
-        tuple(tag_ids),
-    ).fetchall()
-
-    tag_info = {}
-    for row in rows:
-        tag_info[row["id"]] = {"namespace": row["namespace"], "name": row["name"]}
-
-    # 各タグについてKNN検索
-    # 既にグルーピング済みタグをスキップ
     grouped = set()
     duplicates = []
 
@@ -426,10 +405,9 @@ def _find_suspected_duplicates(conn, tag_ids, tag_names):
             if tag_info[candidate_id]["namespace"] != info["namespace"]:
                 continue
             group.add(candidate_id)
-            grouped.add(candidate_id)
 
         if len(group) > 1:
-            grouped.add(tid)
+            grouped.update(group)
             tag_strings = sorted(
                 [tag_names.get(t, str(t)) for t in group]
             )
@@ -537,21 +515,29 @@ def analyze_tags(
                     }
                 }
 
+        # domain:タグIDの事前取得（1回のみ、両関数で共有）
+        domain_ids = None
+        if not include_domain_tags:
+            rows = conn.execute(
+                "SELECT id FROM tags WHERE namespace = 'domain'"
+            ).fetchall()
+            domain_ids = {row["id"] for row in rows}
+
         # 1. usage_count取得
-        usage_counts = _get_tag_usage_counts(conn, domain_tag_id, include_domain_tags)
+        usage_counts = _get_tag_usage_counts(conn, domain_tag_id, domain_ids)
 
         # 2. 共起行列計算
-        co_counts = _get_co_occurrence_counts(conn, domain_tag_id, include_domain_tags)
+        co_counts = _get_co_occurrence_counts(conn, domain_tag_id, domain_ids)
 
         # 3. 全エンティティ数
         total = _get_total_entities(conn, domain_tag_id)
 
-        # タグ名マッピング
+        # タグ名・詳細情報マッピング（1回のクエリで両方構築）
         all_tag_ids = set(usage_counts.keys())
         for tag_a, tag_b in co_counts.keys():
             all_tag_ids.add(tag_a)
             all_tag_ids.add(tag_b)
-        tag_names = _build_tag_name_map(conn, list(all_tag_ids))
+        tag_names, tag_info = _build_tag_maps(conn, list(all_tag_ids))
 
         # 4. 共起ペア+PMI
         co_occurrences = _compute_co_occurrences(
@@ -566,7 +552,9 @@ def analyze_tags(
 
         # 7. 重複候補検出
         analysis_tag_ids = list(usage_counts.keys())
-        suspected_duplicates = _find_suspected_duplicates(conn, analysis_tag_ids, tag_names)
+        suspected_duplicates = _find_suspected_duplicates(
+            analysis_tag_ids, tag_names, tag_info,
+        )
 
         return {
             "co_occurrences": co_occurrences,
