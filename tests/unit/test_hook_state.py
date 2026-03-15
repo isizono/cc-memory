@@ -120,6 +120,15 @@ class TestActivityCheckin:
         assert hook_state.has_activity_checkin() is True
 
 
+class TestTopicTransitioned:
+    def test_has_returns_false_when_no_file(self, hook_state):
+        assert hook_state.has_topic_transitioned() is False
+
+    def test_set_then_has(self, hook_state):
+        hook_state.set_topic_transitioned()
+        assert hook_state.has_topic_transitioned() is True
+
+
 class TestSkillSkipRemaining:
     def test_get_returns_zero_when_no_file(self, hook_state):
         assert hook_state.get_skill_skip_remaining() == 0
@@ -159,6 +168,7 @@ class TestClearSession:
         state.increment_approved_turns()
         state.set_activity_checkin()
         state.set_skill_skip_remaining(3)
+        state.set_topic_transitioned()
 
         # clear
         HookState.clear_session("sess-abc")
@@ -172,6 +182,7 @@ class TestClearSession:
         assert state.get_approved_turns() == 0
         assert state.has_activity_checkin() is False
         assert state.get_skill_skip_remaining() == 0
+        assert state.has_topic_transitioned() is False
 
 
 class TestSessionIdSlash:

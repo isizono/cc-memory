@@ -10,7 +10,7 @@
    → なければblock
 6. activity check-inチェック（_CHECKIN_DEFER_TURNSターン後、one-shot block）
    → check-in/add_activity未呼出 → block
-7. トピック変更チェック → 直近に記録系ツール呼び出しがなければblock
+7. トピック変更チェック → 初回遷移は許容、2回目以降は記録がなければblock
 8. nudgeカウンター管理
 9. 状態更新 → approve
 """
@@ -158,18 +158,22 @@ def main() -> None:
                 )
                 return
 
-        # 7. トピック変更チェック → 記録がなければblock
+        # 7. トピック変更チェック → 記録がなければblock（初回遷移は許容）
         prev_topic = state.get_prev_topic()
         if prev_topic is not None and prev_topic != current_topic_name:
-            recent_entries = all_entries[-5:] if all_entries else []
-            if not has_recent_recording(recent_entries):
-                state.increment_block_count()
-                _output(
-                    "block",
-                    "トピックが変わりました。移動前に記録（add_decision / add_log / add_topic）を"
-                    "行ってください。",
-                )
-                return
+            if not state.has_topic_transitioned():
+                # 初回のトピック遷移は許容（check-in→実トピックへの着地等）
+                state.set_topic_transitioned()
+            else:
+                recent_entries = all_entries[-5:] if all_entries else []
+                if not has_recent_recording(recent_entries):
+                    state.increment_block_count()
+                    _output(
+                        "block",
+                        "トピックが変わりました。移動前に記録（add_decision / add_log / add_topic）を"
+                        "行ってください。",
+                    )
+                    return
 
         # 8. nudgeカウンター
         nudge_count = state.increment_nudge_counter()

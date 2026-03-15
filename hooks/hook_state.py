@@ -146,6 +146,16 @@ class HookState:
         else:
             self._write(self._path("skill_skip"), str(n))
 
+    # --- topic_transitioned ---
+
+    def has_topic_transitioned(self) -> bool:
+        """セッション内で初回のトピック遷移が発生済みかチェック。"""
+        return self._path("topic_transitioned").exists()
+
+    def set_topic_transitioned(self) -> None:
+        """初回トピック遷移済みフラグを設定。"""
+        self._write(self._path("topic_transitioned"), "1")
+
     # --- checked_in_activity ---
 
     def get_checked_in_activity(self) -> int | None:

@@ -202,20 +202,51 @@ class TestMetaTagApproves:
 
 
 class TestTopicChangeNoRecord:
-    """3. トピック変更 + 記録なし → block"""
+    """3. トピック変更 + 記録なし → block（2回目以降）/ approve（初回遷移）"""
 
-    def test_topic_change_without_record_blocks(self, env_setup):
+    def test_first_topic_transition_approves(self, env_setup):
+        """初回のトピック遷移は記録なしでもapprove"""
         state_dir = Path(env_setup["state_dir"])
 
-        # prev_topic をトピック名で設定
         prev_file = state_dir / "prev_topic_test-session"
         prev_file.write_text("test-topic")
 
-        # context_retrieved フラグを設定（既にコンテキスト取得済み）
         context_file = state_dir / "context_retrieved_test-session"
         context_file.write_text("1")
 
-        # 別トピックに変更するtranscript（記録なし）
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                _make_assistant_entry(text=f"{META_TAG_TOPIC_B}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG_TOPIC_B}",
+        )
+        assert result["decision"] == "approve"
+
+        # topic_transitioned フラグが設定される
+        transitioned_file = state_dir / "topic_transitioned_test-session"
+        assert transitioned_file.exists()
+
+    def test_topic_change_without_record_blocks(self, env_setup):
+        """2回目以降のトピック遷移で記録なし → block"""
+        state_dir = Path(env_setup["state_dir"])
+
+        prev_file = state_dir / "prev_topic_test-session"
+        prev_file.write_text("test-topic")
+
+        context_file = state_dir / "context_retrieved_test-session"
+        context_file.write_text("1")
+
+        # 初回遷移済みフラグを設定（2回目の遷移をシミュレート）
+        transitioned_file = state_dir / "topic_transitioned_test-session"
+        transitioned_file.write_text("1")
+
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -246,6 +277,10 @@ class TestTopicChangeWithRecord:
         # context_retrieved フラグを設定
         context_file = state_dir / "context_retrieved_test-session"
         context_file.write_text("1")
+
+        # 初回遷移済みフラグを設定（2回目の遷移をシミュレート）
+        transitioned_file = state_dir / "topic_transitioned_test-session"
+        transitioned_file.write_text("1")
 
         # 別トピックに変更するtranscript（add_decision記録あり）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
