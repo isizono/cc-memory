@@ -881,8 +881,7 @@ async def session_unregister(request: Request) -> JSONResponse:
 
 
 # サーバー起動
-HTTP_HOST = "localhost"
-HTTP_PORT = 52837
+from src.http_config import HTTP_HOST, HTTP_PORT
 
 
 if __name__ == "__main__":

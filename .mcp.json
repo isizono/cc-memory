@@ -1,6 +1,6 @@
 {
     "cc-memory": {
       "command": "uv",
-      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}", "python", "-m", "src.main"]
+      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}", "python", "-m", "src.launcher"]
     }
   }
