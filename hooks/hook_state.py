@@ -1,9 +1,10 @@
 """hook共通: 状態ファイル管理クラス HookState
 
-hookが利用する状態ファイル（prev_topic, block_count, nudge_counter, nudge_pending,
-context_retrieved, approved_turns, activity_checkin, skill_skip）の読み書きを一元管理する。
+hookが利用する状態ファイル（prev_topic, block_count, transcript_offset, current_turn,
+checked_in_activity）とイベントファイル（events_{session_id}.jsonl）の読み書きを一元管理する。
 標準ライブラリのみに依存。
 """
+import json
 from pathlib import Path
 
 
@@ -66,95 +67,25 @@ class HookState:
         """ファイル削除（missing_ok=True）"""
         self._delete(self._path("block_count"))
 
-    # --- nudge_counter ---
+    # --- transcript_offset ---
 
-    def get_nudge_counter(self) -> int:
-        """state/nudge_counter_{session_id_safe} を読む。
-        ファイルなし or 内容が不正 -> 0"""
-        return self._read_int(self._path("nudge_counter"), 0)
+    def get_transcript_offset(self) -> int:
+        """transcript差分読みのバイトオフセットを取得。未設定 -> 0"""
+        return self._read_int(self._path("transcript_offset"), 0)
 
-    def increment_nudge_counter(self) -> int:
-        """インクリメントして書き込み、新しい値を返す"""
-        new_val = self.get_nudge_counter() + 1
-        self._write(self._path("nudge_counter"), str(new_val))
-        return new_val
+    def set_transcript_offset(self, offset: int) -> None:
+        """transcript差分読みのバイトオフセットを保存"""
+        self._write(self._path("transcript_offset"), str(offset))
 
-    def reset_nudge_counter(self) -> None:
-        """ファイル削除（missing_ok=True）"""
-        self._delete(self._path("nudge_counter"))
+    # --- current_turn ---
 
-    # --- nudge_pending ---
+    def get_current_turn(self) -> int:
+        """現在のturn番号を取得。未設定 -> 0"""
+        return self._read_int(self._path("current_turn"), 0)
 
-    def set_nudge_pending(self) -> None:
-        """state/nudge_pending_{session_id_safe} に '1' を書く"""
-        self._write(self._path("nudge_pending"), "1")
-
-    def pop_nudge_pending(self) -> bool:
-        """ファイルが存在すれば削除して True、なければ False"""
-        try:
-            self._path("nudge_pending").unlink()
-            return True
-        except FileNotFoundError:
-            return False
-
-    # --- activity_nudge_pending ---
-
-    def set_activity_nudge_pending(self) -> None:
-        """state/activity_nudge_pending_{session_id_safe} に '1' を書く"""
-        self._write(self._path("activity_nudge_pending"), "1")
-
-    def pop_activity_nudge_pending(self) -> bool:
-        """ファイルが存在すれば削除して True、なければ False"""
-        try:
-            self._path("activity_nudge_pending").unlink()
-            return True
-        except FileNotFoundError:
-            return False
-
-    # --- approved_turns ---
-
-    def get_approved_turns(self) -> int:
-        """approve済みターン数を取得。block時はインクリメントされない。"""
-        return self._read_int(self._path("approved_turns"), 0)
-
-    def increment_approved_turns(self) -> int:
-        """approve済みターン数を+1して返す。ステップ7(approve)でのみ呼ばれる。"""
-        new_val = self.get_approved_turns() + 1
-        self._write(self._path("approved_turns"), str(new_val))
-        return new_val
-
-    # --- activity_checkin ---
-
-    def has_activity_checkin(self) -> bool:
-        """activity check-in済みフラグを確認。one-shot block制御に使用。"""
-        return self._path("activity_checkin").exists()
-
-    def set_activity_checkin(self) -> None:
-        """activity check-in済みフラグを設定。以後のcheck-inチェックをスキップする。"""
-        self._write(self._path("activity_checkin"), "1")
-
-    # --- skill_skip_remaining ---
-
-    def get_skill_skip_remaining(self) -> int:
-        """スキル実行中のスキップ残りターン数を取得。"""
-        return self._read_int(self._path("skill_skip"), 0)
-
-    def set_skill_skip_remaining(self, n: int) -> None:
-        """スキル実行中のスキップ残りターン数を設定。0以下の場合はファイル削除。"""
-        if n <= 0:
-            self._delete(self._path("skill_skip"))
-        else:
-            self._write(self._path("skill_skip"), str(n))
-
-    # --- topic_transitioned ---
-
-    def has_topic_transitioned(self) -> bool:
-        """セッション内で初回のトピック遷移が発生済みかチェック。"""
-        return self._path("topic_transitioned").exists()
-
-    def set_topic_transitioned(self) -> None:
-        """初回トピック遷移済みフラグを設定。"""
-        self._write(self._path("topic_transitioned"), "1")
+    def set_current_turn(self, turn: int) -> None:
+        """現在のturn番号を保存"""
+        self._write(self._path("current_turn"), str(turn))
 
     # --- checked_in_activity ---
 
@@ -171,27 +102,53 @@ class HookState:
         """checked_in_activity_{session_id} に書く"""
         self._write(self._path("checked_in_activity"), str(activity_id))
 
-    # --- context_retrieved ---
+    # --- events.jsonl ---
 
-    def has_context_retrieval(self) -> bool:
-        """context_retrieved フラグファイルが存在するかチェック。
-        セッション中に一度でもget系APIを呼んだらTrue。"""
-        return self._path("context_retrieved").exists()
+    @property
+    def events_path(self) -> Path:
+        """events_{session_id_safe}.jsonl のパスを返す"""
+        return self.BASE_DIR / f"events_{self._session_id_safe}.jsonl"
 
-    def set_context_retrieved(self) -> None:
-        """context_retrieved フラグファイルを作成する。"""
-        self._write(self._path("context_retrieved"), "1")
+    def append_events(self, events: list[dict]) -> None:
+        """events.jsonl にイベントを追記する"""
+        if not events:
+            return
+        with open(self.events_path, "a", encoding="utf-8") as f:
+            for event in events:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def read_events(self) -> list[dict]:
+        """events.jsonl から全イベントを読み込む。ファイルなし -> 空リスト"""
+        if not self.events_path.exists():
+            return []
+        events = []
+        try:
+            with open(self.events_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except FileNotFoundError:
+            return []
+        return events
 
     # --- clear_session ---
 
     @classmethod
     def clear_session(cls, session_id: str) -> None:
-        """BASE_DIR内の全状態ファイルを削除する"""
+        """BASE_DIR内の全状態ファイルとeventsファイルを削除する"""
         session_id_safe = session_id.replace("/", "_")
         if not cls.BASE_DIR.exists():
             return
         for f in cls.BASE_DIR.glob(f"*_{session_id_safe}"):
             f.unlink(missing_ok=True)
+        # events.jsonl は命名規則が異なるので個別削除
+        events_file = cls.BASE_DIR / f"events_{session_id_safe}.jsonl"
+        events_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

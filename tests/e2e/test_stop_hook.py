@@ -1,4 +1,4 @@
-"""hooks/stop_hook.py の E2E テスト
+"""hooks/stop_hook.py の E2E テスト（イベント駆動アーキテクチャ版）
 
 subprocess.run で stop_hook.py を呼び出し、stdin→stdout の入出力をテスト。
 テスト用に tmpdir の state を使う（HOOK_STATE_DIR 環境変数）。
@@ -35,16 +35,52 @@ def _make_assistant_entry(
     if tool_calls:
         for i, tool in enumerate(tool_calls):
             inp = tool_inputs[i] if tool_inputs and i < len(tool_inputs) else {}
-            content.append({"type": "tool_use", "name": tool, "input": inp})
+            content.append({"type": "tool_use", "name": tool, "input": inp, "id": f"tu_{i}"})
     return {"type": "assistant", "message": {"content": content}}
 
 
 def _make_user_entry(text: str = "hello") -> dict:
-    return {"type": "human", "message": {"content": [{"type": "text", "text": text}]}}
+    return {"type": "user", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def _make_skill_user_entry(skill_name: str = "sync-memory") -> dict:
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": (
+                f"<command-message>{skill_name}</command-message>\n"
+                f"<command-name>/{skill_name}</command-name>"
+            ),
+        },
+    }
+
+
+def _write_events(events: list[dict], state_dir: str, session_id: str) -> None:
+    """events.jsonl をpre-seedする"""
+    path = Path(state_dir) / f"events_{session_id}.jsonl"
+    with open(path, "w") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+
+
+def _read_events(state_dir: str, session_id: str) -> list[dict]:
+    """events.jsonl を読み取る"""
+    path = Path(state_dir) / f"events_{session_id}.jsonl"
+    if not path.exists():
+        return []
+    events = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+    return events
 
 
 META_TAG = '<!-- [meta] topic: test-topic -->'
 META_TAG_TOPIC_B = '<!-- [meta] topic: another-topic -->'
+META_TAG_TOPIC_C = '<!-- [meta] topic: third-topic -->'
 CONTEXT_RETRIEVAL_ENTRY = _make_assistant_entry(
     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__get_topics"],
 )
@@ -57,11 +93,6 @@ def _run_stop_hook(
     last_assistant_message: str = "",
     return_stderr: bool = False,
 ) -> dict | tuple[dict, str]:
-    """stop_hook.py を subprocess で実行し、出力 JSON を返す
-
-    Args:
-        return_stderr: True の場合、(json_result, stderr_text) のタプルを返す
-    """
     input_data = json.dumps({
         "transcript_path": transcript_path,
         "session_id": session_id,
@@ -81,7 +112,6 @@ def _run_stop_hook(
         env=env,
     )
 
-    # 標準出力からJSONをパース
     stdout = result.stdout.strip()
     assert stdout, f"stop_hook.py produced no output. stderr: {result.stderr}"
     parsed = json.loads(stdout)
@@ -96,7 +126,6 @@ def _run_stop_hook(
 
 @pytest.fixture
 def env_setup(tmp_path):
-    """テスト用環境をセットアップし、env_override dict を返す"""
     state_dir = str(tmp_path / "state")
     os.makedirs(state_dir, exist_ok=True)
 
@@ -115,20 +144,17 @@ def env_setup(tmp_path):
 
 
 class TestNoMetaTag:
-    """1. メタタグなし → block（2ターン目以降）/ approve（1ターン目猶予）"""
+    """メタタグなし → block（2ターン目以降）/ approve（1ターン目猶予）"""
 
     def test_no_meta_tag_blocks_after_first_turn(self, env_setup):
-        """2ターン目以降（approved_turns>=1）でメタタグなし → block"""
-        state_dir = Path(env_setup["state_dir"])
-        # approved_turns を 1 にセット（2ターン目）
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("1")
-
+        """2ターン目以降でメタタグなし → block"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
                 _make_user_entry("hi"),
-                _make_assistant_entry(text="response without meta tag"),
+                _make_assistant_entry(text="response 1 without meta tag"),
+                _make_user_entry("continue"),
+                _make_assistant_entry(text="response 2 without meta tag"),
             ],
             transcript,
         )
@@ -140,7 +166,7 @@ class TestNoMetaTag:
         assert "メタタグ" in result["reason"]
 
     def test_no_meta_tag_approves_on_first_turn(self, env_setup):
-        """1ターン目（approved_turns=0）でメタタグなし → approve（猶予）"""
+        """1ターン目でメタタグなし → approve（猶予）"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -156,8 +182,8 @@ class TestNoMetaTag:
         assert result["decision"] == "approve"
         assert "猶予" in result["reason"]
 
-    def test_first_turn_grace_increments_approved_turns(self, env_setup):
-        """1ターン目猶予でapproveされた後、approved_turnsが1にインクリメントされる"""
+    def test_first_turn_grace_sets_current_turn(self, env_setup):
+        """1ターン目猶予後、current_turnが1に設定される"""
         state_dir = Path(env_setup["state_dir"])
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
@@ -174,14 +200,13 @@ class TestNoMetaTag:
         )
         assert result["decision"] == "approve"
 
-        # approved_turns が 1 にインクリメントされている
-        turns_file = state_dir / "approved_turns_test-session"
+        turns_file = state_dir / "current_turn_test-session"
         assert turns_file.exists()
         assert turns_file.read_text().strip() == "1"
 
 
 class TestMetaTagApproves:
-    """2. メタタグあり + コンテキスト取得済み → approve"""
+    """メタタグあり + コンテキスト取得済み → approve"""
 
     def test_meta_tag_with_context_retrieval_approves(self, env_setup):
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
@@ -201,23 +226,29 @@ class TestMetaTagApproves:
         assert result["decision"] == "approve"
 
 
-class TestTopicChangeNoRecord:
-    """3. トピック変更 + 記録なし → block（2回目以降）/ approve（初回遷移）"""
+class TestTopicChange:
+    """トピック変更チェック"""
 
     def test_first_topic_transition_approves(self, env_setup):
         """初回のトピック遷移は記録なしでもapprove"""
-        state_dir = Path(env_setup["state_dir"])
+        state_dir = env_setup["state_dir"]
 
-        prev_file = state_dir / "prev_topic_test-session"
-        prev_file.write_text("test-topic")
-
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
+        # 前ターンの状態: topic="test-topic", check-in済み
+        _write_events(
+            [
+                {"e": "tool", "name": "get_topics", "turn": 1},
+                {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
+                {"e": "meta", "topic": "test-topic", "turn": 1},
+            ],
+            state_dir, "test-session",
+        )
+        Path(state_dir, "prev_topic_test-session").write_text("test-topic")
+        Path(state_dir, "current_turn_test-session").write_text("1")
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
-                _make_user_entry("hi"),
+                _make_user_entry("switching topic"),
                 _make_assistant_entry(text=f"{META_TAG_TOPIC_B}\nresponse"),
             ],
             transcript,
@@ -229,91 +260,83 @@ class TestTopicChangeNoRecord:
         )
         assert result["decision"] == "approve"
 
-        # topic_transitioned フラグが設定される
-        transitioned_file = state_dir / "topic_transitioned_test-session"
-        assert transitioned_file.exists()
-
-    def test_topic_change_without_record_blocks(self, env_setup):
+    def test_second_topic_transition_blocks_without_record(self, env_setup):
         """2回目以降のトピック遷移で記録なし → block"""
-        state_dir = Path(env_setup["state_dir"])
+        state_dir = env_setup["state_dir"]
 
-        prev_file = state_dir / "prev_topic_test-session"
-        prev_file.write_text("test-topic")
-
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        # 初回遷移済みフラグを設定（2回目の遷移をシミュレート）
-        transitioned_file = state_dir / "topic_transitioned_test-session"
-        transitioned_file.write_text("1")
+        # 前ターン: 2つの異なるtopicのmetaイベント（= 既に1回遷移済み）, check-in済み
+        _write_events(
+            [
+                {"e": "tool", "name": "get_topics", "turn": 1},
+                {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
+                {"e": "meta", "topic": "test-topic", "turn": 1},
+                {"e": "meta", "topic": "another-topic", "turn": 2},
+            ],
+            state_dir, "test-session",
+        )
+        Path(state_dir, "prev_topic_test-session").write_text("another-topic")
+        Path(state_dir, "current_turn_test-session").write_text("2")
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
-                _make_user_entry("hi"),
-                _make_assistant_entry(text=f"{META_TAG_TOPIC_B}\nresponse"),
+                _make_user_entry("switching again"),
+                _make_assistant_entry(text=f"{META_TAG_TOPIC_C}\nresponse"),
             ],
             transcript,
         )
 
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG_TOPIC_B}",
+            last_assistant_message=f"response\n{META_TAG_TOPIC_C}",
         )
         assert result["decision"] == "block"
         assert "トピックが変わりました" in result["reason"]
 
-
-class TestTopicChangeWithRecord:
-    """4. トピック変更 + 記録あり → approve"""
-
     def test_topic_change_with_record_approves(self, env_setup):
-        state_dir = Path(env_setup["state_dir"])
+        """トピック遷移 + 記録あり → approve"""
+        state_dir = env_setup["state_dir"]
 
-        # prev_topic をトピック名で設定
-        prev_file = state_dir / "prev_topic_test-session"
-        prev_file.write_text("test-topic")
+        _write_events(
+            [
+                {"e": "tool", "name": "get_topics", "turn": 1},
+                {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
+                {"e": "meta", "topic": "test-topic", "turn": 1},
+                {"e": "meta", "topic": "another-topic", "turn": 2},
+            ],
+            state_dir, "test-session",
+        )
+        Path(state_dir, "prev_topic_test-session").write_text("another-topic")
+        Path(state_dir, "current_turn_test-session").write_text("2")
 
-        # context_retrieved フラグを設定
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        # 初回遷移済みフラグを設定（2回目の遷移をシミュレート）
-        transitioned_file = state_dir / "topic_transitioned_test-session"
-        transitioned_file.write_text("1")
-
-        # 別トピックに変更するtranscript（add_decision記録あり）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
-                _make_user_entry("hi"),
+                _make_user_entry("switching with record"),
                 _make_assistant_entry(
                     tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
                 ),
-                _make_user_entry("continue"),
-                _make_assistant_entry(text=f"{META_TAG_TOPIC_B}\nresponse"),
+                _make_assistant_entry(text=f"{META_TAG_TOPIC_C}\nresponse"),
             ],
             transcript,
         )
 
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG_TOPIC_B}",
+            last_assistant_message=f"response\n{META_TAG_TOPIC_C}",
         )
         assert result["decision"] == "approve"
 
 
 class TestBlockLimitForceApprove:
-    """5. ブロック上限2回 → force approve"""
+    """ブロック上限 → force approve"""
 
     def test_block_limit_force_approves(self, env_setup):
         state_dir = Path(env_setup["state_dir"])
 
-        # block_count を 2 にセット（上限到達）
         block_file = state_dir / "block_count_test-session"
         block_file.write_text("2")
 
-        # メタタグなしtranscript（通常ならblock）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -329,15 +352,13 @@ class TestBlockLimitForceApprove:
         assert result["decision"] == "approve"
         assert "ブロック上限" in result["reason"]
 
-        # block_count がリセットされている
         assert not block_file.exists()
 
 
 class TestExceptionFailOpen:
-    """6. 例外発生時 → approve（フェイルオープン）"""
+    """例外発生時 → approve（フェイルオープン）"""
 
     def test_exception_causes_approve(self, env_setup):
-        # state_dir をファイルにして HookState.__init__ の mkdir を失敗させる
         state_as_file = env_setup["tmp_path"] / "state_as_file"
         state_as_file.write_text("not a directory")
 
@@ -362,468 +383,6 @@ class TestExceptionFailOpen:
         assert "error" in result.get("reason", "").lower()
 
 
-class TestNudgeCounter:
-    """nudgeカウンターの動作確認"""
-
-    def test_nudge_pending_set_on_interval_without_recording(self, env_setup):
-        """インターバル到達で記録なし → nudge_pending が設定される"""
-        state_dir = Path(env_setup["state_dir"])
-
-        # nudge_counter を 1 にセット（次が2の倍数）
-        counter_file = state_dir / "nudge_counter_test-session"
-        counter_file.write_text("1")
-
-        # context_retrieved フラグを設定
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-        # nudge_pending が設定されている
-        pending_file = state_dir / "nudge_pending_test-session"
-        assert pending_file.exists()
-
-    def test_nudge_counter_resets_on_recent_recording(self, env_setup):
-        """インターバル到達で記録あり → nudge_counter がリセットされる"""
-        state_dir = Path(env_setup["state_dir"])
-
-        # nudge_counter を 1 にセット
-        counter_file = state_dir / "nudge_counter_test-session"
-        counter_file.write_text("1")
-
-        # context_retrieved フラグを設定
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                _make_assistant_entry(
-                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
-                    text=f"{META_TAG}\nrecorded",
-                ),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"recorded\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-        # nudge_counter がリセットされている（ファイル削除）
-        assert not counter_file.exists()
-
-    def test_nudge_counter_resets_on_add_log(self, env_setup):
-        """インターバル到達でadd_log記録あり → nudge_counter がリセットされる"""
-        state_dir = Path(env_setup["state_dir"])
-
-        counter_file = state_dir / "nudge_counter_test-session"
-        counter_file.write_text("1")
-
-        # context_retrieved フラグを設定
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                _make_assistant_entry(
-                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_log"],
-                    text=f"logged\n{META_TAG}",
-                ),
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"logged\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-        # add_logでもnudge_counterがリセットされる
-        assert not counter_file.exists()
-
-
-class TestActivityNudge:
-    """decision作成後のアクティビティ作成nudge"""
-
-    def test_decision_without_activity_sets_nudge(self, env_setup):
-        """add_decisionあり + add_activityなし → activity_nudge_pending設定"""
-        state_dir = Path(env_setup["state_dir"])
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(
-                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
-                text=f"{META_TAG}\nrecorded",
-            ),
-        ], transcript)
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"recorded\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-        pending_file = state_dir / "activity_nudge_pending_test-session"
-        assert pending_file.exists()
-
-    def test_decision_with_activity_no_nudge(self, env_setup):
-        """add_decision + add_activity両方あり → activity_nudge_pending設定されない"""
-        state_dir = Path(env_setup["state_dir"])
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(
-                tool_calls=[
-                    "mcp__plugin_claude-code-memory_cc-memory__add_decision",
-                    "mcp__plugin_claude-code-memory_cc-memory__add_activity",
-                ],
-                text=f"{META_TAG}\nrecorded",
-            ),
-        ], transcript)
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"recorded\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-        pending_file = state_dir / "activity_nudge_pending_test-session"
-        assert not pending_file.exists()
-
-    def test_no_decision_no_nudge(self, env_setup):
-        """add_decisionなし → activity_nudge_pending設定されない"""
-        state_dir = Path(env_setup["state_dir"])
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-        pending_file = state_dir / "activity_nudge_pending_test-session"
-        assert not pending_file.exists()
-
-
-class TestStateUpdatedOnApprove:
-    """approve時の状態更新"""
-
-    def test_prev_topic_updated(self, env_setup):
-        """approve後に prev_topic が更新される"""
-        state_dir = Path(env_setup["state_dir"])
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-
-        prev_file = state_dir / "prev_topic_test-session"
-        assert prev_file.exists()
-        assert prev_file.read_text().strip() == "test-topic"
-
-    def test_block_count_reset_on_approve(self, env_setup):
-        """approve後に block_count がリセットされる"""
-        state_dir = Path(env_setup["state_dir"])
-
-        # block_count を 1 にセット
-        block_file = state_dir / "block_count_test-session"
-        block_file.write_text("1")
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-            ],
-            transcript,
-        )
-
-        _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-
-        # block_count がリセットされている
-        assert not block_file.exists()
-
-
-class TestSplitEntries:
-    """エントリ分割パターン: text+meta と tool_use が別エントリ"""
-
-    def test_split_entry_with_last_assistant_message(self, env_setup):
-        """分割エントリでもlast_assistant_messageで検出できる"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        # text+meta と tool_use を別エントリに分割
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),  # textのみ
-                _make_assistant_entry(tool_calls=["Bash"]),  # tool_useのみ
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"{META_TAG}\nresponse",
-        )
-        assert result["decision"] == "approve"
-
-    def test_split_entry_fallback_to_transcript(self, env_setup):
-        """last_assistant_messageなしでもtranscriptフォールバックで検出"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
-                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-                _make_assistant_entry(tool_calls=["Bash"]),
-            ],
-            transcript,
-        )
-
-        # last_assistant_message なし → transcriptフォールバック
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-        )
-        assert result["decision"] == "approve"
-
-
-class TestLastAssistantMessage:
-    """last_assistant_message あり/なしの両パターン"""
-
-    def test_meta_tag_via_last_assistant_message(self, env_setup):
-        """last_assistant_messageからメタタグを検出（レースコンディション模擬）"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        # transcriptにはメタタグなし（レースコンディション模擬）だが
-        # コンテキスト取得ツールの呼び出しは含める
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
-            ],
-            transcript,
-        )
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"{META_TAG}\nresponse",
-        )
-        assert result["decision"] == "approve"
-
-    def test_no_last_assistant_message_falls_back_to_transcript(self, env_setup):
-        """last_assistant_messageなし → transcriptから検出"""
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript(
-            [
-                _make_user_entry("hi"),
-                CONTEXT_RETRIEVAL_ENTRY,
-                _make_assistant_entry(text=f"response\n{META_TAG}"),
-            ],
-            transcript,
-        )
-
-        # last_assistant_message なし
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-        )
-        assert result["decision"] == "approve"
-
-
-class TestActivityCheckinBlock:
-    """activity check-in チェック"""
-
-    def test_no_checkin_after_defer_turns_blocks(self, env_setup):
-        """猶予期間後（approved_turns=2）でcheck-in未呼出 → block"""
-        state_dir = Path(env_setup["state_dir"])
-        # approved_turns を 2 にセット（3ターン目）
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("2")
-        # context_retrieved フラグを設定
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-        # transcript（check-in呼出なし）
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            CONTEXT_RETRIEVAL_ENTRY,
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "block"
-        assert "check-in" in result["reason"]
-        # block時にapproved_turnsがインクリメントされていないことを確認
-        assert turns_file.read_text().strip() == "2"
-
-    def test_checkin_called_approves(self, env_setup):
-        """check_in呼出済み → approve"""
-        state_dir = Path(env_setup["state_dir"])
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("2")
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(
-                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__check_in"],
-            ),
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_add_activity_called_approves(self, env_setup):
-        """add_activity呼出済み → approve"""
-        state_dir = Path(env_setup["state_dir"])
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("2")
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(
-                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_activity"],
-            ),
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_block_only_once(self, env_setup):
-        """activity_checkinフラグ設定済み → 2回目はblockしない"""
-        state_dir = Path(env_setup["state_dir"])
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("5")
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-        checkin_file = state_dir / "activity_checkin_test-session"
-        checkin_file.write_text("1")
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_before_defer_turns_no_block(self, env_setup):
-        """猶予期間中（approved_turns=0）ではblockしない"""
-        state_dir = Path(env_setup["state_dir"])
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("0")
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-        # check-in未呼出だが、まだ猶予期間中
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_checkin_grace_at_turn_1(self, env_setup):
-        """猶予期間中（approved_turns=1）でもblockしない"""
-        state_dir = Path(env_setup["state_dir"])
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("1")
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-        # check-in未呼出だが、まだ猶予期間中（< _CHECKIN_DEFER_TURNS=2）
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-
-    def test_approved_turns_incremented_on_approve(self, env_setup):
-        """approve時にapproved_turnsがインクリメントされる"""
-        state_dir = Path(env_setup["state_dir"])
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("hi"),
-            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
-        ], transcript)
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-            last_assistant_message=f"response\n{META_TAG}",
-        )
-        assert result["decision"] == "approve"
-        # approved_turns が 1 にインクリメントされている
-        turns_file = state_dir / "approved_turns_test-session"
-        assert turns_file.exists()
-        assert turns_file.read_text().strip() == "1"
-
-
 class TestContextRetrievalCheck:
     """コンテキスト取得ツール呼び出しチェック"""
 
@@ -846,7 +405,7 @@ class TestContextRetrievalCheck:
         assert "コンテキスト" in result["reason"]
 
     def test_get_topics_call_approves(self, env_setup):
-        """get_topics呼出済み + メタタグあり → approve"""
+        """get_topics呼出済み → approve"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -864,7 +423,7 @@ class TestContextRetrievalCheck:
         assert result["decision"] == "approve"
 
     def test_search_call_approves(self, env_setup):
-        """search呼出済み + メタタグあり → approve"""
+        """search呼出済み → approve"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -884,7 +443,7 @@ class TestContextRetrievalCheck:
         assert result["decision"] == "approve"
 
     def test_get_by_ids_call_approves(self, env_setup):
-        """get_by_ids呼出済み + メタタグあり → approve"""
+        """get_by_ids呼出済み → approve"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -924,15 +483,21 @@ class TestContextRetrievalCheck:
         assert result["decision"] == "block"
         assert "コンテキスト" in result["reason"]
 
-    def test_context_retrieval_flag_persists(self, env_setup):
-        """一度コンテキスト取得したらフラグで記憶される"""
-        state_dir = Path(env_setup["state_dir"])
+    def test_context_retrieval_persists_in_events(self, env_setup):
+        """過去turnでコンテキスト取得済み → 新turnでも有効"""
+        state_dir = env_setup["state_dir"]
 
-        # context_retrieved フラグを事前設定
-        context_file = state_dir / "context_retrieved_test-session"
-        context_file.write_text("1")
+        _write_events(
+            [
+                {"e": "tool", "name": "get_topics", "turn": 1},
+                {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
+                {"e": "meta", "topic": "test-topic", "turn": 1},
+            ],
+            state_dir, "test-session",
+        )
+        Path(state_dir, "current_turn_test-session").write_text("1")
+        Path(state_dir, "prev_topic_test-session").write_text("test-topic")
 
-        # transcriptにはコンテキスト取得ツールなし
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -946,29 +511,104 @@ class TestContextRetrievalCheck:
             str(transcript), "test-session", env_setup["env_override"],
             last_assistant_message=f"response\n{META_TAG}",
         )
-        # フラグがあるのでblockされない
         assert result["decision"] == "approve"
 
 
-def _make_skill_user_entry(skill_name: str = "sync-memory") -> dict:
-    """スキル発動時のuserエントリ（実際のtranscript形式）"""
-    return {
-        "type": "user",
-        "message": {
-            "role": "user",
-            "content": (
-                f"<command-message>{skill_name}</command-message>\n"
-                f"<command-name>/{skill_name}</command-name>"
-            ),
-        },
-    }
+class TestActivityCheckinBlock:
+    """activity check-in チェック"""
+
+    def test_no_checkin_after_defer_turns_blocks(self, env_setup):
+        """猶予期間後（turn>=2）でcheck-in未呼出 → block"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG}\nresponse 1"),
+                _make_user_entry("continue"),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse 2"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response 2\n{META_TAG}",
+        )
+        assert result["decision"] == "block"
+        assert "check-in" in result["reason"]
+
+    def test_checkin_called_approves(self, env_setup):
+        """check_in呼出済み → approve"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(
+                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__check_in"],
+                    tool_inputs=[{"activity_id": 42}],
+                ),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse 1"),
+                _make_user_entry("continue"),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse 2"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response 2\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_add_activity_called_approves(self, env_setup):
+        """add_activity呼出済み → approve"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(
+                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_activity"],
+                ),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse 1"),
+                _make_user_entry("continue"),
+                _make_assistant_entry(text=f"{META_TAG}\nresponse 2"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response 2\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+    def test_before_defer_turns_no_block(self, env_setup):
+        """猶予期間中（turn<2）ではcheck-in未呼出でもblockしない"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
 
 
-class TestSkillSkip:
-    """スキル実行時のスキップ機能"""
+class TestSkillSpan:
+    """Skill Span中のスキップ機能"""
 
-    def test_skill_command_approves_without_meta_tag(self, env_setup):
-        """スキル発動ターン: メタタグなし・コンテキスト取得なしでもapprove"""
+    def test_skill_span_approves_without_checks(self, env_setup):
+        """Skill Span中: メタタグなし・コンテキスト取得なしでもapprove"""
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript([
             _make_skill_user_entry("sync-memory"),
@@ -979,102 +619,254 @@ class TestSkillSkip:
             str(transcript), "test-session", env_setup["env_override"],
         )
         assert result["decision"] == "approve"
-        assert "スキル" in result["reason"]
+        assert "Skill Span" in result["reason"]
 
-    def test_skill_skip_remaining_approves(self, env_setup):
-        """スキップ残りがある場合: 即approve"""
-        state_dir = Path(env_setup["state_dir"])
-        skip_file = state_dir / "skill_skip_test-session"
-        skip_file.write_text("2")
+    def test_skill_span_continues_on_next_skill_turn(self, env_setup):
+        """連続するSkill turnでもSpan継続"""
+        state_dir = env_setup["state_dir"]
+
+        _write_events(
+            [{"e": "skill", "name": "sync-memory", "turn": 1}],
+            state_dir, "test-session",
+        )
+        Path(state_dir, "current_turn_test-session").write_text("1")
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript([
-            _make_user_entry("normal message"),
-            _make_assistant_entry(text="response without meta tag"),
+            _make_skill_user_entry("sync-memory"),
+            _make_assistant_entry(text="still processing"),
         ], transcript)
 
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
         )
         assert result["decision"] == "approve"
-        assert "スキル" in result["reason"]
+        assert "Skill Span" in result["reason"]
 
-        # スキップ残りが1にデクリメント
-        assert skip_file.read_text().strip() == "1"
+    def test_skill_span_ends_when_no_skill_event(self, env_setup):
+        """Skill Span終了: skillイベントがないturnで通常チェック再開"""
+        state_dir = env_setup["state_dir"]
 
-    def test_skill_skip_decrements_to_zero(self, env_setup):
-        """スキップ残り1 → 0でファイル削除"""
-        state_dir = Path(env_setup["state_dir"])
-        skip_file = state_dir / "skill_skip_test-session"
-        skip_file.write_text("1")
+        _write_events(
+            [
+                {"e": "skill", "name": "sync-memory", "turn": 1},
+                {"e": "tool", "name": "get_topics", "turn": 1},
+                {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
+                {"e": "meta", "topic": "test-topic", "turn": 1},
+            ],
+            state_dir, "test-session",
+        )
+        Path(state_dir, "current_turn_test-session").write_text("1")
+        Path(state_dir, "prev_topic_test-session").write_text("test-topic")
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript([
-            _make_user_entry("normal message"),
-            _make_assistant_entry(text="response"),
+            _make_user_entry("normal message after skill"),
+            _make_assistant_entry(text=f"{META_TAG}\nresponse"),
         ], transcript)
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+        # Skill Spanが終了し通常チェックが動く → approve（条件を満たしている）
+        assert result["decision"] == "approve"
+        assert "Skill Span" not in result.get("reason", "")
+
+
+class TestNudge:
+    """nudgeイベントの生成"""
+
+    def test_activity_nudge_on_decision_without_activity(self, env_setup):
+        """add_decision + add_activityなし → activity nudgeイベント"""
+        state_dir = env_setup["state_dir"]
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            CONTEXT_RETRIEVAL_ENTRY,
+            _make_assistant_entry(
+                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
+                text=f"{META_TAG}\nrecorded",
+            ),
+        ], transcript)
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"recorded\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+        events = _read_events(state_dir, "test-session")
+        nudge_events = [e for e in events if e.get("e") == "nudge"]
+        activity_nudges = [e for e in nudge_events if e.get("type") == "activity"]
+        assert len(activity_nudges) >= 1
+
+    def test_no_activity_nudge_when_checkin_present(self, env_setup):
+        """add_decision + check_in → activity nudge不発"""
+        state_dir = env_setup["state_dir"]
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("hi"),
+            CONTEXT_RETRIEVAL_ENTRY,
+            _make_assistant_entry(
+                tool_calls=[
+                    "mcp__plugin_claude-code-memory_cc-memory__add_decision",
+                    "mcp__plugin_claude-code-memory_cc-memory__check_in",
+                ],
+                tool_inputs=[{}, {"activity_id": 1}],
+            ),
+            _make_assistant_entry(text=f"{META_TAG}\nrecorded"),
+        ], transcript)
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"recorded\n{META_TAG}",
+        )
+        assert result["decision"] == "approve"
+
+        events = _read_events(state_dir, "test-session")
+        activity_nudges = [e for e in events if e.get("e") == "nudge" and e.get("type") == "activity"]
+        assert len(activity_nudges) == 0
+
+
+class TestStateUpdatedOnApprove:
+    """approve時の状態更新"""
+
+    def test_prev_topic_updated(self, env_setup):
+        """approve後に prev_topic が更新される"""
+        state_dir = Path(env_setup["state_dir"])
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+
+        prev_file = state_dir / "prev_topic_test-session"
+        assert prev_file.exists()
+        assert prev_file.read_text().strip() == "test-topic"
+
+    def test_block_count_reset_on_approve(self, env_setup):
+        """approve後に block_count がリセットされる"""
+        state_dir = Path(env_setup["state_dir"])
+
+        block_file = state_dir / "block_count_test-session"
+        block_file.write_text("1")
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+
+        assert not block_file.exists()
+
+    def test_events_file_created(self, env_setup):
+        """初回実行後にevents.jsonlが作成される"""
+        state_dir = env_setup["state_dir"]
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+
+        events = _read_events(state_dir, "test-session")
+        assert len(events) > 0
+        # get_topicsのtoolイベントがある
+        tool_events = [e for e in events if e.get("e") == "tool"]
+        assert any(e["name"] == "get_topics" for e in tool_events)
+        # metaイベントがある
+        meta_events = [e for e in events if e.get("e") == "meta"]
+        assert any(e["topic"] == "test-topic" for e in meta_events)
+
+    def test_transcript_offset_updated(self, env_setup):
+        """approve後にtranscript_offsetが更新される"""
+        state_dir = Path(env_setup["state_dir"])
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(text=f"{META_TAG}\nresponse"),
+            ],
+            transcript,
+        )
+
+        _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"response\n{META_TAG}",
+        )
+
+        offset_file = state_dir / "transcript_offset_test-session"
+        assert offset_file.exists()
+        offset_val = int(offset_file.read_text().strip())
+        assert offset_val == transcript.stat().st_size
+
+
+class TestLastAssistantMessage:
+    """last_assistant_message あり/なしの両パターン"""
+
+    def test_meta_tag_via_last_assistant_message(self, env_setup):
+        """last_assistant_messageからメタタグを検出"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+            last_assistant_message=f"{META_TAG}\nresponse",
+        )
+        assert result["decision"] == "approve"
+
+    def test_no_last_assistant_message_falls_back_to_transcript(self, env_setup):
+        """last_assistant_messageなし → transcriptから検出"""
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("hi"),
+                CONTEXT_RETRIEVAL_ENTRY,
+                _make_assistant_entry(text=f"response\n{META_TAG}"),
+            ],
+            transcript,
+        )
 
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
         )
         assert result["decision"] == "approve"
-
-        # 0になったのでファイル削除
-        assert not skip_file.exists()
-
-    def test_skill_skip_sets_remaining_turns(self, env_setup):
-        """スキル検出時にskill_skipファイルが作成される"""
-        state_dir = Path(env_setup["state_dir"])
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_skill_user_entry("sync-memory"),
-            _make_assistant_entry(text="processing"),
-        ], transcript)
-
-        _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-        )
-
-        # skill_skip = 2 (3ターン中、検出ターンで1消費)
-        skip_file = state_dir / "skill_skip_test-session"
-        assert skip_file.exists()
-        assert skip_file.read_text().strip() == "2"
-
-    def test_normal_checks_resume_after_skip(self, env_setup):
-        """スキップ終了後は通常チェック再開（メタタグなし→block）"""
-        state_dir = Path(env_setup["state_dir"])
-        # approved_turns=1にして1ターン目猶予を使い切る
-        turns_file = state_dir / "approved_turns_test-session"
-        turns_file.write_text("5")
-
-        # skill_skipは0（スキップ終了済み）
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_user_entry("normal message"),
-            _make_assistant_entry(text="no meta tag"),
-        ], transcript)
-
-        result = _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-        )
-        assert result["decision"] == "block"
-        assert "メタタグ" in result["reason"]
-
-    def test_skill_skip_increments_approved_turns(self, env_setup):
-        """スキル検出ターンでapproved_turnsがインクリメントされる"""
-        state_dir = Path(env_setup["state_dir"])
-
-        transcript = env_setup["tmp_path"] / "transcript.jsonl"
-        _write_transcript([
-            _make_skill_user_entry("sync-memory"),
-            _make_assistant_entry(text="processing"),
-        ], transcript)
-
-        _run_stop_hook(
-            str(transcript), "test-session", env_setup["env_override"],
-        )
-
-        turns_file = state_dir / "approved_turns_test-session"
-        assert turns_file.exists()
-        assert turns_file.read_text().strip() == "1"

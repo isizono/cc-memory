@@ -1,7 +1,217 @@
-"""hook共通: transcript解析ユーティリティ"""
+"""hook共通: transcript解析ユーティリティ
+
+イベント駆動アーキテクチャ用の差分読み・イベント抽出と、
+レガシー関数（Phase 3で廃止予定）を含む。
+"""
 import json
 import re
 from pathlib import Path
+
+# --- cc-memory MCPツールのプレフィックス ---
+
+_CC_MEMORY_PREFIX = "mcp__plugin_claude-code-memory_cc-memory__"
+
+# --- コンテキスト取得ツール ---
+
+_CONTEXT_RETRIEVAL_TOOLS = {
+    "search",
+    "get_topics",
+    "get_decisions",
+    "get_logs",
+    "get_activities",
+    "get_by_ids",
+}
+
+# --- 記録ツール ---
+
+_RECORDING_TOOLS = {
+    "add_decision",
+    "add_topic",
+    "add_log",
+}
+
+# --- check-in系ツール ---
+
+_CHECKIN_TOOLS = {
+    "check_in",
+    "add_activity",
+}
+
+
+# ===================================================================
+# イベント駆動アーキテクチャ: 差分読み + イベント抽出
+# ===================================================================
+
+
+def read_transcript_from_offset(transcript_path: str, offset: int) -> tuple[list[dict], int, bool]:
+    """transcriptをバイトオフセットから読み、(新規エントリ一覧, 新オフセット, リセット発生)を返す。
+
+    transcriptはappend-onlyのJSONL形式。offsetがファイルサイズを超えた場合は
+    0にリセットして全読みする（defensive coding）。
+    リセット発生時は呼び出し側でcurrent_turnやevents.jsonlもリセットすべき。
+    """
+    path = Path(transcript_path).expanduser()
+    if not path.exists():
+        return [], 0, False
+
+    try:
+        file_size = path.stat().st_size
+        offset_reset = offset > file_size
+        if offset_reset:
+            offset = 0
+
+        entries = []
+        with open(path, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+            new_offset = offset + len(data)
+
+        for line in data.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+        return entries, new_offset, offset_reset
+
+    except Exception:
+        return [], offset, False
+
+
+def is_user_message(entry: dict) -> bool:
+    """エントリがUser Message（ターン境界）かどうかを判定する。
+
+    User Message = ユーザーが実際に送信したuserエントリ。
+    tool_resultやsystem-reminderを含むuser/humanエントリは除外する。
+    string形式のsystem-reminderの誤判定は許容（発生率0.02%）。
+    """
+    if entry.get("type") not in ("user", "human"):
+        return False
+    content = entry.get("message", {}).get("content")
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        return not any(
+            isinstance(block, dict) and block.get("type") == "tool_result"
+            for block in content
+        )
+    return False
+
+
+def extract_events(entries: list[dict], current_turn: int) -> tuple[list[dict], int]:
+    """transcriptエントリ群からイベントを抽出する。
+
+    3型イベントを抽出:
+    - tool: cc-memoryツール呼び出し（assistantのtool_useブロック）
+    - meta: メタタグ検出（assistantのtextブロック）
+    - skill: スキル開始検出（User Messageの<command-name>タグ）
+
+    Args:
+        entries: transcriptの新規エントリ一覧
+        current_turn: 現在のturn番号
+
+    Returns:
+        (抽出されたイベントのリスト, 更新後のturn番号)
+    """
+    events: list[dict] = []
+
+    for entry in entries:
+        entry_type = entry.get("type", "")
+
+        # Turn境界検出: User Message到着で新turnが始まる
+        if is_user_message(entry):
+            current_turn += 1
+            # skillイベント: User Messageに<command-name>が含まれる場合
+            text = _extract_user_content_text(entry)
+            match = re.search(r"<command-name>/?(.*?)</command-name>", text)
+            if match:
+                events.append({
+                    "e": "skill",
+                    "name": match.group(1).strip(),
+                    "turn": current_turn,
+                })
+            continue
+
+        # assistantエントリからtool/metaイベントを抽出
+        if entry_type == "assistant":
+            message = entry.get("message", {})
+            content = message.get("content", [])
+
+            if isinstance(content, str):
+                meta = parse_meta_tag(content)
+                if meta:
+                    events.append({
+                        "e": "meta",
+                        "topic": meta["topic_name"],
+                        "turn": current_turn,
+                    })
+                continue
+
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+
+                if block_type == "tool_use":
+                    name = block.get("name", "")
+                    if name.startswith(_CC_MEMORY_PREFIX):
+                        short_name = name[len(_CC_MEMORY_PREFIX):]
+                        event: dict = {
+                            "e": "tool",
+                            "name": short_name,
+                            "turn": current_turn,
+                        }
+                        # check_inのactivity_idを保存
+                        if short_name == "check_in":
+                            aid = block.get("input", {}).get("activity_id")
+                            if aid is not None:
+                                try:
+                                    event["activity_id"] = int(aid)
+                                except (ValueError, TypeError):
+                                    pass
+                        events.append(event)
+
+                elif block_type == "text":
+                    text = block.get("text", "")
+                    meta = parse_meta_tag(text)
+                    if meta:
+                        events.append({
+                            "e": "meta",
+                            "topic": meta["topic_name"],
+                            "turn": current_turn,
+                        })
+
+    return events, current_turn
+
+
+# ===================================================================
+# 共通ユーティリティ（イベント駆動でも使用）
+# ===================================================================
+
+
+def parse_meta_tag(text: str) -> dict | None:
+    """テキストからメタタグをパースする。
+
+    フォーマット:
+    <!-- [meta] topic: xxx -->
+
+    Returns:
+        {"found": True, "topic_name": ...}
+        or None
+    """
+    pattern = r'<!--\s*\[meta\]\s*topic:\s*(.+?)\s*-->'
+    match = re.search(pattern, text)
+
+    if match:
+        return {
+            "found": True,
+            "topic_name": match.group(1).strip(),
+        }
+
+    return None
 
 
 def get_last_assistant_entry(transcript_path: str) -> dict | None:
@@ -31,17 +241,6 @@ def get_last_assistant_entry(transcript_path: str) -> dict | None:
     return None
 
 
-def _has_text_block(entry: dict) -> bool:
-    """エントリにtextブロックが含まれるかチェック。"""
-    content = entry.get("message", {}).get("content", [])
-    if isinstance(content, str):
-        return bool(content.strip())
-    return any(
-        isinstance(block, dict) and block.get("type") == "text"
-        for block in content
-    )
-
-
 def extract_text_from_entry(entry: dict) -> str:
     """エントリからテキスト内容を抽出する。"""
     message = entry.get("message", {})
@@ -60,35 +259,60 @@ def extract_text_from_entry(entry: dict) -> str:
     return "\n".join(texts)
 
 
-def parse_meta_tag(text: str) -> dict | None:
-    """テキストからメタタグをパースする。
-
-    フォーマット:
-    <!-- [meta] topic: xxx -->
-
-    Returns:
-        {"found": True, "topic_name": ...}
-        or None
-    """
-    pattern = r'<!--\s*\[meta\]\s*topic:\s*(.+?)\s*-->'
-    match = re.search(pattern, text)
-
-    if match:
-        return {
-            "found": True,
-            "topic_name": match.group(1).strip(),
-        }
-
-    return None
+def _has_text_block(entry: dict) -> bool:
+    """エントリにtextブロックが含まれるかチェック。"""
+    content = entry.get("message", {}).get("content", [])
+    if isinstance(content, str):
+        return bool(content.strip())
+    return any(
+        isinstance(block, dict) and block.get("type") == "text"
+        for block in content
+    )
 
 
-_RECORDING_TOOLS = [
-    "mcp__plugin_claude-code-memory_cc-memory__add_decision",
-    "mcp__plugin_claude-code-memory_cc-memory__add_topic",
-    "mcp__plugin_claude-code-memory_cc-memory__add_log",
+def _extract_user_content_text(entry: dict) -> str:
+    """userエントリからcontent文字列を取得する。"""
+    content = entry.get("message", {}).get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            b.get("text", "") if isinstance(b, dict) else str(b)
+            for b in content
+        )
+    return ""
+
+
+# ===================================================================
+# レガシー関数（Phase 3で廃止予定）
+# 現在はテストからの参照があるため残置
+# ===================================================================
+
+
+_RECORDING_TOOLS_FULL = [
+    f"{_CC_MEMORY_PREFIX}add_decision",
+    f"{_CC_MEMORY_PREFIX}add_topic",
+    f"{_CC_MEMORY_PREFIX}add_log",
 ]
 
-_ADD_DECISION_TOOL = "mcp__plugin_claude-code-memory_cc-memory__add_decision"
+_ADD_DECISION_TOOL = f"{_CC_MEMORY_PREFIX}add_decision"
+
+_ACTIVITY_CHECKIN_TOOLS_FULL = [
+    f"{_CC_MEMORY_PREFIX}check_in",
+    f"{_CC_MEMORY_PREFIX}add_activity",
+]
+
+_CHECKIN_TOOL = f"{_CC_MEMORY_PREFIX}check_in"
+_ADD_ACTIVITY_TOOL = f"{_CC_MEMORY_PREFIX}add_activity"
+
+_CONTEXT_RETRIEVAL_TOOLS_FULL = [
+    f"{_CC_MEMORY_PREFIX}search",
+    f"{_CC_MEMORY_PREFIX}get_topics",
+    f"{_CC_MEMORY_PREFIX}get_decisions",
+    f"{_CC_MEMORY_PREFIX}get_logs",
+    f"{_CC_MEMORY_PREFIX}get_activities",
+    f"{_CC_MEMORY_PREFIX}get_by_ids",
+]
 
 
 def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
@@ -113,22 +337,12 @@ def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
 
 def has_recent_recording(entries: list[dict]) -> bool:
     """entriesにadd_decision/add_topic/add_logのツール呼び出しがあるかチェック。"""
-    return _has_tool_calls(entries, _RECORDING_TOOLS)
-
-
-_ACTIVITY_CHECKIN_TOOLS = [
-    "mcp__plugin_claude-code-memory_cc-memory__check_in",
-    "mcp__plugin_claude-code-memory_cc-memory__add_activity",
-]
+    return _has_tool_calls(entries, _RECORDING_TOOLS_FULL)
 
 
 def has_activity_checkin_calls(entries: list[dict]) -> bool:
     """entriesにcheck_in/add_activityのツール呼び出しがあるかチェック。"""
-    return _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS)
-
-
-_CHECKIN_TOOL = "mcp__plugin_claude-code-memory_cc-memory__check_in"
-_ADD_ACTIVITY_TOOL = "mcp__plugin_claude-code-memory_cc-memory__add_activity"
+    return _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS_FULL)
 
 
 def extract_checkin_activity_id(entries: list[dict]) -> int | None:
@@ -219,10 +433,7 @@ def extract_last_activity_id(transcript_path: str) -> int | None:
 
 
 def _parse_activity_id_from_result(result_content) -> int | None:
-    """tool_resultのcontentからactivity_idをパースする。
-
-    contentは文字列（JSON）またはリスト（contentブロック配列）の場合がある。
-    """
+    """tool_resultのcontentからactivity_idをパースする。"""
     if isinstance(result_content, str):
         return _try_parse_activity_id(result_content)
     if isinstance(result_content, list):
@@ -246,19 +457,9 @@ def _try_parse_activity_id(text: str) -> int | None:
     return None
 
 
-_CONTEXT_RETRIEVAL_TOOLS = [
-    "mcp__plugin_claude-code-memory_cc-memory__search",
-    "mcp__plugin_claude-code-memory_cc-memory__get_topics",
-    "mcp__plugin_claude-code-memory_cc-memory__get_decisions",
-    "mcp__plugin_claude-code-memory_cc-memory__get_logs",
-    "mcp__plugin_claude-code-memory_cc-memory__get_activities",
-    "mcp__plugin_claude-code-memory_cc-memory__get_by_ids",
-]
-
-
 def has_context_retrieval_calls(entries: list[dict]) -> bool:
     """entriesにget系APIの呼び出しがあるかチェック。"""
-    return _has_tool_calls(entries, _CONTEXT_RETRIEVAL_TOOLS)
+    return _has_tool_calls(entries, _CONTEXT_RETRIEVAL_TOOLS_FULL)
 
 
 def has_decision_without_activity(entries: list[dict]) -> bool:
@@ -266,21 +467,8 @@ def has_decision_without_activity(entries: list[dict]) -> bool:
     has_decision = _has_tool_calls(entries, [_ADD_DECISION_TOOL])
     if not has_decision:
         return False
-    has_activity = _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS)
+    has_activity = _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS_FULL)
     return not has_activity
-
-
-def _extract_user_content_text(entry: dict) -> str:
-    """userエントリからcontent文字列を取得する。"""
-    content = entry.get("message", {}).get("content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return " ".join(
-            b.get("text", "") if isinstance(b, dict) else str(b)
-            for b in content
-        )
-    return ""
 
 
 def get_transcript_info(transcript_path: str) -> tuple[list[dict], bool]:
@@ -307,7 +495,6 @@ def get_transcript_info(transcript_path: str) -> tuple[list[dict], bool]:
                     if entry_type == "assistant":
                         entries.append(entry)
                     elif entry_type in ("user", "human"):
-                        # tool_resultエントリはスキップ（skill検出を上書きしないため）
                         content = entry.get("message", {}).get("content", "")
                         if isinstance(content, list) and content and isinstance(content[0], dict) and content[0].get("type") == "tool_result":
                             continue

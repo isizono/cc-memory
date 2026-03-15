@@ -1,12 +1,11 @@
-"""PreToolUse hook: nudgeリマインダー注入
+"""PreToolUse hook: nudgeリマインダー注入（イベント駆動版）
 
 処理フロー:
 1. stdin読み込み → JSON parse（session_id取得）
 2. session_idが空/null → 空JSON出力して終了
-3. HookState(session_id)を生成
-4. アクティビティ作成nudge → system-reminder注入
-5. 記録リマインダーnudge → system-reminder注入
-6. 何もなし → 空JSON出力
+3. events.jsonl全読み
+4. 未消費のnudgeイベント判定 → system-reminder注入
+5. 何もなし → 空JSON出力
 """
 import json
 import os
@@ -73,26 +72,54 @@ def main() -> None:
             print("{}")
             return
 
-        # 3. HookState生成
+        # 3. events.jsonl全読み
         state = HookState(session_id)
+        events = state.read_events()
 
-        # 4. アクティビティ作成nudge
-        if state.pop_activity_nudge_pending():
-            print(json.dumps(_make_hook_output(_ACTIVITY_NUDGE_MESSAGE), ensure_ascii=False))
+        if not events:
+            print("{}")
             return
 
-        # 5. 記録リマインダーnudge
-        if state.pop_nudge_pending():
-            print(json.dumps(_make_hook_output(_RECORD_NUDGE_MESSAGE), ensure_ascii=False))
-            return
+        # 4. 未消費のnudgeイベント判定
+        # 最新のnudgeイベントを探す（consumed=Trueでないもの）
+        for e in reversed(events):
+            if e.get("e") != "nudge":
+                continue
+            if e.get("consumed"):
+                continue
 
-        # 6. 何もなし
+            # nudgeを消費済みにマーク
+            e["consumed"] = True
+            _rewrite_events(state, events)
+
+            if e.get("type") == "activity":
+                print(json.dumps(_make_hook_output(_ACTIVITY_NUDGE_MESSAGE), ensure_ascii=False))
+                return
+            elif e.get("type") == "record":
+                print(json.dumps(_make_hook_output(_RECORD_NUDGE_MESSAGE), ensure_ascii=False))
+                return
+
+        # 5. 何もなし
         print("{}")
 
     except Exception as e:
         # フェイルオープン: 例外時は空JSON + stderrログ
         print(f"pretooluse_hook.py error: {e}", file=sys.stderr)
         print("{}")
+
+
+def _rewrite_events(state: HookState, events: list[dict]) -> None:
+    """events.jsonlを全書き換えする（nudge消費マーク用）。
+    tempfile + os.replace()でアトミックに書き換える。"""
+    import os
+    import tempfile
+
+    dir_ = state.events_path.parent
+    with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False, suffix=".tmp", encoding="utf-8") as f:
+        tmp = f.name
+        for event in events:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    os.replace(tmp, state.events_path)
 
 
 if __name__ == "__main__":

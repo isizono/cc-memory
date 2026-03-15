@@ -1,7 +1,7 @@
-"""hooks/pretooluse_hook.py のE2Eテスト
+"""hooks/pretooluse_hook.py のE2Eテスト（イベント駆動アーキテクチャ版）
 
 subprocess.runでpretooluse_hook.pyを呼び出し、stdin→stdoutの入出力をテスト。
-テスト用にtmpディレクトリのstateを使う（HOOK_STATE_DIR環境変数）。
+nudge判定はevents.jsonl内のnudgeイベントに基づく。
 """
 import json
 import os
@@ -36,21 +36,41 @@ def _run_hook(input_data: dict, state_dir: Path) -> subprocess.CompletedProcess:
     )
 
 
-class TestNoFlags:
-    """フラグなし → 空JSON"""
+def _write_events(events: list[dict], state_dir: Path) -> None:
+    """events.jsonlをpre-seedする"""
+    state = HookState(_SESSION_ID)
+    state.append_events(events)
 
-    def test_empty_json_when_no_flags(self, state_dir):
+
+class TestNoNudge:
+    """nudgeイベントなし → 空JSON"""
+
+    def test_empty_json_when_no_events(self, state_dir):
+        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
+        assert result.returncode == 0
+        assert json.loads(result.stdout) == {}
+
+    def test_empty_json_when_no_nudge_events(self, state_dir):
+        _write_events(
+            [
+                {"e": "tool", "name": "get_topics", "turn": 1},
+                {"e": "meta", "topic": "test", "turn": 1},
+            ],
+            state_dir,
+        )
         result = _run_hook({"session_id": _SESSION_ID}, state_dir)
         assert result.returncode == 0
         assert json.loads(result.stdout) == {}
 
 
-class TestNudgePending:
-    """nudge_pendingフラグあり → system-reminder注入 + フラグ消去確認"""
+class TestRecordNudge:
+    """record nudgeイベント → system-reminder注入"""
 
     def test_record_nudge_injection(self, state_dir):
-        state = HookState(_SESSION_ID)
-        state.set_nudge_pending()
+        _write_events(
+            [{"e": "nudge", "type": "record", "turn": 2}],
+            state_dir,
+        )
 
         result = _run_hook({"session_id": _SESSION_ID}, state_dir)
         assert result.returncode == 0
@@ -64,22 +84,28 @@ class TestNudgePending:
         assert "Self-check before continuing" in ctx
         assert "add_decision" in ctx
 
-    def test_pending_flag_cleared_after_nudge(self, state_dir):
-        state = HookState(_SESSION_ID)
-        state.set_nudge_pending()
+    def test_nudge_consumed_after_injection(self, state_dir):
+        """nudge消費後は空JSON"""
+        _write_events(
+            [{"e": "nudge", "type": "record", "turn": 2}],
+            state_dir,
+        )
 
         _run_hook({"session_id": _SESSION_ID}, state_dir)
 
-        # フラグが消去されていることを確認
-        assert state.pop_nudge_pending() is False
+        # 2回目は空JSON
+        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
+        assert json.loads(result.stdout) == {}
 
 
-class TestActivityNudgePending:
-    """activity_nudge_pendingフラグあり → system-reminder注入 + フラグ消去確認"""
+class TestActivityNudge:
+    """activity nudgeイベント → system-reminder注入"""
 
     def test_activity_nudge_injection(self, state_dir):
-        state = HookState(_SESSION_ID)
-        state.set_activity_nudge_pending()
+        _write_events(
+            [{"e": "nudge", "type": "activity", "turn": 3}],
+            state_dir,
+        )
 
         result = _run_hook({"session_id": _SESSION_ID}, state_dir)
         assert result.returncode == 0
@@ -90,27 +116,27 @@ class TestActivityNudgePending:
         assert "decision" in ctx
         assert "activity" in ctx.lower()
 
-    def test_activity_nudge_flag_cleared(self, state_dir):
-        state = HookState(_SESSION_ID)
-        state.set_activity_nudge_pending()
-
-        _run_hook({"session_id": _SESSION_ID}, state_dir)
-        assert state.pop_activity_nudge_pending() is False
-
-    def test_activity_nudge_takes_priority_over_record_nudge(self, state_dir):
-        """両方のフラグがある場合、activity_nudgeが先に消費される"""
-        state = HookState(_SESSION_ID)
-        state.set_activity_nudge_pending()
-        state.set_nudge_pending()
+    def test_activity_nudge_takes_priority(self, state_dir):
+        """activity nudgeが最新なら、record nudgeより優先"""
+        _write_events(
+            [
+                {"e": "nudge", "type": "record", "turn": 2},
+                {"e": "nudge", "type": "activity", "turn": 3},
+            ],
+            state_dir,
+        )
 
         result = _run_hook({"session_id": _SESSION_ID}, state_dir)
         output = json.loads(result.stdout)
         ctx = output["hookSpecificOutput"]["additionalContext"]
-        # activity nudgeが注入される
+        # activity nudgeが注入される（最新のnudgeが先に消費される）
         assert "activity" in ctx.lower()
 
         # record nudgeはまだ残っている
-        assert state.pop_nudge_pending() is True
+        result2 = _run_hook({"session_id": _SESSION_ID}, state_dir)
+        output2 = json.loads(result2.stdout)
+        ctx2 = output2["hookSpecificOutput"]["additionalContext"]
+        assert "Self-check before continuing" in ctx2
 
 
 class TestEmptySessionId:
@@ -131,7 +157,6 @@ class TestFailOpen:
     """例外→空JSON（フェイルオープン）"""
 
     def test_invalid_json_input(self, state_dir):
-        """不正なJSON入力でもクラッシュせず空JSONを返す"""
         proc = subprocess.run(
             [sys.executable, "hooks/pretooluse_hook.py"],
             input="not valid json",
@@ -142,5 +167,4 @@ class TestFailOpen:
         )
         assert proc.returncode == 0
         assert json.loads(proc.stdout) == {}
-        # stderrにエラーログが出ている
         assert "error" in proc.stderr.lower()

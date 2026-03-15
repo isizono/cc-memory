@@ -50,108 +50,78 @@ class TestBlockCount:
         assert hook_state.get_block_count() == 0
 
 
-class TestNudgeCounter:
+class TestTranscriptOffset:
     def test_get_returns_zero_when_no_file(self, hook_state):
-        assert hook_state.get_nudge_counter() == 0
-
-    def test_increment(self, hook_state):
-        assert hook_state.increment_nudge_counter() == 1
-        assert hook_state.increment_nudge_counter() == 2
-
-    def test_reset(self, hook_state):
-        hook_state.increment_nudge_counter()
-        hook_state.reset_nudge_counter()
-        assert hook_state.get_nudge_counter() == 0
-
-    def test_corrupted_file_returns_zero(self, hook_state):
-        path = hook_state._path("nudge_counter")
-        path.write_text("xyz")
-        assert hook_state.get_nudge_counter() == 0
-
-
-class TestNudgePending:
-    def test_pop_returns_false_when_no_file(self, hook_state):
-        assert hook_state.pop_nudge_pending() is False
-
-    def test_set_then_pop(self, hook_state):
-        hook_state.set_nudge_pending()
-        assert hook_state.pop_nudge_pending() is True
-
-    def test_pop_after_pop_returns_false(self, hook_state):
-        hook_state.set_nudge_pending()
-        hook_state.pop_nudge_pending()
-        assert hook_state.pop_nudge_pending() is False
-
-
-class TestActivityNudgePending:
-    def test_pop_returns_false_when_no_file(self, hook_state):
-        assert hook_state.pop_activity_nudge_pending() is False
-
-    def test_set_then_pop(self, hook_state):
-        hook_state.set_activity_nudge_pending()
-        assert hook_state.pop_activity_nudge_pending() is True
-
-    def test_pop_after_pop_returns_false(self, hook_state):
-        hook_state.set_activity_nudge_pending()
-        hook_state.pop_activity_nudge_pending()
-        assert hook_state.pop_activity_nudge_pending() is False
-
-
-class TestApprovedTurns:
-    def test_get_returns_zero_when_no_file(self, hook_state):
-        assert hook_state.get_approved_turns() == 0
-
-    def test_increment(self, hook_state):
-        assert hook_state.increment_approved_turns() == 1
-        assert hook_state.increment_approved_turns() == 2
-
-    def test_corrupted_file_returns_zero(self, hook_state):
-        path = hook_state._path("approved_turns")
-        path.write_text("abc")
-        assert hook_state.get_approved_turns() == 0
-
-
-class TestActivityCheckin:
-    def test_has_returns_false_when_no_file(self, hook_state):
-        assert hook_state.has_activity_checkin() is False
-
-    def test_set_then_has(self, hook_state):
-        hook_state.set_activity_checkin()
-        assert hook_state.has_activity_checkin() is True
-
-
-class TestTopicTransitioned:
-    def test_has_returns_false_when_no_file(self, hook_state):
-        assert hook_state.has_topic_transitioned() is False
-
-    def test_set_then_has(self, hook_state):
-        hook_state.set_topic_transitioned()
-        assert hook_state.has_topic_transitioned() is True
-
-
-class TestSkillSkipRemaining:
-    def test_get_returns_zero_when_no_file(self, hook_state):
-        assert hook_state.get_skill_skip_remaining() == 0
+        assert hook_state.get_transcript_offset() == 0
 
     def test_set_then_get(self, hook_state):
-        hook_state.set_skill_skip_remaining(3)
-        assert hook_state.get_skill_skip_remaining() == 3
-
-    def test_set_zero_deletes_file(self, hook_state):
-        hook_state.set_skill_skip_remaining(3)
-        hook_state.set_skill_skip_remaining(0)
-        assert hook_state.get_skill_skip_remaining() == 0
-        assert not hook_state._path("skill_skip").exists()
-
-    def test_set_negative_deletes_file(self, hook_state):
-        hook_state.set_skill_skip_remaining(3)
-        hook_state.set_skill_skip_remaining(-1)
-        assert hook_state.get_skill_skip_remaining() == 0
+        hook_state.set_transcript_offset(12345)
+        assert hook_state.get_transcript_offset() == 12345
 
     def test_corrupted_file_returns_zero(self, hook_state):
-        path = hook_state._path("skill_skip")
+        path = hook_state._path("transcript_offset")
         path.write_text("abc")
-        assert hook_state.get_skill_skip_remaining() == 0
+        assert hook_state.get_transcript_offset() == 0
+
+
+class TestCurrentTurn:
+    def test_get_returns_zero_when_no_file(self, hook_state):
+        assert hook_state.get_current_turn() == 0
+
+    def test_set_then_get(self, hook_state):
+        hook_state.set_current_turn(5)
+        assert hook_state.get_current_turn() == 5
+
+    def test_corrupted_file_returns_zero(self, hook_state):
+        path = hook_state._path("current_turn")
+        path.write_text("abc")
+        assert hook_state.get_current_turn() == 0
+
+
+class TestCheckedInActivity:
+    def test_get_returns_none_when_no_file(self, hook_state):
+        assert hook_state.get_checked_in_activity() is None
+
+    def test_set_then_get(self, hook_state):
+        hook_state.set_checked_in_activity(42)
+        assert hook_state.get_checked_in_activity() == 42
+
+
+class TestEventsJsonl:
+    def test_read_returns_empty_when_no_file(self, hook_state):
+        assert hook_state.read_events() == []
+
+    def test_append_then_read(self, hook_state):
+        events = [
+            {"e": "tool", "name": "add_decision", "turn": 1},
+            {"e": "meta", "topic": "test-topic", "turn": 1},
+        ]
+        hook_state.append_events(events)
+        result = hook_state.read_events()
+        assert len(result) == 2
+        assert result[0]["e"] == "tool"
+        assert result[1]["e"] == "meta"
+
+    def test_append_is_additive(self, hook_state):
+        hook_state.append_events([{"e": "tool", "name": "search", "turn": 1}])
+        hook_state.append_events([{"e": "meta", "topic": "topic-a", "turn": 2}])
+        result = hook_state.read_events()
+        assert len(result) == 2
+
+    def test_empty_list_does_not_create_file(self, hook_state):
+        hook_state.append_events([])
+        assert not hook_state.events_path.exists()
+
+    def test_malformed_json_line_skipped(self, hook_state):
+        with open(hook_state.events_path, "w") as f:
+            f.write('{"e": "tool", "name": "search", "turn": 1}\n')
+            f.write("not json\n")
+            f.write('{"e": "meta", "topic": "t", "turn": 2}\n')
+        result = hook_state.read_events()
+        assert len(result) == 2
+
+    def test_events_path(self, hook_state):
+        assert hook_state.events_path.name == "events_test-session-123.jsonl"
 
 
 class TestClearSession:
@@ -162,13 +132,10 @@ class TestClearSession:
         # 全種類の状態ファイルを作成
         state.set_prev_topic("topic-10")
         state.increment_block_count()
-        state.increment_nudge_counter()
-        state.set_nudge_pending()
-        state.set_activity_nudge_pending()
-        state.increment_approved_turns()
-        state.set_activity_checkin()
-        state.set_skill_skip_remaining(3)
-        state.set_topic_transitioned()
+        state.set_transcript_offset(100)
+        state.set_current_turn(3)
+        state.set_checked_in_activity(42)
+        state.append_events([{"e": "tool", "name": "search", "turn": 1}])
 
         # clear
         HookState.clear_session("sess-abc")
@@ -176,13 +143,19 @@ class TestClearSession:
         # 全ファイルが消えている
         assert state.get_prev_topic() is None
         assert state.get_block_count() == 0
-        assert state.get_nudge_counter() == 0
-        assert state.pop_nudge_pending() is False
-        assert state.pop_activity_nudge_pending() is False
-        assert state.get_approved_turns() == 0
-        assert state.has_activity_checkin() is False
-        assert state.get_skill_skip_remaining() == 0
-        assert state.has_topic_transitioned() is False
+        assert state.get_transcript_offset() == 0
+        assert state.get_current_turn() == 0
+        assert state.get_checked_in_activity() is None
+        assert state.read_events() == []
+
+    def test_clears_events_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
+        state = HookState("sess-events")
+        state.append_events([{"e": "meta", "topic": "t", "turn": 1}])
+        assert state.events_path.exists()
+
+        HookState.clear_session("sess-events")
+        assert not state.events_path.exists()
 
 
 class TestSessionIdSlash:
@@ -204,7 +177,7 @@ class TestMainCli:
         # 状態ファイルを作成
         state = HookState("cli-test-sess")
         state.set_prev_topic("topic-1")
-        state.increment_nudge_counter()
+        state.set_current_turn(3)
 
         # ファイルが存在する
         assert state.get_prev_topic() == "topic-1"
@@ -224,4 +197,4 @@ class TestMainCli:
 
         # CLIで実際にファイルが削除されたことを確認
         assert state.get_prev_topic() is None
-        assert state.get_nudge_counter() == 0
+        assert state.get_current_turn() == 0
