@@ -424,14 +424,14 @@ def search(
     Args:
         keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
-        type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log'。未指定で全種類）
+        type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
         offset: スキップ件数（デフォルト0）。ページネーション用
         keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
 
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
-        snippetは各typeの対応するソースカラムの先頭200文字。
+        snippetは各typeの対応するソースカラムの先頭200文字（materialはtitle優先表示）。
         tagsはエンティティに紐づくタグ文字列のリスト。
     """
     result = search_service.search(keyword, tags, type_filter, limit, offset, keyword_mode)

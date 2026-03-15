@@ -152,6 +152,13 @@ def _migrate_fts5_search_index(conn: sqlite3.Connection) -> None:
         FROM activities
     """)
 
+    # materials
+    conn.execute("""
+        INSERT OR IGNORE INTO search_index (source_type, source_id, title)
+        SELECT 'material', id, title
+        FROM materials
+    """)
+
     # FTS5インデックスにデータを投入（contentless方式ではrebuildが使えない）
     conn.execute("""
         INSERT INTO search_index_fts (rowid, title, body)
@@ -161,6 +168,7 @@ def _migrate_fts5_search_index(conn: sqlite3.Connection) -> None:
               WHEN 'topic' THEN (SELECT description FROM discussion_topics WHERE id = si.source_id)
               WHEN 'decision' THEN (SELECT reason FROM decisions WHERE id = si.source_id)
               WHEN 'activity' THEN (SELECT description FROM activities WHERE id = si.source_id)
+              WHEN 'material' THEN (SELECT content FROM materials WHERE id = si.source_id)
             END,
             ''
           )

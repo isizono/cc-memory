@@ -233,6 +233,13 @@ def backfill_embeddings() -> int:
             LEFT JOIN vec_index vi ON si.id = vi.rowid
             WHERE si.source_type = 'log' AND vi.rowid IS NULL
         """,
+        "material": """
+            SELECT si.id, m.title, m.content
+            FROM search_index si
+            INNER JOIN materials m ON si.source_id = m.id
+            LEFT JOIN vec_index vi ON si.id = vi.rowid
+            WHERE si.source_type = 'material' AND vi.rowid IS NULL
+        """,
     }
 
     conn = get_connection()

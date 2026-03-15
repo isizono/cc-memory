@@ -7,6 +7,7 @@ from src.services.topic_service import add_topic
 from src.services.decision_service import add_decision
 from src.services.activity_service import add_activity
 from src.services.discussion_log_service import add_log as add_log_entry
+from src.services.material_service import add_material
 from src.services import search_service
 import src.services.embedding_service as emb
 
@@ -313,7 +314,7 @@ def test_get_by_ids_single_log(temp_db):
     assert "domain:test" in item["data"]["tags"]
 
 
-def test_get_by_ids_not_found(temp_db):
+def test_get_by_ids_single_not_found(temp_db):
     """get_by_ids: 存在しないIDでNOT_FOUNDエラー"""
     result = search_service.get_by_ids([{"type": "topic", "id": 999999}])
     assert len(result["results"]) == 1
@@ -848,3 +849,159 @@ def test_search_methods_used_empty_results(temp_db):
     assert "error" not in result
     assert "search_methods_used" in result
     assert result["search_methods_used"] == ["fts5"]
+
+
+# ========================================
+# material 検索テスト
+# ========================================
+
+
+def test_search_trigger_sync_material(temp_db):
+    """materialがsearch_indexに同期される"""
+    activity = add_activity(title="素材テスト用アクティビティ", description="テスト", tags=DEFAULT_TAGS, check_in=False)
+    add_material(activity_id=activity["activity_id"], title="トリガー同期素材検索テスト", content="素材の内容テスト")
+    result = search_service.search(keyword="トリガー同期素材検索テスト")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    types = [r["type"] for r in result["results"]]
+    assert "material" in types
+
+
+def test_search_type_filter_material(temp_db):
+    """type_filter=materialでmaterialのみ取得"""
+    activity = add_activity(title="素材フィルタテスト用", description="テスト", tags=DEFAULT_TAGS, check_in=False)
+    add_material(activity_id=activity["activity_id"], title="素材フィルタ対象テスト", content="素材の内容")
+    result = search_service.search(keyword="素材フィルタ対象テスト", type_filter="material")
+    assert "error" not in result
+    for item in result["results"]:
+        assert item["type"] == "material"
+
+
+def test_search_cross_type_includes_material(temp_db):
+    """横断検索にmaterialも含まれる"""
+    topic = add_topic(title="横断素材検索テスト用", description="テスト", tags=DEFAULT_TAGS)
+    activity = add_activity(title="横断素材検索テスト用アクティビティ", description="テスト", tags=DEFAULT_TAGS, check_in=False)
+    add_material(activity_id=activity["activity_id"], title="横断素材検索テスト対象素材", content="素材内容")
+    add_decision(topic_id=topic["topic_id"], decision="横断素材検索テスト決定", reason="テスト")
+    result = search_service.search(keyword="横断素材検索テスト")
+    assert "error" not in result
+    types_found = {r["type"] for r in result["results"]}
+    assert "material" in types_found
+
+
+def test_search_material_by_content(temp_db):
+    """materialのcontentでも検索がヒットする"""
+    activity = add_activity(title="コンテンツ検索テスト用", description="テスト", tags=DEFAULT_TAGS, check_in=False)
+    add_material(activity_id=activity["activity_id"], title="タイトル", content="素材コンテンツ検索対象のユニーク文字列")
+    result = search_service.search(keyword="素材コンテンツ検索対象のユニーク文字列")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    types = [r["type"] for r in result["results"]]
+    assert "material" in types
+
+
+# ========================================
+# material snippet テスト
+# ========================================
+
+
+def test_search_snippet_material_title_priority(temp_db):
+    """materialのsnippetはtitle優先表示（"title: content..." 形式）"""
+    activity = add_activity(title="スニペットテスト用", description="テスト", tags=DEFAULT_TAGS, check_in=False)
+    add_material(activity_id=activity["activity_id"], title="設計書", content="ここに設計の内容が入ります")
+    result = search_service.search(keyword="設計書", type_filter="material")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    item = next(r for r in result["results"] if r["type"] == "material")
+    assert "snippet" in item
+    assert item["snippet"].startswith("設計書: ")
+    assert "ここに設計の内容が入ります" in item["snippet"]
+
+
+def test_search_snippet_material_max_length(temp_db):
+    """materialのsnippetはSNIPPET_MAX_LEN以下に収まる"""
+    activity = add_activity(title="スニペット長テスト用", description="テスト", tags=DEFAULT_TAGS, check_in=False)
+    long_content = "あ" * 300
+    add_material(activity_id=activity["activity_id"], title="長コンテンツテスト素材", content=long_content)
+    result = search_service.search(keyword="長コンテンツテスト素材", type_filter="material")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    item = next(r for r in result["results"] if r["type"] == "material")
+    assert len(item["snippet"]) <= 200
+
+
+# ========================================
+# material タグフィルタテスト
+# ========================================
+
+
+def test_search_material_tag_filter_inherited(temp_db):
+    """materialはactivityのタグを継承してタグフィルタされる"""
+    activity = add_activity(
+        title="タグ継承テスト用アクティビティ",
+        description="テスト",
+        tags=["domain:test", "intent:design"],
+        check_in=False,
+    )
+    add_material(activity_id=activity["activity_id"], title="タグ継承テスト素材対象", content="素材の内容")
+    result = search_service.search(keyword="タグ継承テスト素材対象", tags=["intent:design"])
+    assert "error" not in result
+    types = [r["type"] for r in result["results"]]
+    assert "material" in types
+
+
+def test_search_material_tag_filter_excludes(temp_db):
+    """materialはactivityにないタグでフィルタすると除外される"""
+    activity = add_activity(
+        title="タグ除外テスト用アクティビティ",
+        description="テスト",
+        tags=["domain:test"],
+        check_in=False,
+    )
+    add_material(activity_id=activity["activity_id"], title="タグ除外テスト素材対象", content="素材の内容")
+    result = search_service.search(keyword="タグ除外テスト素材対象", tags=["domain:other"])
+    assert "error" not in result
+    # domain:other は存在しないのでヒットしない
+    assert result["results"] == []
+
+
+def test_search_material_tags_in_results(temp_db):
+    """search結果のmaterialにactivity継承のtagsが含まれること"""
+    activity = add_activity(
+        title="素材タグ表示テスト用",
+        description="テスト",
+        tags=["domain:test", "intent:implement"],
+        check_in=False,
+    )
+    add_material(activity_id=activity["activity_id"], title="素材タグ表示テスト対象", content="素材の内容")
+    result = search_service.search(keyword="素材タグ表示テスト対象")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+    item = next(r for r in result["results"] if r["type"] == "material")
+    assert "tags" in item
+    assert "domain:test" in item["tags"]
+    assert "intent:implement" in item["tags"]
+
+
+# ========================================
+# material get_by_ids テスト
+# ========================================
+
+
+def test_get_by_ids_single_material(temp_db):
+    """get_by_ids: materialの詳細取得（1件）"""
+    activity = add_activity(
+        title="素材詳細テスト用アクティビティ",
+        description="テスト",
+        tags=["domain:test"],
+        check_in=False,
+    )
+    material = add_material(activity_id=activity["activity_id"], title="詳細取得テスト素材", content="素材本文テスト")
+    result = search_service.get_by_ids([{"type": "material", "id": material["material_id"]}])
+    assert len(result["results"]) == 1
+    item = result["results"][0]
+    assert "error" not in item
+    assert item["type"] == "material"
+    assert item["data"]["title"] == "詳細取得テスト素材"
+    assert "tags" in item["data"]
+    assert "domain:test" in item["data"]["tags"]

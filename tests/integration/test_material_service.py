@@ -179,7 +179,7 @@ class TestGetByIdMaterial:
         assert result["data"]["activity_id"] == activity_id
         assert result["data"]["title"] == "ById Test"
         assert "content" not in result["data"]  # カタログ形式: 全文なし
-        assert result["data"]["tags"] == []
+        assert result["data"]["tags"] == ["domain:test"]  # activityのタグを継承
 
     def test_get_by_id_material_not_found(self, temp_db):
         """存在しないmaterial_idでNOT_FOUNDエラーになる"""

@@ -17,8 +17,8 @@ from src.services.tag_service import (
 
 logger = logging.getLogger(__name__)
 
-SEARCHABLE_TYPES = {'topic', 'decision', 'activity', 'log'}
-VALID_TYPES = SEARCHABLE_TYPES | {'material'}
+SEARCHABLE_TYPES = {'topic', 'decision', 'activity', 'log', 'material'}
+VALID_TYPES = SEARCHABLE_TYPES
 
 GET_BY_IDS_MAX = 20
 
@@ -70,6 +70,25 @@ def _attach_snippets(results: list[dict]) -> None:
         by_type.setdefault(item["type"], []).append(item)
 
     for type_name, items in by_type.items():
+        if type_name == "material":
+            # material: title優先snippet ("title: content[:残り]" 形式)
+            ids = [item["id"] for item in items]
+            placeholders = ",".join("?" * len(ids))
+            rows = execute_query(
+                f"SELECT id, title, content FROM materials WHERE id IN ({placeholders})",
+                tuple(ids),
+            )
+            snippet_map: dict[int, str] = {}
+            for r in rows:
+                title = r["title"] or ""
+                content = r["content"] or ""
+                prefix = f"{title}: "
+                remaining = max(0, SNIPPET_MAX_LEN - len(prefix))
+                snippet_map[r["id"]] = prefix + content[:remaining]
+            for item in items:
+                item["snippet"] = snippet_map.get(item["id"], "")
+            continue
+
         if type_name not in SNIPPET_SOURCE:
             for item in items:
                 item["snippet"] = ""
@@ -124,6 +143,27 @@ def _attach_tags(results: list[dict]) -> None:
                 tags_map = get_effective_tags_batch_by_ids(conn, type_name, ids)
                 for item in items:
                     item["tags"] = tags_map.get(item["id"], [])
+            elif type_name == "material":
+                # material: activityのタグを継承
+                ids = [item["id"] for item in items]
+                placeholders = ",".join("?" * len(ids))
+                rows = conn.execute(f"""
+                    SELECT m.id AS material_id, t.namespace, t.name
+                    FROM materials m
+                    JOIN activity_tags at ON at.activity_id = m.activity_id
+                    JOIN tags t ON t.id = at.tag_id
+                    WHERE m.id IN ({placeholders})
+                """, tuple(ids)).fetchall()
+                # material_id → tags のマップ構築
+                mat_tag_map: dict[int, list[str]] = {}
+                for r in rows:
+                    mid = r["material_id"]
+                    ns = r["namespace"]
+                    name = r["name"]
+                    tag_str = f"{ns}:{name}" if ns else name
+                    mat_tag_map.setdefault(mid, []).append(tag_str)
+                for item in items:
+                    item["tags"] = mat_tag_map.get(item["id"], [])
             else:
                 for item in items:
                     item["tags"] = []
@@ -198,6 +238,14 @@ def _build_tag_filter_cte(tag_ids: list[int]) -> tuple[str, list]:
             SELECT lt.log_id, lt.tag_id
             FROM log_tags lt WHERE lt.tag_id IN ({placeholders})
         ) GROUP BY log_id HAVING COUNT(DISTINCT tag_id) = ?
+
+        UNION ALL
+        -- material (activity_tags経由で継承)
+        SELECT 'material', material_id FROM (
+            SELECT m.id AS material_id, at.tag_id
+            FROM materials m JOIN activity_tags at ON at.activity_id = m.activity_id
+            WHERE at.tag_id IN ({placeholders})
+        ) GROUP BY material_id HAVING COUNT(DISTINCT tag_id) = ?
     )
     """
 
@@ -215,6 +263,9 @@ def _build_tag_filter_cte(tag_ids: list[int]) -> tuple[str, list]:
     params.append(n_tags)
     # log (2つのIN句)
     params.extend(tag_ids)
+    params.extend(tag_ids)
+    params.append(n_tags)
+    # material (1つのIN句)
     params.extend(tag_ids)
     params.append(n_tags)
 
@@ -531,14 +582,14 @@ def search(
     Args:
         keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
-        type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log'。未指定で全種類）
+        type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
         offset: スキップ件数（デフォルト0）。ページネーション用
         keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
 
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
-        snippetは各typeの対応するソースカラムの先頭200文字。
+        snippetは各typeの対応するソースカラムの先頭200文字（materialはtitle優先表示）。
         tagsはエンティティに紐づくタグ文字列のリスト。
     """
     # keyword_modeバリデーション
@@ -756,7 +807,7 @@ def get_by_id(type: str, id: int, conn=None) -> dict:
                 }
             }
 
-        # タグ取得: topic/activityはget_entity_tags、decision/logはget_effective_tags、materialはタグなし
+        # タグ取得: topic/activityはget_entity_tags、decision/logはget_effective_tags、materialはactivity_tags継承
         if type == 'topic':
             tags = get_entity_tags(conn, "topic_tags", "topic_id", id)
         elif type == 'activity':
@@ -766,7 +817,9 @@ def get_by_id(type: str, id: int, conn=None) -> dict:
         elif type == 'log':
             tags = get_effective_tags(conn, "log", id)
         elif type == 'material':
-            tags = []
+            # material: activityのタグを継承 (activity_idはNOT NULL制約あり)
+            activity_id = row_to_dict(row).get("activity_id")
+            tags = get_entity_tags(conn, "activity_tags", "activity_id", activity_id)
         else:
             tags = []
 

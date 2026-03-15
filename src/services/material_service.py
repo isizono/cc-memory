@@ -3,6 +3,7 @@ import logging
 import sqlite3
 
 from src.db import get_connection, row_to_dict
+from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,9 @@ def add_material(activity_id: int, title: str, content: str) -> dict:
             }
 
         conn.commit()
+
+        generate_and_store_embedding("material", material_id, build_embedding_text(title, content))
+
         return _material_to_response(row_to_dict(row))
 
     except sqlite3.IntegrityError as e:
