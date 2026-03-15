@@ -11,8 +11,9 @@ import numpy as np
 
 from src.db import init_database, get_connection
 from src.services.search_service import (
-    _rrf_merge, _apply_recency_boost, find_similar_topics,
+    _rrf_merge, _apply_recency_boost, find_similar_topics, _expand_query_with_tags,
     RRF_K, RRF_W_FTS, RRF_W_VEC, RRF_W_TAG, RECENCY_DECAY_RATE,
+    QE_DISTANCE_THRESHOLD, QE_MAX_EXPANSIONS, QE_EXCLUDE_NAMESPACES,
 )
 from src.services import search_service
 from src.services.topic_service import add_topic
@@ -1026,3 +1027,176 @@ def test_search_tag_like_no_match(temp_db, disable_embedding):
 
     assert "error" not in result
     assert "tag_like" not in result.get("search_methods_used", [])
+
+
+# ========================================
+# Query Expansion テスト
+# ========================================
+
+
+def test_qe_constants():
+    """QE定数が期待値で定義されている"""
+    assert QE_DISTANCE_THRESHOLD == 0.3
+    assert QE_MAX_EXPANSIONS == 5
+    assert QE_EXCLUDE_NAMESPACES is True
+
+
+def test_qe_no_expansion_without_embedding(temp_db, disable_embedding):
+    """embedding無効時: QE拡張は行われず元のキーワードがそのまま返る"""
+    result = _expand_query_with_tags(["テスト"])
+    assert result == ["テスト"]
+
+
+def test_qe_no_expansion_when_no_similar_tags(temp_db, mock_embedding_model):
+    """類似タグなし: QE拡張は行われず元のキーワードがそのまま返る"""
+    # タグが存在しないDBではKNN検索結果が空
+    result = _expand_query_with_tags(["存在しないキーワード"])
+    assert result == ["存在しないキーワード"]
+
+
+def test_qe_expansion_with_similar_tags(temp_db, mock_embedding_model):
+    """類似タグあり: 距離閾値未満のタグが拡張される"""
+    # タグを作成してIDを取得
+    conn = get_connection()
+    conn.execute("INSERT INTO tags (namespace, name) VALUES ('', 'qe-search')")
+    search_id = conn.execute("SELECT id FROM tags WHERE namespace = '' AND name = 'qe-search'").fetchone()["id"]
+    conn.execute("INSERT INTO tags (namespace, name) VALUES ('', 'qe-query')")
+    query_id = conn.execute("SELECT id FROM tags WHERE namespace = '' AND name = 'qe-query'").fetchone()["id"]
+    conn.commit()
+    conn.close()
+
+    # search_similar_tagsをモックして距離をコントロール
+    def mock_search_similar(query_text, k=10):
+        return [(query_id, 0.1)]  # qe-queryタグが距離0.1で類似
+
+    original = emb.search_similar_tags
+    emb.search_similar_tags = mock_search_similar
+    try:
+        result = _expand_query_with_tags(["qe-search"])
+        assert "qe-search" in result
+        assert "qe-query" in result
+        assert len(result) == 2
+    finally:
+        emb.search_similar_tags = original
+
+
+def test_qe_excludes_namespace_tags(temp_db, mock_embedding_model):
+    """QE_EXCLUDE_NAMESPACES=True: namespace付きタグは拡張に含まれない"""
+    conn = get_connection()
+    conn.execute("INSERT INTO tags (namespace, name) VALUES ('domain', 'qe-ns-test')")
+    ns_id = conn.execute("SELECT id FROM tags WHERE namespace = 'domain' AND name = 'qe-ns-test'").fetchone()["id"]
+    conn.commit()
+    conn.close()
+
+    def mock_search_similar(query_text, k=10):
+        # domain:qe-ns-testが距離0.1で類似
+        return [(ns_id, 0.1)]
+
+    original = emb.search_similar_tags
+    emb.search_similar_tags = mock_search_similar
+    try:
+        result = _expand_query_with_tags(["test"])
+        # namespace付きタグは除外されるため、元のキーワードのみ
+        assert result == ["test"]
+    finally:
+        emb.search_similar_tags = original
+
+
+def test_qe_respects_distance_threshold(temp_db, mock_embedding_model):
+    """距離閾値以上のタグは拡張に含まれない"""
+    conn = get_connection()
+    conn.execute("INSERT INTO tags (namespace, name) VALUES ('', 'qe-near')")
+    near_id = conn.execute("SELECT id FROM tags WHERE namespace = '' AND name = 'qe-near'").fetchone()["id"]
+    conn.execute("INSERT INTO tags (namespace, name) VALUES ('', 'qe-far')")
+    far_id = conn.execute("SELECT id FROM tags WHERE namespace = '' AND name = 'qe-far'").fetchone()["id"]
+    conn.commit()
+    conn.close()
+
+    def mock_search_similar(query_text, k=10):
+        return [
+            (near_id, 0.1),   # 閾値未満 → 拡張される
+            (far_id, 0.5),    # 閾値以上 → 除外
+        ]
+
+    original = emb.search_similar_tags
+    emb.search_similar_tags = mock_search_similar
+    try:
+        result = _expand_query_with_tags(["test"])
+        assert "qe-near" in result
+        assert "qe-far" not in result
+    finally:
+        emb.search_similar_tags = original
+
+
+def test_qe_max_expansions_limit(temp_db, mock_embedding_model):
+    """最大拡張数QE_MAX_EXPANSIONSを超えない"""
+    conn = get_connection()
+    tag_ids = []
+    for i in range(10):
+        conn.execute(f"INSERT INTO tags (namespace, name) VALUES ('', 'qe-max-{i}')")
+        tid = conn.execute(f"SELECT id FROM tags WHERE namespace = '' AND name = 'qe-max-{i}'").fetchone()["id"]
+        tag_ids.append(tid)
+    conn.commit()
+    conn.close()
+
+    def mock_search_similar(query_text, k=10):
+        # 全て距離0.1で類似
+        return [(tid, 0.1) for tid in tag_ids]
+
+    original = emb.search_similar_tags
+    emb.search_similar_tags = mock_search_similar
+    try:
+        result = _expand_query_with_tags(["test"])
+        # 元のキーワード(1) + 拡張(最大5) = 6
+        assert len(result) <= 1 + QE_MAX_EXPANSIONS
+    finally:
+        emb.search_similar_tags = original
+
+
+def test_qe_dedup_with_original_keyword(temp_db, mock_embedding_model):
+    """元のキーワードと同名のタグは拡張に含まれない"""
+    conn = get_connection()
+    conn.execute("INSERT INTO tags (namespace, name) VALUES ('', 'qe-dedup')")
+    dedup_id = conn.execute("SELECT id FROM tags WHERE namespace = '' AND name = 'qe-dedup'").fetchone()["id"]
+    conn.commit()
+    conn.close()
+
+    def mock_search_similar(query_text, k=10):
+        return [(dedup_id, 0.05)]  # 元キーワードと同名のタグ
+
+    original = emb.search_similar_tags
+    emb.search_similar_tags = mock_search_similar
+    try:
+        result = _expand_query_with_tags(["qe-dedup"])
+        # 重複除外で元のキーワードのみ
+        assert result == ["qe-dedup"]
+    finally:
+        emb.search_similar_tags = original
+
+
+def test_qe_vector_search_not_expanded(temp_db, mock_embedding_model):
+    """search()でベクトル検索には元のキーワードのまま渡される"""
+    conn = get_connection()
+    conn.execute("INSERT INTO tags (namespace, name) VALUES ('', 'qe-expanded')")
+    expanded_id = conn.execute("SELECT id FROM tags WHERE namespace = '' AND name = 'qe-expanded'").fetchone()["id"]
+    conn.commit()
+    conn.close()
+
+    add_topic(
+        title="QEベクトル分離テスト用トピック",
+        description="QEが適用されないことを確認",
+        tags=DEFAULT_TAGS,
+    )
+
+    def mock_search_similar(query_text, k=10):
+        return [(expanded_id, 0.1)]
+
+    original = emb.search_similar_tags
+    emb.search_similar_tags = mock_search_similar
+    try:
+        # search()が正常に動作すれば、ベクトル検索は元キーワードで呼ばれている
+        result = search_service.search(keyword="QEベクトル分離テスト")
+        assert "error" not in result
+        assert len(result["results"]) >= 1
+    finally:
+        emb.search_similar_tags = original

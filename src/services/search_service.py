@@ -54,12 +54,89 @@ RRF_W_TAG = 0.5
 # 半年(182日)で約0.80倍、1年(365日)で約0.66倍
 RECENCY_DECAY_RATE = 0.0014
 
+# Query Expansion パラメータ
+QE_DISTANCE_THRESHOLD = 0.3   # コサイン距離。これ未満のタグを拡張候補とする
+QE_MAX_EXPANSIONS = 5          # 全キーワード合計での最大拡張タグ数
+QE_EXCLUDE_NAMESPACES = True   # namespace付きタグを除外するか
+
 
 def _escape_fts5_query(keyword: str) -> str:
     """FTS5クエリ用のエスケープ処理。ダブルクォートで囲む。"""
     # ダブルクォート内のダブルクォートは2つ重ねてエスケープ
     escaped = keyword.replace('"', '""')
     return f'"{escaped}"'
+
+
+def _expand_query_with_tags(keywords: list[str]) -> list[str]:
+    """キーワードをtag_vec KNN検索で拡張する。
+
+    各キーワードでtag_vecをKNN検索し、距離がQE_DISTANCE_THRESHOLD未満の
+    素タグ（QE_EXCLUDE_NAMESPACES=True時はnamespace付きを除外）を
+    FTSクエリに追加する拡張キーワードリストを返す。
+
+    拡張されたキーワードは元のキーワードの末尾に追加される。
+    元のキーワードと重複するタグは除外される。
+
+    Args:
+        keywords: 元のキーワードリスト
+
+    Returns:
+        拡張後のキーワードリスト（元のキーワード + 拡張タグ名）
+    """
+    expanded = list(keywords)
+    existing = {kw.lower() for kw in keywords}
+    expansion_count = 0
+
+    try:
+        # 全キーワードの類似タグ候補を収集
+        candidate_tag_ids: list[tuple[int, float]] = []
+        for kw in keywords:
+            similar = embedding_service.search_similar_tags(kw, k=10)
+            for tag_id, distance in similar:
+                if distance < QE_DISTANCE_THRESHOLD:
+                    candidate_tag_ids.append((tag_id, distance))
+
+        if not candidate_tag_ids:
+            return expanded
+
+        # 候補タグのIDを一括で取得
+        unique_ids = list({tid for tid, _ in candidate_tag_ids})
+        placeholders = ",".join("?" * len(unique_ids))
+        rows = execute_query(
+            f"SELECT id, namespace, name FROM tags WHERE id IN ({placeholders})",
+            tuple(unique_ids),
+        )
+        tag_info_map: dict[int, tuple[str, str]] = {}
+        for row in rows:
+            tag_info_map[row["id"]] = (row["namespace"], row["name"])
+
+        # 距離順でソートして拡張タグを選定
+        candidate_tag_ids.sort(key=lambda x: x[1])
+        for tag_id, _distance in candidate_tag_ids:
+            if expansion_count >= QE_MAX_EXPANSIONS:
+                break
+
+            info = tag_info_map.get(tag_id)
+            if not info:
+                continue
+
+            namespace, name = info
+
+            # namespace付きタグを除外
+            if QE_EXCLUDE_NAMESPACES and namespace:
+                continue
+
+            # 元のキーワードとの重複チェック
+            if name.lower() in existing:
+                continue
+
+            expanded.append(name)
+            existing.add(name.lower())
+            expansion_count += 1
+    except Exception:
+        logger.warning("Query expansion failed, using original keywords", exc_info=True)
+
+    return expanded
 
 
 def _attach_snippets(results: list[dict]) -> None:
@@ -283,8 +360,19 @@ def _fts_search(
     type_filter: Optional[str],
     limit: int,
     keyword_mode: str = "and",
+    original_keyword_count: Optional[int] = None,
 ) -> list[dict]:
-    """FTS5検索。結果はBM25ランク順のリスト。"""
+    """FTS5検索。結果はBM25ランク順のリスト。
+
+    Args:
+        keywords: 検索キーワードリスト（QE拡張分を含む場合がある）
+        tag_ids: タグフィルタ用のtag_idリスト
+        type_filter: 検索対象の絞り込み
+        limit: 取得件数上限
+        keyword_mode: キーワード結合モード（"and" / "or"）
+        original_keyword_count: 元のキーワード数。指定時、先頭N個をAND結合し
+            残りをOR追加する（Query Expansion用）。未指定時は従来通り。
+    """
     # OR時: 3文字以上のキーワードだけでFTS5クエリを組む（2文字はフィルタ除外）
     if keyword_mode == "or":
         fts_keywords = [kw for kw in keywords if len(kw) >= 3]
@@ -293,8 +381,17 @@ def _fts_search(
         escaped_parts = [_escape_fts5_query(kw) for kw in fts_keywords]
         escaped_keyword = " OR ".join(escaped_parts)
     else:
-        escaped_parts = [_escape_fts5_query(kw) for kw in keywords]
-        escaped_keyword = " AND ".join(escaped_parts)
+        if original_keyword_count is not None and original_keyword_count < len(keywords):
+            # QE拡張あり: 元キーワードをAND結合し、拡張タグをOR追加
+            original_parts = [_escape_fts5_query(kw) for kw in keywords[:original_keyword_count]]
+            expanded_parts = [_escape_fts5_query(kw) for kw in keywords[original_keyword_count:]]
+            original_query = " AND ".join(original_parts)
+            # (元kw1 AND 元kw2) OR 拡張1 OR 拡張2
+            all_parts = [f"({original_query})"] + expanded_parts
+            escaped_keyword = " OR ".join(all_parts)
+        else:
+            escaped_parts = [_escape_fts5_query(kw) for kw in keywords]
+            escaped_keyword = " AND ".join(escaped_parts)
 
     if tag_ids:
         cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
@@ -876,21 +973,35 @@ def search(
         # 使用された検索手法を追跡
         methods_used: list[str] = []
 
+        # Query Expansion: tag_vec KNN検索でFTSクエリを拡張
+        # ベクトル検索には元のキーワードをそのまま渡す
+        fts_keywords = _expand_query_with_tags(keywords)
+        if len(fts_keywords) > len(keywords):
+            logger.info(
+                "Query expanded: %s -> %s",
+                keywords,
+                fts_keywords[len(keywords):],
+            )
+
         # FTS5検索判定
         min_len = min(len(kw) for kw in keywords)
         fts_results = []
+        # QE拡張がある場合、元のキーワード数を記録
+        original_kw_count = len(keywords) if len(fts_keywords) > len(keywords) else None
+
         if keyword_mode == "or":
             # OR時: 3文字以上のキーワードが1つでもあればFTSを使う
-            if any(len(kw) >= 3 for kw in keywords):
-                fts_results = _fts_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+            if any(len(kw) >= 3 for kw in fts_keywords):
+                fts_results = _fts_search(fts_keywords, tag_ids, type_filter, fetch_limit, keyword_mode, None)
                 methods_used.append("fts5")
         else:
             # AND時（現行通り）: 全キーワードが3文字以上の場合のみ
+            # QE拡張分はOR結合で追加されるため、元のキーワードの文字数チェックを使用
             if min_len >= 3:
-                fts_results = _fts_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+                fts_results = _fts_search(fts_keywords, tag_ids, type_filter, fetch_limit, keyword_mode, original_kw_count)
                 methods_used.append("fts5")
 
-        # ベクトル検索
+        # ベクトル検索（元のキーワードのまま、拡張なし）
         vec_results = _vector_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
         if vec_results is not None:
             methods_used.append("vector")
