@@ -7,7 +7,7 @@ from src.services.topic_service import add_topic
 from src.services.decision_service import add_decision
 from src.services.activity_service import add_activity
 from src.services.discussion_log_service import add_log
-from src.services.tag_service import search_tags
+from src.services.tag_service import search_tags, _SEARCH_TAGS_RRF_K
 import src.services.embedding_service as emb
 
 
@@ -211,3 +211,132 @@ def test_search_tags_partial_match(temp_db):
     assert "error" not in result
     tag_names = [t["name"] for t in result["tags"]]
     assert "cc-memory" in tag_names
+
+
+# ========================================
+# RRF統合テスト（search_similar_tags monkeypatch）
+# ========================================
+
+
+def _get_tag_id(name, namespace=""):
+    """ヘルパー: タグ名からIDを取得"""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM tags WHERE namespace = ? AND name = ?",
+            (namespace, name),
+        ).fetchone()
+        return row["id"] if row else None
+    finally:
+        conn.close()
+
+
+class TestSearchTagsRRF:
+    """search_similar_tagsをmonkeypatchしてRRF統合ロジックをテスト"""
+
+    def test_rrf_both_channels_boost_score(self, temp_db, monkeypatch):
+        """LIKE・ベクトル両方にヒットするタグはスコアが高くなる"""
+        add_topic(title="T1", description="D", tags=["domain:test"])
+        add_topic(title="T2", description="D", tags=["domain:other"])
+
+        test_id = _get_tag_id("test", "domain")
+        other_id = _get_tag_id("other", "domain")
+
+        # search_similar_tags: testをrank1, otherをrank2で返す
+        def mock_search(query, k=10):
+            return [(test_id, 0.1), (other_id, 0.2)]
+
+        monkeypatch.setattr(emb, "search_similar_tags", mock_search)
+
+        result = search_tags("test")
+        assert "error" not in result
+        assert len(result["tags"]) >= 1
+
+        # "test" はLIKEでもvecでもヒット → 両チャネルのRRFスコア合算
+        # "other" はvecのみ → vecだけのRRFスコア
+        tag_map = {t["name"]: t["score"] for t in result["tags"]}
+        assert "test" in tag_map
+        if "other" in tag_map:
+            assert tag_map["test"] > tag_map["other"]
+
+    def test_rrf_vec_only_tag_appears(self, temp_db, monkeypatch):
+        """LIKEに引っかからないがベクトルで近いタグも結果に含まれる"""
+        add_topic(title="T1", description="D", tags=["domain:test"])
+        add_topic(title="T2", description="D", tags=["domain:unrelated"])
+
+        unrelated_id = _get_tag_id("unrelated", "domain")
+
+        # search_similar_tags: LIKEに引っかからないタグをvecで返す
+        def mock_search(query, k=10):
+            return [(unrelated_id, 0.05)]
+
+        monkeypatch.setattr(emb, "search_similar_tags", mock_search)
+
+        result = search_tags("test")
+        assert "error" not in result
+        tag_names = [t["name"] for t in result["tags"]]
+        # "unrelated" はLIKE "test" にマッチしないが、vecチャネル経由で登場する
+        assert "unrelated" in tag_names
+
+    def test_rrf_namespace_filter_on_vec_results(self, temp_db, monkeypatch):
+        """namespaceフィルタがベクトル検索結果にも適用される"""
+        add_topic(title="T1", description="D", tags=["domain:test", "intent:design"])
+
+        domain_test_id = _get_tag_id("test", "domain")
+        intent_design_id = _get_tag_id("design", "intent")
+
+        # search_similar_tags: 両方返す
+        def mock_search(query, k=10):
+            return [(domain_test_id, 0.1), (intent_design_id, 0.2)]
+
+        monkeypatch.setattr(emb, "search_similar_tags", mock_search)
+
+        # namespace="domain" で絞り込み
+        result = search_tags("test", namespace="domain")
+        assert "error" not in result
+        for t in result["tags"]:
+            assert t["namespace"] == "domain"
+
+    def test_rrf_score_formula(self, temp_db, monkeypatch):
+        """RRFスコアが 1/(k+rank) の合算であること"""
+        add_topic(title="T1", description="D", tags=["domain:alpha"])
+
+        alpha_id = _get_tag_id("alpha", "domain")
+
+        # search_similar_tags: alphaをrank1で返す
+        def mock_search(query, k=10):
+            return [(alpha_id, 0.1)]
+
+        monkeypatch.setattr(emb, "search_similar_tags", mock_search)
+
+        result = search_tags("alpha")
+        assert "error" not in result
+        assert len(result["tags"]) == 1
+
+        tag = result["tags"][0]
+        # LIKE rank=1, vec rank=1
+        # score = W_LIKE/(K+1) + W_VEC/(K+1) = 2/(60+1)
+        expected = round(2.0 / (_SEARCH_TAGS_RRF_K + 1), 4)
+        assert tag["score"] == expected
+
+    def test_rrf_limit_applied_after_merge(self, temp_db, monkeypatch):
+        """RRF統合後にlimit切り詰めが行われる"""
+        # 10個のタグを作成
+        for i in range(10):
+            add_topic(title=f"T{i}", description="D", tags=[f"item{i}"])
+
+        # search_similar_tagsで全タグをvecチャネルから返す
+        tag_ids = []
+        for i in range(10):
+            tid = _get_tag_id(f"item{i}", "")
+            if tid:
+                tag_ids.append(tid)
+
+        def mock_search(query, k=10):
+            return [(tid, 0.1 * (idx + 1)) for idx, tid in enumerate(tag_ids)]
+
+        monkeypatch.setattr(emb, "search_similar_tags", mock_search)
+
+        result = search_tags("item", limit=3)
+        assert "error" not in result
+        assert len(result["tags"]) <= 3

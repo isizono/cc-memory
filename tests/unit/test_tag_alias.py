@@ -3,7 +3,6 @@
 - マイグレーション: canonical_idカラムの存在確認
 - ensure_tag_ids / resolve_tag_ids / _resolve_tag_ids_readonly のcanonical解決
 - update_tag: canonical設定/解除/上書き/紐付け付け替え/バリデーション
-- list_tags: canonicalフィールド表示
 - E2Eフロー: タグ付きtopic作成 → エイリアス設定 → 検索でcanonical側にヒット
 """
 import os
@@ -14,7 +13,6 @@ from src.services.tag_service import (
     ensure_tag_ids,
     resolve_tag_ids,
     update_tag,
-    list_tags,
     link_tags,
 )
 from src.services.search_service import _resolve_tag_ids_readonly
@@ -387,36 +385,6 @@ class TestUpdateTagValidation:
         result = update_tag("nonexistent", canonical="domain:BE")
         assert "error" in result
         assert result["error"]["code"] == "NOT_FOUND"
-
-
-# ========================================
-# list_tags — canonical テスト
-# ========================================
-
-
-class TestListTagsCanonical:
-    """list_tagsのcanonicalフィールドテスト"""
-
-    def test_alias_has_canonical(self, temp_db):
-        """エイリアスタグにcanonicalフィールドが含まれること"""
-        add_topic(title="T", description="D", tags=["domain:BE", "prm"])
-        update_tag("prm", canonical="domain:BE")
-
-        result = list_tags()
-        assert "error" not in result
-
-        prm_tag = next(t for t in result["tags"] if t["tag"] == "prm")
-        assert prm_tag["canonical"] == "domain:BE"
-
-    def test_regular_tag_has_null_canonical(self, temp_db):
-        """正規タグのcanonicalがnullであること"""
-        add_topic(title="T", description="D", tags=["domain:BE"])
-
-        result = list_tags()
-        assert "error" not in result
-
-        be_tag = next(t for t in result["tags"] if t["tag"] == "domain:BE")
-        assert be_tag["canonical"] is None
 
 
 # ========================================

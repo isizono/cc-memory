@@ -513,66 +513,6 @@ def get_effective_tags(conn: sqlite3.Connection, entity_type: str, entity_id: in
     return format_tags(rows)
 
 
-def list_tags(namespace: Optional[str] = None) -> dict:
-    """タグ一覧をusage_count付きで返す。
-
-    Args:
-        namespace: namespaceでフィルタ（未指定で全タグ）。
-                   namespace=""で素タグ（namespaceなし）のみフィルタ。
-
-    Returns:
-        タグ一覧（id, namespace, name, tag, usage_count, notes）をusage_count降順で返す
-    """
-    try:
-        rows = execute_query(
-            """
-            SELECT t.id, t.namespace, t.name, t.notes, t.canonical_id,
-              ct.namespace AS canonical_namespace, ct.name AS canonical_name,
-              (SELECT COUNT(*) FROM topic_tags WHERE tag_id = t.id) +
-              (SELECT COUNT(*) FROM activity_tags WHERE tag_id = t.id) +
-              (SELECT COUNT(*) FROM decision_tags WHERE tag_id = t.id) +
-              (SELECT COUNT(*) FROM log_tags WHERE tag_id = t.id) AS usage_count
-            FROM tags t
-            LEFT JOIN tags AS ct ON t.canonical_id = ct.id
-            WHERE (? IS NULL OR t.namespace = ?)
-            ORDER BY usage_count DESC, t.name ASC
-            """,
-            (namespace, namespace),
-        )
-        tags = []
-        for row in rows:
-            r = row_to_dict(row)
-            ns = r["namespace"]
-            name = r["name"]
-            tag_str = f"{ns}:{name}" if ns else name
-
-            # canonical文字列の構築
-            canonical = None
-            if r["canonical_id"] is not None:
-                c_ns = r["canonical_namespace"]
-                c_name = r["canonical_name"]
-                canonical = f"{c_ns}:{c_name}" if c_ns else c_name
-
-            tags.append({
-                "tag": tag_str,
-                "id": r["id"],
-                "namespace": ns,
-                "name": name,
-                "usage_count": r["usage_count"],
-                "notes": r["notes"],
-                "canonical": canonical,
-            })
-        return {"tags": tags}
-
-    except Exception as e:
-        return {
-            "error": {
-                "code": "DATABASE_ERROR",
-                "message": str(e),
-            }
-        }
-
-
 # search_tags RRFパラメータ
 _SEARCH_TAGS_RRF_K = 60
 _SEARCH_TAGS_W_LIKE = 1.0
@@ -626,8 +566,9 @@ def search_tags(
                     LEFT JOIN tags AS ct ON t.canonical_id = ct.id
                     WHERE t.name LIKE ? AND t.namespace = ?
                     ORDER BY usage_count DESC, t.name ASC
+                    LIMIT ?
                     """,
-                    (like_pattern, namespace),
+                    (like_pattern, namespace, limit * 5),
                 ).fetchall()
             else:
                 like_rows = conn.execute(
@@ -642,8 +583,9 @@ def search_tags(
                     LEFT JOIN tags AS ct ON t.canonical_id = ct.id
                     WHERE t.name LIKE ?
                     ORDER BY usage_count DESC, t.name ASC
+                    LIMIT ?
                     """,
-                    (like_pattern,),
+                    (like_pattern, limit * 5),
                 ).fetchall()
 
             # LIKE結果をdict化（id -> row_dict + rank）
@@ -656,7 +598,7 @@ def search_tags(
                 like_ranks[tag_id] = rank
 
             # --- チャネル2: ベクトルKNN検索 ---
-            vec_results = search_similar_tags(query, k=limit)
+            vec_results = search_similar_tags(query, k=limit * 3)
             # namespace後フィルタ
             vec_ranks: dict[int, int] = {}
             rank_counter = 1

@@ -1,7 +1,6 @@
 """タグ notes 機能のユニットテスト
 
 - update_tag の正常系・エラー系
-- list_tags の notes 返却
 - 遭遇時注入の正常系・重複防止
 - get_by_ids での遭遇時注入
 """
@@ -11,7 +10,6 @@ import pytest
 from src.db import init_database, get_connection
 from src.services.tag_service import (
     update_tag,
-    list_tags,
     ensure_tag_ids,
     collect_tag_notes_for_injection,
     _injected_tags,
@@ -92,35 +90,6 @@ class TestUpdateTag:
         update_tag("domain:test", "初回 notes")
         result = update_tag("domain:test", "更新後 notes")
         assert result["notes"] == "更新後 notes"
-
-
-# ========================================
-# list_tags + notes テスト
-# ========================================
-
-
-class TestListTagsWithNotes:
-    """list_tags の notes 返却テスト"""
-
-    def test_notes_included_in_response(self, temp_db):
-        """list_tags の各タグに notes フィールドが含まれる"""
-        add_topic(title="Test", description="Desc", tags=["domain:test"])
-        update_tag("domain:test", "テスト用 notes")
-
-        result = list_tags()
-        assert "error" not in result
-        test_tag = next(t for t in result["tags"] if t["tag"] == "domain:test")
-        assert "notes" in test_tag
-        assert test_tag["notes"] == "テスト用 notes"
-
-    def test_notes_null_when_not_set(self, temp_db):
-        """notes 未設定タグは None"""
-        add_topic(title="Test", description="Desc", tags=["domain:test"])
-
-        result = list_tags()
-        assert "error" not in result
-        test_tag = next(t for t in result["tags"] if t["tag"] == "domain:test")
-        assert test_tag["notes"] is None
 
 
 # ========================================
