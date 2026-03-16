@@ -531,7 +531,8 @@ def list_tags(namespace: Optional[str] = None) -> dict:
               (SELECT COUNT(*) FROM topic_tags WHERE tag_id = t.id) +
               (SELECT COUNT(*) FROM activity_tags WHERE tag_id = t.id) +
               (SELECT COUNT(*) FROM decision_tags WHERE tag_id = t.id) +
-              (SELECT COUNT(*) FROM log_tags WHERE tag_id = t.id) AS usage_count
+              (SELECT COUNT(*) FROM log_tags WHERE tag_id = t.id) +
+              (SELECT COUNT(*) FROM material_tags WHERE tag_id = t.id) AS usage_count
             FROM tags t
             LEFT JOIN tags AS ct ON t.canonical_id = ct.id
             WHERE (? IS NULL OR t.namespace = ?)
@@ -578,6 +579,7 @@ JUNCTION_TABLES = [
     ("activity_tags", "activity_id"),
     ("decision_tags", "decision_id"),
     ("log_tags", "log_id"),
+    ("material_tags", "material_id"),
 ]
 
 
@@ -786,6 +788,7 @@ def update_tag(
             "activity_id": "activity",
             "decision_id": "decision",
             "log_id": "log",
+            "material_id": "material",
         }
         affected_entities: list[tuple[str, int]] = []
         for table, entity_col in JUNCTION_TABLES:
@@ -823,14 +826,6 @@ def update_tag(
         from src.services.embedding_service import regenerate_embedding
         for etype, eid in affected_entities:
             regenerate_embedding(etype, eid)
-            # activityに紐づくmaterialのembeddingも再生成
-            if etype == "activity":
-                mat_rows = conn.execute(
-                    "SELECT id FROM materials WHERE activity_id = ?",
-                    (eid,),
-                ).fetchall()
-                for mat_row in mat_rows:
-                    regenerate_embedding("material", mat_row["id"])
 
         c_tag_str = f"{c_namespace}:{c_name}" if c_namespace else c_name
         return {"tag": tag_str, "canonical": c_tag_str, "updated": True}

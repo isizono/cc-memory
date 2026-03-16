@@ -4,40 +4,47 @@ import sqlite3
 
 from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
-from src.services.tag_service import get_entity_tags
+from src.services.relation_service import _add_relation_with_conn
+from src.services.tag_service import (
+    validate_and_parse_tags,
+    ensure_tag_ids,
+    link_tags,
+    get_entity_tags,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _material_to_response(material: dict) -> dict:
+def _material_to_response(material: dict, tags: list[str]) -> dict:
     """資材データをAPIレスポンス形式に変換（全文含む）"""
     return {
         "material_id": material["id"],
-        "activity_id": material["activity_id"],
         "title": material["title"],
         "content": material["content"],
+        "tags": tags,
         "created_at": material["created_at"],
     }
 
 
-def _material_to_catalog(material: dict) -> dict:
+def _material_to_catalog(material: dict, tags: list[str]) -> dict:
     """資材データをカタログ形式に変換（全文なし）"""
     return {
         "material_id": material["id"],
-        "activity_id": material["activity_id"],
         "title": material["title"],
+        "tags": tags,
         "created_at": material["created_at"],
     }
 
 
-def add_material(activity_id: int, title: str, content: str) -> dict:
+def add_material(title: str, content: str, tags: list[str], related: list[dict] | None = None) -> dict:
     """
     資材を追加する
 
     Args:
-        activity_id: 紐づくアクティビティのID
         title: 資材のタイトル
         content: 資材の本文
+        tags: タグ配列（必須、1個以上）
+        related: 関連エンティティ [{"type": "topic", "ids": [1, 2]}, ...] (optional)
 
     Returns:
         作成された資材情報
@@ -58,46 +65,44 @@ def add_material(activity_id: int, title: str, content: str) -> dict:
             }
         }
 
+    # タグのバリデーション
+    parsed_tags = validate_and_parse_tags(tags, required=True)
+    if isinstance(parsed_tags, dict):
+        return parsed_tags
+
     conn = get_connection()
     try:
-        # FK検証: activity_idの存在チェック
-        row = conn.execute(
-            "SELECT id FROM activities WHERE id = ?", (activity_id,)
-        ).fetchone()
-        if not row:
-            return {
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": f"Activity with id {activity_id} not found",
-                }
-            }
-
         cursor = conn.execute(
-            "INSERT INTO materials (activity_id, title, content) VALUES (?, ?, ?)",
-            (activity_id, title, content),
+            "INSERT INTO materials (title, content) VALUES (?, ?)",
+            (title, content),
         )
         material_id = cursor.lastrowid
 
+        # タグをリンク
+        tag_ids = ensure_tag_ids(conn, parsed_tags)
+        link_tags(conn, "material_tags", "material_id", material_id, tag_ids)
+
+        # リレーションを追加
+        if related:
+            _add_relation_with_conn(conn, "material", material_id, related)
+
+        conn.commit()
+
+        # タグを取得
+        tag_strings = get_entity_tags(conn, "material_tags", "material_id", material_id)
+
+        # 作成した資材を取得
         row = conn.execute(
             "SELECT * FROM materials WHERE id = ?", (material_id,)
         ).fetchone()
         if not row:
-            conn.rollback()
-            return {
-                "error": {
-                    "code": "DATABASE_ERROR",
-                    "message": "Failed to retrieve created material",
-                }
-            }
+            raise Exception("Failed to retrieve created material")
 
-        conn.commit()
-
-        # materialはactivityのタグを継承
-        tag_strings = get_entity_tags(conn, "activity_tags", "activity_id", activity_id)
+        # embedding生成（失敗してもmaterial作成には影響しない）
         tag_text = " ".join(tag_strings) if tag_strings else ""
         generate_and_store_embedding("material", material_id, build_embedding_text(title, content, tag_text))
 
-        return _material_to_response(row_to_dict(row))
+        return _material_to_response(row_to_dict(row), tag_strings)
 
     except sqlite3.IntegrityError as e:
         conn.rollback()
@@ -119,9 +124,9 @@ def add_material(activity_id: int, title: str, content: str) -> dict:
         conn.close()
 
 
-def get_materials_by_activity_with_conn(conn, activity_id: int) -> list[dict]:
+def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
     """
-    アクティビティに紐づく資材一覧をカタログ形式で取得する（conn共有版）
+    アクティビティにリレーションで紐づく資材一覧をカタログ形式で取得する（conn共有版）
 
     Args:
         conn: SQLiteコネクション
@@ -131,7 +136,11 @@ def get_materials_by_activity_with_conn(conn, activity_id: int) -> list[dict]:
         資材カタログのリスト [{"id": int, "title": str, "created_at": str}, ...]
     """
     rows = conn.execute(
-        "SELECT id, title, created_at FROM materials WHERE activity_id = ? ORDER BY created_at ASC",
+        """SELECT m.id, m.title, m.created_at
+           FROM materials m
+           JOIN activity_material_relations amr ON amr.material_id = m.id
+           WHERE amr.activity_id = ?
+           ORDER BY m.created_at ASC""",
         (activity_id,),
     ).fetchall()
     return [{"id": row["id"], "title": row["title"], "created_at": row["created_at"]} for row in rows]
@@ -160,53 +169,10 @@ def get_material(material_id: int) -> dict:
                 }
             }
 
-        return _material_to_response(row_to_dict(row))
+        # タグを取得
+        tag_strings = get_entity_tags(conn, "material_tags", "material_id", material_id)
 
-    except Exception as e:
-        return {
-            "error": {
-                "code": "DATABASE_ERROR",
-                "message": str(e),
-            }
-        }
-    finally:
-        conn.close()
-
-
-def list_materials(activity_id: int) -> dict:
-    """
-    アクティビティに紐づく資材のカタログ一覧を取得する
-
-    Args:
-        activity_id: アクティビティのID
-
-    Returns:
-        資材カタログ一覧（全文なし）
-    """
-    conn = get_connection()
-    try:
-        # activity_idの存在チェック
-        row = conn.execute(
-            "SELECT id FROM activities WHERE id = ?", (activity_id,)
-        ).fetchone()
-        if not row:
-            return {
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": f"Activity with id {activity_id} not found",
-                }
-            }
-
-        rows = conn.execute(
-            "SELECT * FROM materials WHERE activity_id = ? ORDER BY created_at",
-            (activity_id,),
-        ).fetchall()
-
-        return {
-            "activity_id": activity_id,
-            "materials": [_material_to_catalog(row_to_dict(r)) for r in rows],
-            "total_count": len(rows),
-        }
+        return _material_to_response(row_to_dict(row), tag_strings)
 
     except Exception as e:
         return {

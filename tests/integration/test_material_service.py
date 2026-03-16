@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database
 from src.services.activity_service import add_activity
-from src.services.material_service import add_material, get_material, list_materials
+from src.services.material_service import add_material, get_material
 from src.services.search_service import get_by_id, get_by_ids
 
 
@@ -38,107 +38,121 @@ def activity_id(temp_db):
 class TestAddMaterial:
     """add_materialの統合テスト"""
 
-    def test_add_material_success(self, activity_id):
+    def test_add_material_success(self, temp_db):
         """資材の追加が成功する"""
         result = add_material(
-            activity_id=activity_id,
             title="Test Material",
             content="# Test Content\n\nThis is a test material.",
+            tags=["domain:test", "design"],
         )
 
         assert "error" not in result
         assert result["material_id"] > 0
-        assert result["activity_id"] == activity_id
         assert result["title"] == "Test Material"
         assert result["content"] == "# Test Content\n\nThis is a test material."
+        assert "tags" in result
+        assert "domain:test" in result["tags"]
+        assert "design" in result["tags"]
         assert "created_at" in result
+        # activity_idが含まれないこと
+        assert "activity_id" not in result
 
-    def test_add_material_invalid_activity_id(self, temp_db):
-        """存在しないactivity_idでNOT_FOUNDエラーになる"""
+    def test_add_material_with_related(self, activity_id):
+        """relatedを指定してリレーション付きで資材を作成できる"""
         result = add_material(
-            activity_id=9999,
-            title="Test Material",
+            title="Related Material",
             content="Content",
+            tags=["domain:test"],
+            related=[{"type": "activity", "ids": [activity_id]}],
         )
 
-        assert "error" in result
-        assert result["error"]["code"] == "NOT_FOUND"
-        assert "Activity" in result["error"]["message"]
+        assert "error" not in result
+        assert result["material_id"] > 0
 
-    def test_add_material_empty_title(self, activity_id):
+    def test_add_material_empty_title(self, temp_db):
         """空のtitleでVALIDATION_ERRORになる"""
         result = add_material(
-            activity_id=activity_id,
             title="",
             content="Content",
+            tags=["domain:test"],
         )
 
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
         assert "title" in result["error"]["message"]
 
-    def test_add_material_whitespace_title(self, activity_id):
+    def test_add_material_whitespace_title(self, temp_db):
         """空白のみのtitleでVALIDATION_ERRORになる"""
         result = add_material(
-            activity_id=activity_id,
             title="   ",
             content="Content",
+            tags=["domain:test"],
         )
 
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
 
-    def test_add_material_empty_content(self, activity_id):
+    def test_add_material_empty_content(self, temp_db):
         """空のcontentでVALIDATION_ERRORになる"""
         result = add_material(
-            activity_id=activity_id,
             title="Title",
             content="",
+            tags=["domain:test"],
         )
 
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
         assert "content" in result["error"]["message"]
 
-    def test_add_material_whitespace_content(self, activity_id):
+    def test_add_material_whitespace_content(self, temp_db):
         """空白のみのcontentでVALIDATION_ERRORになる"""
         result = add_material(
-            activity_id=activity_id,
             title="Title",
             content="   ",
+            tags=["domain:test"],
         )
 
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
 
-    def test_add_multiple_materials_to_same_activity(self, activity_id):
-        """同一アクティビティに複数の資材を追加できる"""
+    def test_add_material_no_tags(self, temp_db):
+        """タグなしでTAGS_REQUIREDエラーになる"""
+        result = add_material(
+            title="Title",
+            content="Content",
+            tags=[],
+        )
+
+        assert "error" in result
+        assert result["error"]["code"] == "TAGS_REQUIRED"
+
+    def test_add_multiple_materials(self, temp_db):
+        """複数の資材を追加できる"""
         result1 = add_material(
-            activity_id=activity_id,
             title="Material 1",
             content="Content 1",
+            tags=["domain:test"],
         )
         result2 = add_material(
-            activity_id=activity_id,
             title="Material 2",
             content="Content 2",
+            tags=["domain:test"],
         )
 
         assert "error" not in result1
         assert "error" not in result2
         assert result1["material_id"] != result2["material_id"]
-        assert result1["activity_id"] == result2["activity_id"] == activity_id
 
 
 class TestGetMaterial:
     """get_materialの統合テスト"""
 
-    def test_get_material_success(self, activity_id):
+    def test_get_material_success(self, temp_db):
         """資材の全文取得が成功する"""
         created = add_material(
-            activity_id=activity_id,
             title="Get Test",
             content="Full content here",
+            tags=["domain:test", "search"],
         )
         material_id = created["material_id"]
 
@@ -146,10 +160,14 @@ class TestGetMaterial:
 
         assert "error" not in result
         assert result["material_id"] == material_id
-        assert result["activity_id"] == activity_id
         assert result["title"] == "Get Test"
         assert result["content"] == "Full content here"
+        assert "tags" in result
+        assert "domain:test" in result["tags"]
+        assert "search" in result["tags"]
         assert "created_at" in result
+        # activity_idが含まれないこと
+        assert "activity_id" not in result
 
     def test_get_material_not_found(self, temp_db):
         """存在しないmaterial_idでNOT_FOUNDエラーになる"""
@@ -162,12 +180,12 @@ class TestGetMaterial:
 class TestGetByIdMaterial:
     """get_by_id / get_by_ids でmaterialを取得するテスト"""
 
-    def test_get_by_id_material(self, activity_id):
+    def test_get_by_id_material(self, temp_db):
         """get_by_idでmaterialを取得できる"""
         created = add_material(
-            activity_id=activity_id,
             title="ById Test",
             content="ById content",
+            tags=["domain:test"],
         )
         material_id = created["material_id"]
 
@@ -176,10 +194,11 @@ class TestGetByIdMaterial:
         assert "error" not in result
         assert result["type"] == "material"
         assert result["data"]["material_id"] == material_id
-        assert result["data"]["activity_id"] == activity_id
         assert result["data"]["title"] == "ById Test"
         assert "content" not in result["data"]  # カタログ形式: 全文なし
-        assert result["data"]["tags"] == ["domain:test"]  # activityのタグを継承
+        assert result["data"]["tags"] == ["domain:test"]  # material自身のタグ
+        # activity_idが含まれないこと
+        assert "activity_id" not in result["data"]
 
     def test_get_by_id_material_not_found(self, temp_db):
         """存在しないmaterial_idでNOT_FOUNDエラーになる"""
@@ -188,12 +207,12 @@ class TestGetByIdMaterial:
         assert "error" in result
         assert result["error"]["code"] == "NOT_FOUND"
 
-    def test_get_by_ids_material(self, activity_id):
+    def test_get_by_ids_material(self, temp_db):
         """get_by_idsでmaterialを取得できる"""
         created = add_material(
-            activity_id=activity_id,
             title="Batch Test",
             content="Batch content",
+            tags=["domain:test"],
         )
         material_id = created["material_id"]
 
@@ -207,9 +226,10 @@ class TestGetByIdMaterial:
     def test_get_by_ids_mixed_types(self, activity_id):
         """get_by_idsでmaterialと他のtypeを混在して取得できる"""
         created = add_material(
-            activity_id=activity_id,
             title="Mixed Test",
             content="Mixed content",
+            tags=["domain:test"],
+            related=[{"type": "activity", "ids": [activity_id]}],
         )
         material_id = created["material_id"]
 
@@ -226,40 +246,3 @@ class TestGetByIdMaterial:
         # activity
         assert result["results"][1]["type"] == "activity"
         assert result["results"][1]["data"]["id"] == activity_id
-
-
-class TestListMaterials:
-    """list_materialsの統合テスト"""
-
-    def test_list_materials_success(self, activity_id):
-        """アクティビティに紐づく資材一覧を取得できる"""
-        add_material(activity_id=activity_id, title="Mat 1", content="Content 1")
-        add_material(activity_id=activity_id, title="Mat 2", content="Content 2")
-
-        result = list_materials(activity_id)
-
-        assert "error" not in result
-        assert result["activity_id"] == activity_id
-        assert result["total_count"] == 2
-        assert len(result["materials"]) == 2
-        # カタログ形式: contentなし
-        for m in result["materials"]:
-            assert "material_id" in m
-            assert "title" in m
-            assert "created_at" in m
-            assert "content" not in m
-
-    def test_list_materials_empty(self, activity_id):
-        """資材がないアクティビティでは空リストが返る"""
-        result = list_materials(activity_id)
-
-        assert "error" not in result
-        assert result["total_count"] == 0
-        assert result["materials"] == []
-
-    def test_list_materials_invalid_activity_id(self, temp_db):
-        """存在しないactivity_idでNOT_FOUNDエラーになる"""
-        result = list_materials(9999)
-
-        assert "error" in result
-        assert result["error"]["code"] == "NOT_FOUND"

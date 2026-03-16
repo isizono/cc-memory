@@ -53,9 +53,23 @@ def _create_activity(conn, title="Test Activity"):
     return activity_id
 
 
+def _create_material(conn, title="Test Material"):
+    """テスト用資材を作成する"""
+    from src.services.tag_service import ensure_tag_ids, link_tags
+
+    cursor = conn.execute(
+        "INSERT INTO materials (title, content) VALUES (?, ?)",
+        (title, f"Content for {title}"),
+    )
+    material_id = cursor.lastrowid
+    tag_ids = ensure_tag_ids(conn, DEFAULT_TAGS)
+    link_tags(conn, "material_tags", "material_id", material_id, tag_ids)
+    return material_id
+
+
 @pytest.fixture
 def sample_entities(temp_db):
-    """テスト用のトピックとアクティビティを作成する"""
+    """テスト用のトピック、アクティビティ、資材を作成する"""
     conn = get_connection()
     try:
         t1 = _create_topic(conn, "Topic A")
@@ -64,10 +78,12 @@ def sample_entities(temp_db):
         a1 = _create_activity(conn, "Activity X")
         a2 = _create_activity(conn, "Activity Y")
         a3 = _create_activity(conn, "Activity Z")
+        m1 = _create_material(conn, "Material P")
+        m2 = _create_material(conn, "Material Q")
         conn.commit()
     finally:
         conn.close()
-    return {"t1": t1, "t2": t2, "t3": t3, "a1": a1, "a2": a2, "a3": a3}
+    return {"t1": t1, "t2": t2, "t3": t3, "a1": a1, "a2": a2, "a3": a3, "m1": m1, "m2": m2}
 
 
 class TestAddRelation:
@@ -523,3 +539,157 @@ class TestCascadeDelete:
             assert row["cnt"] == 0
         finally:
             conn.close()
+
+    def test_cascade_delete_material_cleans_topic_material_relations(self, sample_entities):
+        """資材削除時にtopic_material_relationsが消える"""
+        e = sample_entities
+        add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        conn = get_connection()
+        try:
+            conn.execute("DELETE FROM materials WHERE id = ?", (e["m1"],))
+            conn.commit()
+
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM topic_material_relations WHERE material_id = ?",
+                (e["m1"],),
+            ).fetchone()
+            assert row["cnt"] == 0
+        finally:
+            conn.close()
+
+    def test_cascade_delete_material_cleans_activity_material_relations(self, sample_entities):
+        """資材削除時にactivity_material_relationsが消える"""
+        e = sample_entities
+        add_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        conn = get_connection()
+        try:
+            conn.execute("DELETE FROM materials WHERE id = ?", (e["m1"],))
+            conn.commit()
+
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM activity_material_relations WHERE material_id = ?",
+                (e["m1"],),
+            ).fetchone()
+            assert row["cnt"] == 0
+        finally:
+            conn.close()
+
+
+class TestMaterialRelations:
+    """materialリレーションの統合テスト"""
+
+    def test_add_topic_material_relation(self, sample_entities):
+        """topic↔materialリレーションが追加できる"""
+        e = sample_entities
+        result = add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_add_material_topic_relation(self, sample_entities):
+        """material→topicリレーション（逆方向指定）が追加できる"""
+        e = sample_entities
+        result = add_relation("material", e["m1"], [{"type": "topic", "ids": [e["t1"]]}])
+
+        assert "error" not in result
+        assert result["added"] == 1
+
+        # topic_material_relationsに正しく格納されていることを確認
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT * FROM topic_material_relations WHERE topic_id = ? AND material_id = ?",
+                (e["t1"], e["m1"]),
+            ).fetchone()
+            assert row is not None
+        finally:
+            conn.close()
+
+    def test_add_activity_material_relation(self, sample_entities):
+        """activity↔materialリレーションが追加できる"""
+        e = sample_entities
+        result = add_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_add_material_activity_relation(self, sample_entities):
+        """material→activityリレーション（逆方向指定）が追加できる"""
+        e = sample_entities
+        result = add_relation("material", e["m1"], [{"type": "activity", "ids": [e["a1"]]}])
+
+        assert "error" not in result
+        assert result["added"] == 1
+
+        # activity_material_relationsに正しく格納されていることを確認
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT * FROM activity_material_relations WHERE activity_id = ? AND material_id = ?",
+                (e["a1"], e["m1"]),
+            ).fetchone()
+            assert row is not None
+        finally:
+            conn.close()
+
+    def test_remove_topic_material_relation(self, sample_entities):
+        """topic↔materialリレーション削除が動作する"""
+        e = sample_entities
+        add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        result = remove_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        assert "error" not in result
+        assert result["removed"] == 1
+
+    def test_remove_activity_material_relation(self, sample_entities):
+        """activity↔materialリレーション削除が動作する"""
+        e = sample_entities
+        add_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        result = remove_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        assert "error" not in result
+        assert result["removed"] == 1
+
+    def test_get_map_includes_material(self, sample_entities):
+        """get_mapでmaterialが含まれる"""
+        e = sample_entities
+        add_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        result = get_map("activity", e["a1"], min_depth=0, max_depth=1)
+
+        assert "error" not in result
+        types_ids = {(ent["type"], ent["id"]) for ent in result["entities"]}
+        assert ("material", e["m1"]) in types_ids
+
+    def test_get_map_material_has_tags(self, sample_entities):
+        """get_mapのmaterialカタログにtagsが含まれる"""
+        e = sample_entities
+        add_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        result = get_map("activity", e["a1"], min_depth=0, max_depth=1)
+
+        assert "error" not in result
+        mat_entry = next(ent for ent in result["entities"] if ent["type"] == "material")
+        assert "tags" in mat_entry
+        assert isinstance(mat_entry["tags"], list)
+
+    def test_material_self_reference_skipped(self, sample_entities):
+        """material-materialの自己参照はスキップされる"""
+        e = sample_entities
+        result = add_relation("material", e["m1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        assert "error" not in result
+        assert result["added"] == 0
+
+    def test_material_material_relation_raises(self, sample_entities):
+        """material-material（異なるID）はValueError"""
+        e = sample_entities
+        result = add_relation("material", e["m1"], [{"type": "material", "ids": [e["m2"]]}])
+
+        # material-materialは_get_insert_paramsでValueErrorが発生し、
+        # add_relationのexceptでcatchされる
+        assert "error" in result

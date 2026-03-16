@@ -4,7 +4,7 @@ import sqlite3
 
 from src.db import get_connection, row_to_dict
 from src.services import activity_service
-from src.services.material_service import get_materials_by_activity_with_conn
+from src.services.material_service import get_materials_by_relation_with_conn
 from src.services.relation_service import _get_map_with_conn
 from src.services.tag_service import (
     collect_tag_notes_for_injection,
@@ -168,8 +168,8 @@ def check_in(activity_id: int) -> dict:
         # 3. tag_notes収集
         tag_notes = collect_tag_notes_for_injection(conn, tags, always_inject_namespaces=["intent"]) or []
 
-        # 4. materials取得（カタログ形式、共有コネクション使用）
-        materials = get_materials_by_activity_with_conn(conn, activity_id)
+        # 4. materials取得（リレーション経由、カタログ形式、共有コネクション使用）
+        materials = get_materials_by_relation_with_conn(conn, activity_id)
 
         # 5. recent_decisions取得（関連topic横断、フラット15件）
         recent_decisions = _get_decisions_from_topics(conn, direct["topic"])

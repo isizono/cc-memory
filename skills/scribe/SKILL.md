@@ -29,7 +29,7 @@ cc-memoryの記録（decisions, logs, materials）を元に、外部共有可能
 - check-in結果の `related_topics` から `topic_id` を取得する
 - `get_decisions(topic_id=...)` で決定事項を取得
 - `get_logs(topic_id=...)` で議論経緯を取得
-- `list_materials` / `get_material` で資材を取得
+- `search(type_filter="material")` / `get_material` で資材を取得
 
 必要に応じて、ソースアクティビティのタグで `search` し、関連する別トピックの情報も補足的に収集する。
 

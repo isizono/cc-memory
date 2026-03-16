@@ -264,14 +264,7 @@ def _get_entity_tag_text(conn, source_type: str, source_id: int) -> str:
     elif source_type == "log":
         tags = get_effective_tags(conn, "log", source_id)
     elif source_type == "material":
-        # materialはactivity_idを取得してactivityのタグを継承
-        row = conn.execute(
-            "SELECT activity_id FROM materials WHERE id = ?", (source_id,)
-        ).fetchone()
-        if row:
-            tags = get_entity_tags(conn, "activity_tags", "activity_id", row["activity_id"])
-        else:
-            tags = []
+        tags = get_entity_tags(conn, "material_tags", "material_id", source_id)
     else:
         tags = []
     return " ".join(tags) if tags else ""

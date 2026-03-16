@@ -122,9 +122,11 @@ class TestCheckIn:
         assert result["materials"] == []
 
     def test_check_in_with_materials(self, activity_id):
-        """materialsがある場合、カタログ形式で返る"""
-        add_material(activity_id, "設計書", "# 設計\n詳細内容")
-        add_material(activity_id, "調査結果", "# 調査\n結果内容")
+        """materialsがある場合、activity_material_relations経由でカタログ形式で返る"""
+        m1 = add_material("設計書", "# 設計\n詳細内容", ["domain:test"],
+                          related=[{"type": "activity", "ids": [activity_id]}])
+        m2 = add_material("調査結果", "# 調査\n結果内容", ["domain:test"],
+                          related=[{"type": "activity", "ids": [activity_id]}])
 
         result = check_in(activity_id)
 

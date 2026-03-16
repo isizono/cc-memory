@@ -53,7 +53,7 @@ claude plugin install claude-code-memory
 | 決定事項 | `add_decision`, `get_decisions` | 合意内容の記録・取得 |
 | アクティビティ | `add_activity`, `get_activities`, `update_activity` | 作業タスクの作成・取得・状態更新 |
 | check-in | `check_in` | アクティビティにcheck-inし、tag notes・資材・関連decisionsを集約取得 |
-| 資材 | `add_material`, `list_materials`, `get_material` | セッション中の成果物をアクティビティに紐づけて保存・取得 |
+| 資材 | `add_material`, `get_material` | セッション中の成果物をタグ付き独立エンティティとして保存・取得 |
 | リレーション | `add_relation`, `remove_relation`, `get_map` | エンティティ間の関連の追加・削除・グラフ探索 |
 | リマインダー | `add_reminder`, `list_reminders`, `update_reminder` | check-in時に注入される運用ルールの管理 |
 | タグ | `list_tags`, `update_tag`, `analyze_tags` | タグ一覧の取得・タグ情報の更新・タグ共起分析 |

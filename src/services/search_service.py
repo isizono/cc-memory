@@ -343,26 +343,11 @@ def _attach_tags(results: list[dict]) -> None:
                 for item in items:
                     item["tags"] = tags_map.get(item["id"], [])
             elif type_name == "material":
-                # material: activityのタグを継承
+                # material: material_tagsから直接取得
                 ids = [item["id"] for item in items]
-                placeholders = ",".join("?" * len(ids))
-                rows = conn.execute(f"""
-                    SELECT m.id AS material_id, t.namespace, t.name
-                    FROM materials m
-                    JOIN activity_tags at ON at.activity_id = m.activity_id
-                    JOIN tags t ON t.id = at.tag_id
-                    WHERE m.id IN ({placeholders})
-                """, tuple(ids)).fetchall()
-                # material_id → tags のマップ構築
-                mat_tag_map: dict[int, list[str]] = {}
-                for r in rows:
-                    mid = r["material_id"]
-                    ns = r["namespace"]
-                    name = r["name"]
-                    tag_str = f"{ns}:{name}" if ns else name
-                    mat_tag_map.setdefault(mid, []).append(tag_str)
+                tag_map = get_entity_tags_batch(conn, "material_tags", "material_id", ids)
                 for item in items:
-                    item["tags"] = mat_tag_map.get(item["id"], [])
+                    item["tags"] = tag_map.get(item["id"], [])
             else:
                 for item in items:
                     item["tags"] = []
@@ -439,11 +424,11 @@ def _build_tag_filter_cte(tag_ids: list[int]) -> tuple[str, list]:
         ) GROUP BY log_id HAVING COUNT(DISTINCT tag_id) = ?
 
         UNION ALL
-        -- material (activity_tags経由で継承)
+        -- material (直接タグ)
         SELECT 'material', material_id FROM (
-            SELECT m.id AS material_id, at.tag_id
-            FROM materials m JOIN activity_tags at ON at.activity_id = m.activity_id
-            WHERE at.tag_id IN ({placeholders})
+            SELECT mt.material_id, mt.tag_id
+            FROM material_tags mt
+            WHERE mt.tag_id IN ({placeholders})
         ) GROUP BY material_id HAVING COUNT(DISTINCT tag_id) = ?
     )
     """
@@ -860,10 +845,9 @@ def _tag_like_search(
               AND lt.tag_id IN ({tag_placeholders})
         )
         OR EXISTS (
-            SELECT 1 FROM materials m
-            JOIN activity_tags at2 ON at2.activity_id = m.activity_id
-            WHERE m.id = si.source_id AND si.source_type = 'material'
-              AND at2.tag_id IN ({tag_placeholders})
+            SELECT 1 FROM material_tags mt
+            WHERE mt.material_id = si.source_id AND si.source_type = 'material'
+              AND mt.tag_id IN ({tag_placeholders})
         )
         OR EXISTS (
             SELECT 1 FROM decisions d
@@ -1244,7 +1228,6 @@ def _format_row(type_name: str, data: dict, tags: list[str]) -> dict:
     elif type_name == 'material':
         return {
             "material_id": data["id"],
-            "activity_id": data["activity_id"],
             "title": data["title"],
             "tags": tags,
             "created_at": data["created_at"],
@@ -1300,9 +1283,8 @@ def get_by_id(type: str, id: int, conn=None) -> dict:
         elif type == 'log':
             tags = get_effective_tags(conn, "log", id)
         elif type == 'material':
-            # material: activityのタグを継承 (activity_idはNOT NULL制約あり)
-            activity_id = row_to_dict(row).get("activity_id")
-            tags = get_entity_tags(conn, "activity_tags", "activity_id", activity_id)
+            # material: material_tagsから直接取得
+            tags = get_entity_tags(conn, "material_tags", "material_id", id)
         else:
             tags = []
 

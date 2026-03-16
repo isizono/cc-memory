@@ -115,7 +115,9 @@ check-inするとtag_notes・資材・関連decisionsが一括で返り、status
 ### 資材（material）
 
 セッション中に生成された情報（ドラフト、分析結果、SA出力など）はセッション終了とともに消えます。
-これらの生情報は要約せず、`add_material`で資材として保存してください。
+これらの生情報は要約せず、`add_material`でタグ付きの独立エンティティとして保存してください。
+資材は決定事項と違って「双方の合意」が不要な成果物です。成果物が出た時点でユーザーに確認せず呼んでください。
+`related`で関連するアクティビティやトピックとリレーションを張れます。
 
 ## タグ
 
@@ -524,29 +526,33 @@ def update_activity(
 
 @mcp.tool()
 def add_material(
-    activity_id: int,
     title: str,
     content: str,
+    tags: list[str],
+    related: list[dict] | None = None,
 ) -> dict:
     """
-    アクティビティに紐づく資材を追加する。
+    資材を追加する。独立エンティティとしてタグ付きで保存される。
 
-    資材はアクティビティの成果物・ドキュメントをDB保存する仕組み。
-    check-inツールからカタログとして参照され、全文はget_materialで取得する2段階リード設計。
+    資材はセッション中の成果物・ドキュメントをDB保存する仕組み。
+    search(type_filter="material")で検索でき、全文はget_materialで取得する2段階リード設計。
+    決定事項と違って「双方の合意」が不要。成果物が出た時点でユーザーに確認せず呼ぶ。
 
     典型的な使い方:
-    - 設計ドキュメントを保存: add_material(123, "API設計書", "# API設計\n...")
-    - 調査結果を保存: add_material(123, "既存実装の調査結果", "## 調査結果\n...")
+    - 設計ドキュメントを保存: add_material("API設計書", "# API設計\n...", ["domain:cc-memory", "intent:design"])
+    - 調査結果を保存: add_material("既存実装の調査結果", "## 調査結果\n...", ["domain:cc-memory", "調査"])
+    - アクティビティと紐付け: add_material("設計書", "...", ["domain:cc-memory"], related=[{"type": "activity", "ids": [123]}])
 
     Args:
-        activity_id: 紐づくアクティビティのID（必須、存在するアクティビティIDを指定）
         title: 資材のタイトル
         content: 資材の本文（マークダウン形式推奨）
+        tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)
+        related: 関連エンティティ（optional）。[{"type": "topic"|"activity", "ids": [int, ...]}] 形式。作成と同時にリレーションを張る
 
     Returns:
-        作成された資材情報（material_id, activity_id, title, content, created_at）
+        作成された資材情報（material_id, title, content, tags, created_at）
     """
-    return material_service.add_material(activity_id, title, content)
+    return material_service.add_material(title, content, tags, related=related)
 
 
 @mcp.tool()
@@ -562,27 +568,9 @@ def get_material(
         material_id: 資材のID
 
     Returns:
-        資材の全文情報（material_id, activity_id, title, content, created_at）
+        資材の全文情報（material_id, title, content, tags, created_at）
     """
     return material_service.get_material(material_id)
-
-
-@mcp.tool()
-def list_materials(
-    activity_id: int,
-) -> dict:
-    """
-    アクティビティに紐づく資材のカタログ一覧を取得する。
-
-    全文は含まない。詳細はget_materialで取得する（2段階リード設計）。
-
-    Args:
-        activity_id: アクティビティのID
-
-    Returns:
-        資材カタログ一覧（activity_id, materials[{material_id, activity_id, title, created_at}], total_count）
-    """
-    return material_service.list_materials(activity_id)
 
 
 @mcp.tool()
@@ -619,12 +607,13 @@ def add_relation(
     典型的な使い方:
     - トピック同士を関連付け: add_relation("topic", 1, [{"type": "topic", "ids": [2, 3]}])
     - アクティビティとトピックを関連付け: add_relation("activity", 10, [{"type": "topic", "ids": [1]}])
+    - 資材とアクティビティを関連付け: add_relation("material", 5, [{"type": "activity", "ids": [10]}])
     - 複数タイプを一度に: add_relation("topic", 1, [{"type": "topic", "ids": [2]}, {"type": "activity", "ids": [10, 11]}])
 
     Args:
-        source_type: 起点エンティティのタイプ（"topic" or "activity"）
+        source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
         source_id: 起点エンティティのID
-        targets: ターゲットリスト [{"type": "topic"|"activity", "ids": [int, ...]}, ...]
+        targets: ターゲットリスト [{"type": "topic"|"activity"|"material", "ids": [int, ...]}, ...]
 
     Returns:
         成功時: {"added": int}（実際に追加された件数。重複はカウントしない）
@@ -643,9 +632,9 @@ def remove_relation(
     エンティティ間のリレーションを削除する。
 
     Args:
-        source_type: 起点エンティティのタイプ（"topic" or "activity"）
+        source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
         source_id: 起点エンティティのID
-        targets: ターゲットリスト [{"type": "topic"|"activity", "ids": [int, ...]}, ...]
+        targets: ターゲットリスト [{"type": "topic"|"activity"|"material", "ids": [int, ...]}, ...]
 
     Returns:
         成功時: {"removed": int}（実際に削除された件数）
@@ -668,7 +657,7 @@ def get_map(
     check-in時の2次カタログと同じロジックを使用。
 
     Args:
-        entity_type: 起点エンティティのタイプ（"topic" or "activity"）
+        entity_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
         entity_id: 起点エンティティのID
         min_depth: 最小深度（デフォルト: 0。0=起点自身を含む）
         max_depth: 最大深度（デフォルト: 2、上限: 10）

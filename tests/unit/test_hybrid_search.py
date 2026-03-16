@@ -1582,16 +1582,10 @@ def test_include_details_true_log_content_truncated(temp_db, mock_embedding_mode
 
 def test_include_details_true_material_no_details(temp_db, mock_embedding_model):
     """include_details=True + material型: detailsは付与されない"""
-    activity = add_activity(
-        title="マテリアル詳細テスト用アクティビティ",
-        description="テスト用",
-        tags=DEFAULT_TAGS,
-        check_in=False,
-    )
     add_material(
-        activity_id=activity["activity_id"],
         title="マテリアル詳細テスト用素材",
         content="素材の本文内容",
+        tags=DEFAULT_TAGS,
     )
 
     result = search_service.search(
