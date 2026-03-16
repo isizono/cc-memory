@@ -131,7 +131,13 @@ def add_activity(
     return result
 
 
-def get_activities(tags: list[str] | None = None, status: str = "active", limit: int = 5) -> dict:
+def get_activities(
+    tags: list[str] | None = None,
+    status: str = "active",
+    limit: int = 5,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict:
     """
     アクティビティ一覧を取得（tagsでフィルタリング、statusでフィルタリング）
 
@@ -140,6 +146,8 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
         status: フィルタするステータス（active/pending/in_progress/completed、デフォルト: active）
                 "active"はpending+in_progressの両方を返すエイリアス
         limit: 取得件数上限（デフォルト: 5）
+        since: ISO日付文字列（例: "2026-03-10"）。この日付以降に更新されたアクティビティのみ返す
+        until: ISO日付文字列。この日付以前に更新されたアクティビティのみ返す
 
     Returns:
         アクティビティ一覧とtotal_count
@@ -210,6 +218,14 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
             conditions.append("status = ?")
             where_params.append(status)
             order_clause = "updated_at DESC, id DESC"
+
+        if since is not None:
+            conditions.append("updated_at >= ?")
+            where_params.append(since)
+
+        if until is not None:
+            conditions.append("updated_at <= ?")
+            where_params.append(until)
 
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
