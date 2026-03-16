@@ -3,9 +3,8 @@
 処理フロー:
 1. stdin読み込み → transcript_path抽出
 2. transcriptファイルの存在確認
-3. sync-memoryマーカーチェック（実行済みならスキップ）
-4. ワンライナー判定（user_message_count <= 1ならスキップ）
-5. claude -pをバックグラウンド起動してauto-sync実行
+3. transcript解析（マーカーチェック + user_message_count）を1パスで実行
+4. スキップ条件に該当しなければ claude -p をバックグラウンド起動
 
 出力: {"decision": "approve"}（常にapprove）
 """
@@ -40,30 +39,27 @@ def _log(message: str) -> None:
         pass
 
 
-def _count_user_messages(transcript_path: Path) -> int:
-    """transcriptからUser Message数をカウントする。"""
-    count = 0
-    with open(transcript_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                if is_user_message(entry):
-                    count += 1
-            except json.JSONDecodeError:
-                continue
-    return count
-
-
-def _has_sync_marker(transcript_path: Path) -> bool:
-    """transcriptにsync-memoryマーカーが含まれるか確認する。"""
-    with open(transcript_path) as f:
-        for line in f:
-            if _SYNC_MARKER in line:
-                return True
-    return False
+def _analyze_transcript(transcript_path: Path) -> tuple[bool, int]:
+    """transcriptを1パスで解析し、(has_sync_marker, user_message_count)を返す。"""
+    has_marker = False
+    user_count = 0
+    try:
+        with open(transcript_path) as f:
+            for line in f:
+                if _SYNC_MARKER in line:
+                    has_marker = True
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if is_user_message(entry):
+                        user_count += 1
+                except json.JSONDecodeError:
+                    continue
+    except OSError as e:
+        _log(f"Failed to read transcript: {e}")
+    return has_marker, user_count
 
 
 def _launch_auto_sync(transcript_path: Path, script_dir: Path) -> int:
@@ -75,11 +71,11 @@ def _launch_auto_sync(transcript_path: Path, script_dir: Path) -> int:
     prompt_path = script_dir / "auto_sync_prompt.txt"
     system_prompt = prompt_path.read_text()
 
-    transcript_content = transcript_path.read_bytes()
-
     # CLAUDECODE環境変数を除外（ネスト検出による無限ループ防止）
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
+    # transcriptをstdinとして渡す（bash版の cat $TRANSCRIPT_PATH | claude -p に相当）
+    stdin_file = open(transcript_path)  # noqa: SIM115
     log_file = open(_LOG_FILE, "a")  # noqa: SIM115
     proc = subprocess.Popen(
         [
@@ -89,12 +85,15 @@ def _launch_auto_sync(transcript_path: Path, script_dir: Path) -> int:
             "--system-prompt", system_prompt,
             "以下はClaude Codeセッションのtranscriptです。sync-memory手順に従って解析・記録してください。",
         ],
-        input=transcript_content,
+        stdin=stdin_file,
         stdout=subprocess.DEVNULL,
         stderr=log_file,
         env=env,
         start_new_session=True,
     )
+    # 子プロセスがFDをコピー済みのため、親側は即クローズ
+    stdin_file.close()
+    log_file.close()
     return proc.pid
 
 
@@ -120,14 +119,14 @@ def main() -> None:
             _approve()
             return
 
-        # sync-memoryマーカーチェック
-        if _has_sync_marker(transcript_path):
+        # transcript解析（1パス）
+        has_marker, user_count = _analyze_transcript(transcript_path)
+
+        if has_marker:
             _log("sync-memory already executed. Skipping auto-sync.")
             _approve()
             return
 
-        # ワンライナー判定
-        user_count = _count_user_messages(transcript_path)
         if user_count < _MIN_USER_MESSAGES:
             _log(f"One-liner session (user_message_count={user_count}). Skipping auto-sync.")
             _approve()

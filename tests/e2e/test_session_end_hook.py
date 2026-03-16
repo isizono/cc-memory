@@ -1,13 +1,14 @@
 """hooks/session_end_hook.py の E2E テスト
 
 subprocess.run で session_end_hook.py を呼び出し、stdin→stdout の入出力をテスト。
-claude -p の起動はモック化（実際には起動しない）。
+auto-sync起動パスではモック claude スクリプトを PATH に配置して検証。
 """
 import json
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -48,10 +49,25 @@ def _make_tool_result_entry() -> dict:
     }
 
 
+def _create_mock_claude(tmp_path: Path) -> Path:
+    """ダミーのclaudeスクリプトを作成してPATHに配置可能にする。"""
+    mock_bin = tmp_path / "mock_bin"
+    mock_bin.mkdir()
+    mock_claude = mock_bin / "claude"
+    mock_claude.write_text("#!/bin/bash\nexit 0\n")
+    mock_claude.chmod(mock_claude.stat().st_mode | stat.S_IEXEC)
+    return mock_bin
+
+
 def _run_session_end_hook(
     transcript_path: str,
+    env_extra: dict | None = None,
     return_stderr: bool = False,
 ) -> dict | tuple[dict, str]:
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
+
     input_data = json.dumps({"transcript_path": transcript_path})
 
     result = subprocess.run(
@@ -61,6 +77,7 @@ def _run_session_end_hook(
         text=True,
         cwd=str(PROJECT_ROOT),
         timeout=10,
+        env=env,
     )
 
     stdout = result.stdout.strip()
@@ -194,7 +211,8 @@ class TestOneLinerDetection:
 class TestAutoSyncLaunch:
     """user_message_count >= 2 かつ sync-memory未実行なら auto-sync を起動"""
 
-    def test_launches_when_multi_turn(self, tmp_path, monkeypatch):
+    def test_launches_when_multi_turn(self, tmp_path):
+        """main()フロー全体をE2Eで検証: モックclaudeで起動確認"""
         transcript = tmp_path / "transcript.jsonl"
         _write_transcript([
             _make_user_entry("first question"),
@@ -203,59 +221,77 @@ class TestAutoSyncLaunch:
             _make_assistant_entry("second answer"),
         ], transcript)
 
-        # auto_sync_prompt.txt をダミーで配置
-        prompt_file = tmp_path / "auto_sync_prompt.txt"
-        prompt_file.write_text("dummy system prompt")
+        # モックclaudeをPATH先頭に配置
+        mock_bin = _create_mock_claude(tmp_path)
 
-        # session_end_hook.pyをインポートしてPopen をモック化
-        sys.path.insert(0, str(PROJECT_ROOT))
-        import hooks.session_end_hook as hook_mod
-
-        launched_pids = []
-        original_popen = subprocess.Popen
-
-        class MockPopen:
-            def __init__(self, *args, **kwargs):
-                self.pid = 12345
-                launched_pids.append(self.pid)
-
-        monkeypatch.setattr(subprocess, "Popen", MockPopen)
-        monkeypatch.setattr(hook_mod, "_LOG_FILE", tmp_path / "test.log")
-
-        # script_dirをtmp_pathに差し替えてテスト
-        original_main = hook_mod.main
-
-        def patched_main():
-            monkeypatch.setattr(
-                hook_mod.Path(__file__).resolve().__class__,
-                "parent",
-                property(lambda self: tmp_path),
-            )
-
-        # 直接関数を呼ぶ代わりにsubprocessで実行（E2Eテスト）
-        # ただしclaude -pの実際の起動は避けたいので、
-        # _launch_auto_syncをモック化したバージョンで検証
-        monkeypatch.undo()
-
-        # シンプルなアプローチ: ログファイルで起動判定
         log_file = tmp_path / "session-end.log"
-        monkeypatch.setattr(hook_mod, "_LOG_FILE", log_file)
 
-        captured_args = []
+        # _LOG_FILEとPATHだけ差し替えてmain()を呼ぶラッパー
+        wrapper = tmp_path / "run_hook.py"
+        wrapper.write_text(f"""\
+import sys, os
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+os.environ["PATH"] = {str(mock_bin)!r} + os.pathsep + os.environ.get("PATH", "")
 
-        class MockPopen2:
-            def __init__(self, *args, **kwargs):
-                self.pid = 99999
-                captured_args.append(args[0])
+import hooks.session_end_hook as hook
+from pathlib import Path
+hook._LOG_FILE = Path({str(log_file)!r})
+hook.main()
+""")
 
-        monkeypatch.setattr(subprocess, "Popen", MockPopen2)
+        input_data = json.dumps({"transcript_path": str(transcript)})
+        result = subprocess.run(
+            [sys.executable, str(wrapper)],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+            timeout=10,
+        )
 
-        # _launch_auto_syncを直接テスト
-        pid = hook_mod._launch_auto_sync(transcript, tmp_path)
-        assert pid == 99999
-        assert captured_args[0][0] == "claude"
-        assert "-p" in captured_args[0]
-        assert "--model" in captured_args[0]
+        output = json.loads(result.stdout.strip())
+        assert output["decision"] == "approve"
 
-        monkeypatch.undo()
-        sys.path.pop(0)
+        # ログから起動を確認
+        log_content = log_file.read_text()
+        assert "Launching claude -p" in log_content
+        assert "launched in background (pid=" in log_content
+
+    def test_does_not_launch_with_marker(self, tmp_path):
+        """マーカーあり + マルチターン → 起動しない"""
+        transcript = tmp_path / "transcript.jsonl"
+        _write_transcript([
+            _make_user_entry("first question"),
+            _make_assistant_entry("first answer"),
+            _make_user_entry("second question"),
+            _make_assistant_entry("claude-code-memory:sync-memory executed"),
+        ], transcript)
+
+        log_file = tmp_path / "session-end.log"
+
+        wrapper = tmp_path / "run_hook.py"
+        wrapper.write_text(f"""\
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+import hooks.session_end_hook as hook
+from pathlib import Path
+hook._LOG_FILE = Path({str(log_file)!r})
+hook.main()
+""")
+
+        input_data = json.dumps({"transcript_path": str(transcript)})
+        result = subprocess.run(
+            [sys.executable, str(wrapper)],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+            timeout=10,
+        )
+
+        output = json.loads(result.stdout.strip())
+        assert output["decision"] == "approve"
+
+        log_content = log_file.read_text()
+        assert "sync-memory already executed" in log_content
+        assert "Launching" not in log_content
