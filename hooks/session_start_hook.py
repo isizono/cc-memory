@@ -2,7 +2,6 @@
 
 サービス層経由でDBからデータを取得し、セッション開始時のコンテキストを注入する。
 - アクティビティ一覧（active = in_progress + pending）
-- トピック一覧
 - リマインダー（active=1）
 """
 import json
@@ -20,13 +19,11 @@ from src.services.activity_service import (
     get_active_domains_with_conn,
     get_active_activities_by_tag_with_conn,
 )
-from src.services.topic_service import get_recent_topics_with_conn
 from src.services.reminder_service import get_active_reminder_contents_with_conn
 
 # 表示用の定数
 IN_PROGRESS_LIMIT = 3
 PENDING_LIMIT = 2
-TOPICS_LIMIT = 10
 
 
 def _calc_elapsed_days(updated_at_str: str) -> int:
@@ -46,14 +43,19 @@ def _build_activities_section(conn) -> str:
     if not domains:
         return ""
 
+    seen_ids: set[int] = set()
     domain_sections = []
     for domain in domains:
         tag_id = domain["tag_id"]
         name = domain["name"]
 
         activities = get_active_activities_by_tag_with_conn(conn, tag_id)
+        # 他domainで既出のアクティビティを除外（複数domain所属時の重複排除）
+        activities = [a for a in activities if a["id"] not in seen_ids]
         if not activities:
             continue
+        for a in activities:
+            seen_ids.add(a["id"])
 
         heartbeat_activities = [a for a in activities if a.get("is_heartbeat_active")]
         normal_activities = [a for a in activities if not a.get("is_heartbeat_active")]
@@ -97,20 +99,6 @@ def _build_activities_section(conn) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _build_topics_section(conn) -> str:
-    """トピック一覧を組み立てる（最近作成された順）。"""
-    topics = get_recent_topics_with_conn(conn, limit=TOPICS_LIMIT)
-
-    if not topics:
-        return ""
-
-    lines = [f"# トピック一覧（最新{TOPICS_LIMIT}件）"]
-    for t in topics:
-        lines.append(f"- [{t['id']}] {t['title']}")
-
-    return "\n".join(lines) + "\n"
-
-
 def _build_reminders_section(conn) -> str:
     """リマインダー一覧を組み立てる。"""
     contents = get_active_reminder_contents_with_conn(conn)
@@ -136,7 +124,6 @@ def _build_session_context() -> str:
         sections = []
         builders = [
             _build_activities_section,
-            _build_topics_section,
             _build_reminders_section,
         ]
         for builder in builders:

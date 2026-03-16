@@ -43,6 +43,15 @@ decisions・logs（議論の詳細な経緯はlogsに入っていることが多
 
 取得フロー例: `get_topics`・`get_activities`で文脈の存在をチェック → `check_in`で作業コンテキストを取得 → `search`・`get_decisions`・`get_logs`で詳細な文脈を取得
 
+### 検索フロー
+
+1. アクティブコンテキストにIDがあれば`get_by_ids`で直接取得する。なければ`search`で検索する
+2. `search`結果のsnippetを確認し、詳細が必要なものを`get_by_ids`でピンポイント取得する
+3. `get_by_ids`の典型ユースケース:
+   - search結果からのチェリーピック（関連する上位N件をまとめて詳細取得）
+   - ログ・decision内の参照先をまとめて取得
+   - ユーザーがIDで「これ何？」と聞いたとき
+
 ## メタタグ
 
 メタタグは現在のトピックを追跡するために不可欠です。
