@@ -77,23 +77,26 @@ def _launch_auto_sync(transcript_path: Path, script_dir: Path) -> int:
     # transcriptをstdinとして渡す（bash版の cat $TRANSCRIPT_PATH | claude -p に相当）
     stdin_file = open(transcript_path)  # noqa: SIM115
     log_file = open(_LOG_FILE, "a")  # noqa: SIM115
-    proc = subprocess.Popen(
-        [
-            "claude", "-p",
-            "--model", "sonnet",
-            "--permission-mode", "dontAsk",
-            "--system-prompt", system_prompt,
-            "以下はClaude Codeセッションのtranscriptです。sync-memory手順に従って解析・記録してください。",
-        ],
-        stdin=stdin_file,
-        stdout=subprocess.DEVNULL,
-        stderr=log_file,
-        env=env,
-        start_new_session=True,
-    )
-    # 子プロセスがFDをコピー済みのため、親側は即クローズ
-    stdin_file.close()
-    log_file.close()
+    try:
+        proc = subprocess.Popen(
+            [
+                "claude", "-p",
+                "--model", "sonnet",
+                "--permission-mode", "dontAsk",
+                "--system-prompt", system_prompt,
+                "以下はClaude Codeセッションのtranscriptです。sync-memory手順に従って解析・記録してください。",
+            ],
+            stdin=stdin_file,
+            stdout=subprocess.DEVNULL,
+            stderr=log_file,
+            env=env,
+            start_new_session=True,
+        )
+    finally:
+        # 子プロセスがFDをコピー済みのため、親側は即クローズ
+        # Popen失敗時もリークしないようfinallyで保証
+        stdin_file.close()
+        log_file.close()
     return proc.pid
 
 
