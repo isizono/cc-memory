@@ -690,6 +690,19 @@ def update_reminder(reminder_id: int, content: Optional[str] = None, active: Opt
 
 
 @mcp.tool()
+def get_config() -> dict:
+    """現在の設定値を返す。スキルが環境変数ベースの設定を参照するために使用する。"""
+    from src import config
+    return {
+        "heartbeat_timeout": config.HEARTBEAT_TIMEOUT_MINUTES,
+        "in_progress_limit": config.IN_PROGRESS_LIMIT,
+        "pending_limit": config.PENDING_LIMIT,
+        "recency_decay_rate": config.RECENCY_DECAY_RATE,
+        "sync_disable_retrospective": config.SYNC_DISABLE_RETROSPECTIVE,
+    }
+
+
+@mcp.tool()
 def roll_dice(sides: int = 10) -> dict:
     """指定面数のダイスを振る。デフォルト1d10。"""
     return {"result": random.randint(1, sides)}

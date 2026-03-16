@@ -17,7 +17,14 @@ MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
 def get_db_path() -> str:
     """データベースファイルのパスを取得する"""
-    db_path = os.environ.get("DISCUSSION_DB_PATH")
+    from src.config import DB_PATH
+
+    # config.pyのDB_PATH（モジュールインポート時に解決済み）を優先
+    if DB_PATH:
+        return DB_PATH
+
+    # 実行時の環境変数もチェック（テスト互換: テスト中に動的設定されるケース）
+    db_path = os.environ.get("CCM_DB_PATH") or os.environ.get("DISCUSSION_DB_PATH")
     if db_path:
         return db_path
 

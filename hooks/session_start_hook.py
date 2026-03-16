@@ -15,6 +15,7 @@ _project_root = Path(__file__).resolve().parents[1]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+from src.config import IN_PROGRESS_LIMIT, PENDING_LIMIT
 from src.db import get_connection
 from src.services.activity_service import (
     get_active_domains_with_conn,
@@ -24,8 +25,6 @@ from src.services.topic_service import get_recent_topics_with_conn
 from src.services.reminder_service import get_active_reminder_contents_with_conn
 
 # 表示用の定数
-IN_PROGRESS_LIMIT = 3
-PENDING_LIMIT = 2
 TOPICS_LIMIT = 10
 
 

@@ -19,8 +19,7 @@ logger = logging.getLogger(__name__)
 
 # get_activitiesでdescriptionを切り詰める上限文字数
 ACTIVITY_DESC_MAX_LEN = 200
-# ハートビートのタイムアウト（分）。この時間以内のheartbeatを「活性」と判定する
-HEARTBEAT_TIMEOUT_MINUTES = 20
+from src.config import HEARTBEAT_TIMEOUT_MINUTES
 # DB格納可能なステータス値
 REAL_STATUSES = {"pending", "in_progress", "completed"}
 # "active"エイリアスが展開されるステータス

@@ -65,9 +65,7 @@ assert all(
     for i in range(len(ADAPTIVE_RRF_THRESHOLDS) - 1)
 ), "ADAPTIVE_RRF_THRESHOLDS must be sorted in ascending order of threshold"
 
-# Recency boost パラメータ
-# 半年(182日)で約0.80倍、1年(365日)で約0.66倍
-RECENCY_DECAY_RATE = 0.0014
+from src.config import RECENCY_DECAY_RATE
 
 # Query Expansion パラメータ
 QE_DISTANCE_THRESHOLD = 0.3   # コサイン距離。これ未満のタグを拡張候補とする
