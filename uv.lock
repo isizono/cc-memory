@@ -201,7 +201,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
-    { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "sentence-transformers" },
     { name = "sqlite-vec" },
@@ -217,7 +216,6 @@ dev = [
 requires-dist = [
     { name = "fastmcp" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sentence-transformers", specifier = ">=5,<6" },
     { name = "sqlite-vec", specifier = ">=0.1.6,<0.2" },

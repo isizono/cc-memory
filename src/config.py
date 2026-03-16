@@ -1,12 +1,5 @@
-"""cc-memory 設定モジュール。環境変数（.env対応）で定数をオーバーライド可能にする。"""
+"""cc-memory 設定モジュール。環境変数で定数をオーバーライド可能にする。"""
 import os
-from pathlib import Path
-
-from dotenv import load_dotenv
-
-# プロジェクトルートの .env を読み込む
-_project_root = Path(__file__).resolve().parent.parent
-load_dotenv(_project_root / ".env")
 
 # --- Database ---
 # CCM_DB_PATH を優先、なければ既存の DISCUSSION_DB_PATH にフォールバック

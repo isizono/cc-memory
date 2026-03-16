@@ -53,8 +53,5 @@ htmlcov/
 # Serena
 .serena/
 
-# Environment variables
-.env
-
 # Work files
 work/
