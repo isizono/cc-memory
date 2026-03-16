@@ -10,6 +10,7 @@ from src.services.tag_service import (
     ensure_tag_ids,
     link_tags,
     get_entity_tags,
+    get_entity_tags_batch,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,17 +87,17 @@ def add_material(title: str, content: str, tags: list[str], related: list[dict] 
         if related:
             _add_relation_with_conn(conn, "material", material_id, related)
 
-        conn.commit()
-
-        # タグを取得
+        # タグを取得（commit前）
         tag_strings = get_entity_tags(conn, "material_tags", "material_id", material_id)
 
-        # 作成した資材を取得
+        # 作成した資材を取得（commit前）
         row = conn.execute(
             "SELECT * FROM materials WHERE id = ?", (material_id,)
         ).fetchone()
         if not row:
             raise Exception("Failed to retrieve created material")
+
+        conn.commit()
 
         # embedding生成（失敗してもmaterial作成には影響しない）
         tag_text = " ".join(tag_strings) if tag_strings else ""
@@ -133,7 +134,7 @@ def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
         activity_id: アクティビティのID
 
     Returns:
-        資材カタログのリスト [{"id": int, "title": str, "created_at": str}, ...]
+        資材カタログのリスト [{"id": int, "title": str, "tags": list[str], "created_at": str}, ...]
     """
     rows = conn.execute(
         """SELECT m.id, m.title, m.created_at
@@ -143,7 +144,17 @@ def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
            ORDER BY m.created_at ASC""",
         (activity_id,),
     ).fetchall()
-    return [{"id": row["id"], "title": row["title"], "created_at": row["created_at"]} for row in rows]
+    material_ids = [row["id"] for row in rows]
+    tags_map = get_entity_tags_batch(conn, "material_tags", "material_id", material_ids) if material_ids else {}
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "tags": tags_map.get(row["id"], []),
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
 
 
 def get_material(material_id: int) -> dict:

@@ -677,19 +677,18 @@ class TestMaterialRelations:
         assert "tags" in mat_entry
         assert isinstance(mat_entry["tags"], list)
 
-    def test_material_self_reference_skipped(self, sample_entities):
-        """material-materialの自己参照はスキップされる"""
+    def test_material_self_reference_rejected(self, sample_entities):
+        """material-materialの自己参照はバリデーションで弾かれる"""
         e = sample_entities
         result = add_relation("material", e["m1"], [{"type": "material", "ids": [e["m1"]]}])
 
-        assert "error" not in result
-        assert result["added"] == 0
+        assert "error" in result
+        assert result["error"]["code"] == "UNSUPPORTED_RELATION"
 
-    def test_material_material_relation_raises(self, sample_entities):
-        """material-material（異なるID）はValueError"""
+    def test_material_material_relation_rejected(self, sample_entities):
+        """material-material（異なるID）はバリデーションで弾かれる"""
         e = sample_entities
         result = add_relation("material", e["m1"], [{"type": "material", "ids": [e["m2"]]}])
 
-        # material-materialは_get_insert_paramsでValueErrorが発生し、
-        # add_relationのexceptでcatchされる
         assert "error" in result
+        assert result["error"]["code"] == "UNSUPPORTED_RELATION"

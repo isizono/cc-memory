@@ -24,7 +24,7 @@ def _validate_entity_type(entity_type: str) -> dict | None:
     return None
 
 
-def _validate_targets(targets: list[dict]) -> dict | None:
+def _validate_targets(source_type: str, targets: list[dict]) -> dict | None:
     """targetsのバリデーション。不正な場合はエラーdictを返す。"""
     if not targets:
         return {
@@ -49,6 +49,14 @@ def _validate_targets(targets: list[dict]) -> dict | None:
                 "error": {
                     "code": "VALIDATION_ERROR",
                     "message": f"'ids' for type '{target['type']}' must be a non-empty list",
+                }
+            }
+        # material同士のリレーションは非サポート
+        if source_type == "material" and target["type"] == "material":
+            return {
+                "error": {
+                    "code": "UNSUPPORTED_RELATION",
+                    "message": "material-to-material relations are not supported",
                 }
             }
     return None
@@ -178,7 +186,7 @@ def add_relation(source_type: str, source_id: int, targets: list[dict]) -> dict:
     err = _validate_entity_type(source_type)
     if err:
         return err
-    err = _validate_targets(targets)
+    err = _validate_targets(source_type, targets)
     if err:
         return err
 
@@ -214,7 +222,7 @@ def remove_relation(source_type: str, source_id: int, targets: list[dict]) -> di
     err = _validate_entity_type(source_type)
     if err:
         return err
-    err = _validate_targets(targets)
+    err = _validate_targets(source_type, targets)
     if err:
         return err
 
