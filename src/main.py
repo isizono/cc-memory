@@ -235,12 +235,16 @@ def get_topics(
     tags: list[str] | None = None,
     limit: int = 10,
     offset: int = 0,
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict:
     """トピックを新しい順に取得する（ページネーション付き）。
 
     tags: タグ配列（optional）。指定時はAND条件でフィルタ。未指定時は全件返す。例: ["domain:cc-memory"]
+    since: ISO日付文字列（例: "2026-03-10"）。この日付以降に作成されたトピックのみ返す
+    until: ISO日付文字列。この日付以前に作成されたトピックのみ返す
     """
-    result = topic_service.get_topics(tags, limit, offset)
+    result = topic_service.get_topics(tags, limit, offset, since, until)
     if "error" not in result and tags:
         _maybe_inject_tag_notes(result, tags)
     return result
@@ -462,6 +466,8 @@ def get_activities(
     tags: list[str] | None = None,
     status: str = "active",
     limit: int = 5,
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict:
     """
     アクティビティ一覧を取得する（tagsでフィルタリング、statusでフィルタリング可能）。
@@ -471,6 +477,7 @@ def get_activities(
     - ドメイン指定: get_activities(["domain:cc-memory"])
     - 進行中のみ: get_activities(["domain:cc-memory"], status="in_progress")
     - 完了アクティビティの確認: get_activities(status="completed")
+    - 最近1週間: get_activities(since="2026-03-09")
 
     ワークフロー位置: アクティビティ状況の確認時
 
@@ -479,11 +486,13 @@ def get_activities(
         status: フィルタするステータス（active/pending/in_progress/completed、デフォルト: active）
                 "active"はpending+in_progressの両方を返すエイリアス
         limit: 取得件数上限（デフォルト: 5）
+        since: ISO日付文字列（例: "2026-03-10"）。この日付以降に更新されたアクティビティのみ返す
+        until: ISO日付文字列。この日付以前に更新されたアクティビティのみ返す
 
     Returns:
         アクティビティ一覧（total_countで該当ステータスの全件数を確認可能）
     """
-    result = activity_service.get_activities(tags, status, limit)
+    result = activity_service.get_activities(tags, status, limit, since, until)
     if "error" not in result and tags:
         _maybe_inject_tag_notes(result, tags)
     return result

@@ -1,5 +1,6 @@
 """アクティビティ管理サービス"""
 import logging
+import re
 import sqlite3
 from typing import Optional
 
@@ -131,7 +132,13 @@ def add_activity(
     return result
 
 
-def get_activities(tags: list[str] | None = None, status: str = "active", limit: int = 5) -> dict:
+def get_activities(
+    tags: list[str] | None = None,
+    status: str = "active",
+    limit: int = 5,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict:
     """
     アクティビティ一覧を取得（tagsでフィルタリング、statusでフィルタリング）
 
@@ -140,6 +147,8 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
         status: フィルタするステータス（active/pending/in_progress/completed、デフォルト: active）
                 "active"はpending+in_progressの両方を返すエイリアス
         limit: 取得件数上限（デフォルト: 5）
+        since: ISO日付文字列（例: "2026-03-10"）。この日付以降に更新されたアクティビティのみ返す
+        until: ISO日付文字列。この日付以前に更新されたアクティビティのみ返す
 
     Returns:
         アクティビティ一覧とtotal_count
@@ -164,6 +173,22 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
             "error": {
                 "code": "INVALID_STATUS",
                 "message": f"Invalid status: {status}. Must be one of {sorted(VALID_STATUSES)}",
+            }
+        }
+
+    date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$")
+    if since is not None and not date_pattern.match(since):
+        return {
+            "error": {
+                "code": "INVALID_PARAMETER",
+                "message": f"since must be ISO date format (YYYY-MM-DD), got '{since}'",
+            }
+        }
+    if until is not None and not date_pattern.match(until):
+        return {
+            "error": {
+                "code": "INVALID_PARAMETER",
+                "message": f"until must be ISO date format (YYYY-MM-DD), got '{until}'",
             }
         }
 
@@ -210,6 +235,16 @@ def get_activities(tags: list[str] | None = None, status: str = "active", limit:
             conditions.append("status = ?")
             where_params.append(status)
             order_clause = "updated_at DESC, id DESC"
+
+        if since is not None:
+            conditions.append("updated_at >= ?")
+            where_params.append(since)
+
+        if until is not None:
+            # 日付のみ指定時は当日を含めるため末尾に時刻を付与
+            until_value = until if " " in until else until + " 23:59:59"
+            conditions.append("updated_at <= ?")
+            where_params.append(until_value)
 
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)

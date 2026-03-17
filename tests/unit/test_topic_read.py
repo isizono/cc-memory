@@ -6,7 +6,7 @@ get_logs/get_decisionsは各アイテムにtagsフィールドを含む。
 import os
 import tempfile
 import pytest
-from src.db import init_database
+from src.db import init_database, get_connection
 from src.services.topic_service import (
     add_topic,
     get_topics,
@@ -176,6 +176,163 @@ def test_get_topics_and_filter(temp_db):
     assert "error" not in result
     assert result["total_count"] == 1
     assert result["topics"][0]["title"] == "Both Tags"
+
+
+def test_get_topics_since_filter(temp_db):
+    """since指定でcreated_at以降のトピックのみ返す"""
+    t1 = add_topic(title="Old Topic", description="Desc", tags=DEFAULT_TAGS)
+    t2 = add_topic(title="New Topic", description="Desc", tags=DEFAULT_TAGS)
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-01-01 00:00:00' WHERE id = ?",
+        (t1["topic_id"],),
+    )
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-03-15 00:00:00' WHERE id = ?",
+        (t2["topic_id"],),
+    )
+    conn.commit()
+    conn.close()
+
+    result = get_topics(tags=DEFAULT_TAGS, since="2026-03-01")
+
+    assert "error" not in result
+    assert result["total_count"] == 1
+    assert result["topics"][0]["title"] == "New Topic"
+
+
+def test_get_topics_until_filter(temp_db):
+    """until指定でcreated_at以前のトピックのみ返す"""
+    t1 = add_topic(title="Old Topic", description="Desc", tags=DEFAULT_TAGS)
+    t2 = add_topic(title="New Topic", description="Desc", tags=DEFAULT_TAGS)
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-01-01 00:00:00' WHERE id = ?",
+        (t1["topic_id"],),
+    )
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-03-15 00:00:00' WHERE id = ?",
+        (t2["topic_id"],),
+    )
+    conn.commit()
+    conn.close()
+
+    result = get_topics(tags=DEFAULT_TAGS, until="2026-02-01")
+
+    assert "error" not in result
+    assert result["total_count"] == 1
+    assert result["topics"][0]["title"] == "Old Topic"
+
+
+def test_get_topics_since_and_until_combined(temp_db):
+    """since+until指定で範囲内のトピックのみ返す"""
+    t1 = add_topic(title="Jan Topic", description="Desc", tags=DEFAULT_TAGS)
+    t2 = add_topic(title="Feb Topic", description="Desc", tags=DEFAULT_TAGS)
+    t3 = add_topic(title="Mar Topic", description="Desc", tags=DEFAULT_TAGS)
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-01-15 00:00:00' WHERE id = ?",
+        (t1["topic_id"],),
+    )
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-02-15 00:00:00' WHERE id = ?",
+        (t2["topic_id"],),
+    )
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-03-15 00:00:00' WHERE id = ?",
+        (t3["topic_id"],),
+    )
+    conn.commit()
+    conn.close()
+
+    result = get_topics(tags=DEFAULT_TAGS, since="2026-02-01", until="2026-02-28")
+
+    assert "error" not in result
+    assert result["total_count"] == 1
+    assert result["topics"][0]["title"] == "Feb Topic"
+
+
+def test_get_topics_since_no_match(temp_db):
+    """sinceが未来日で0件"""
+    add_topic(title="Topic", description="Desc", tags=DEFAULT_TAGS)
+
+    conn = get_connection()
+    conn.execute("UPDATE discussion_topics SET created_at = '2026-01-01 00:00:00'")
+    conn.commit()
+    conn.close()
+
+    result = get_topics(tags=DEFAULT_TAGS, since="2099-01-01")
+
+    assert "error" not in result
+    assert result["total_count"] == 0
+    assert result["topics"] == []
+
+
+def test_get_topics_since_without_tags(temp_db):
+    """tags未指定 + sinceで全トピックから日付フィルタ"""
+    t1 = add_topic(title="Old", description="Desc", tags=["domain:a"])
+    t2 = add_topic(title="New", description="Desc", tags=["domain:b"])
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-01-01 00:00:00' WHERE id = ?",
+        (t1["topic_id"],),
+    )
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-03-15 00:00:00' WHERE id = ?",
+        (t2["topic_id"],),
+    )
+    # init_databaseのfirst_topicも古い日付にする
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2025-01-01 00:00:00' WHERE id NOT IN (?, ?)",
+        (t1["topic_id"], t2["topic_id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    result = get_topics(since="2026-03-01")
+
+    assert "error" not in result
+    assert result["total_count"] == 1
+    assert result["topics"][0]["title"] == "New"
+
+
+def test_get_topics_until_includes_same_day(temp_db):
+    """until指定日と同日のレコードが含まれる（境界テスト）"""
+    t1 = add_topic(title="Same Day", description="Desc", tags=DEFAULT_TAGS)
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = '2026-03-15 12:30:00' WHERE id = ?",
+        (t1["topic_id"],),
+    )
+    conn.commit()
+    conn.close()
+
+    result = get_topics(tags=DEFAULT_TAGS, until="2026-03-15")
+
+    assert "error" not in result
+    assert result["total_count"] == 1
+    assert result["topics"][0]["title"] == "Same Day"
+
+
+def test_get_topics_invalid_since_format(temp_db):
+    """不正なsince形式でINVALID_PARAMETERエラー"""
+    result = get_topics(tags=DEFAULT_TAGS, since="not-a-date")
+
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_PARAMETER"
+
+
+def test_get_topics_invalid_until_format(temp_db):
+    """不正なuntil形式でINVALID_PARAMETERエラー"""
+    result = get_topics(tags=DEFAULT_TAGS, until="2026/03/15")
+
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_PARAMETER"
 
 
 def test_get_topics_has_tags_field(temp_db):

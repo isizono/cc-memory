@@ -1,4 +1,5 @@
 """議論トピック管理サービス"""
+import re
 import sqlite3
 from typing import Optional
 from src.db import get_connection, row_to_dict
@@ -119,6 +120,8 @@ def get_topics(
     tags: list[str] | None = None,
     limit: int = 10,
     offset: int = 0,
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict:
     """
     トピックを新しい順に取得する（ページネーション付き）。
@@ -127,6 +130,8 @@ def get_topics(
         tags: タグ配列（optional。指定時はAND条件でフィルタ、未指定時は全件）
         limit: 取得件数（デフォルト10）
         offset: スキップ件数（デフォルト0）
+        since: ISO日付文字列（例: "2026-03-10"）。この日付以降に作成されたトピックのみ返す
+        until: ISO日付文字列。この日付以前に作成されたトピックのみ返す
 
     Returns:
         トピック一覧（total_count付き）
@@ -151,6 +156,22 @@ def get_topics(
                 "error": {
                     "code": "INVALID_PARAMETER",
                     "message": "offset must be >= 0",
+                }
+            }
+
+        date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$")
+        if since is not None and not date_pattern.match(since):
+            return {
+                "error": {
+                    "code": "INVALID_PARAMETER",
+                    "message": f"since must be ISO date format (YYYY-MM-DD), got '{since}'",
+                }
+            }
+        if until is not None and not date_pattern.match(until):
+            return {
+                "error": {
+                    "code": "INVALID_PARAMETER",
+                    "message": f"until must be ISO date format (YYYY-MM-DD), got '{until}'",
                 }
             }
 
@@ -180,13 +201,28 @@ def get_topics(
                     return {"topics": [], "total_count": 0}
 
             # クエリ組み立て
+            conditions = []
+            where_params = []
+
             if topic_ids is not None:
                 id_placeholders = ",".join("?" * len(topic_ids))
-                where_clause = f"WHERE id IN ({id_placeholders})"
-                where_params = list(topic_ids)
+                conditions.append(f"id IN ({id_placeholders})")
+                where_params.extend(topic_ids)
+
+            if since is not None:
+                conditions.append("created_at >= ?")
+                where_params.append(since)
+
+            if until is not None:
+                # 日付のみ指定時は当日を含めるため末尾に時刻を付与
+                until_value = until if " " in until else until + " 23:59:59"
+                conditions.append("created_at <= ?")
+                where_params.append(until_value)
+
+            if conditions:
+                where_clause = "WHERE " + " AND ".join(conditions)
             else:
                 where_clause = ""
-                where_params = []
 
             count_row = conn.execute(
                 f"SELECT COUNT(*) as count FROM discussion_topics {where_clause}",
