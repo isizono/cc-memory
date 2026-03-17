@@ -188,7 +188,7 @@ def main() -> None:
                     state.increment_block_count()
                     _output(
                         "block",
-                        "トピックが変わりました。移動前に記録（add_decision / add_log / add_topic）を"
+                        "トピックが変わりました。移動前に記録（add_decisions / add_logs / add_topic）を"
                         "行ってください。",
                     )
                     return
@@ -313,7 +313,7 @@ def _handle_nudges(state: HookState, events: list[dict], current_turn: int) -> N
     # activity nudge: 直近turnにadd_decisionあり & add_activity/check_inなし
     recent_events = [e for e in events if e.get("turn", 0) == current_turn]
     has_decision = any(
-        e["e"] == "tool" and e.get("name") == "add_decision" for e in recent_events
+        e["e"] == "tool" and e.get("name") == "add_decisions" for e in recent_events
     )
     if has_decision:
         has_activity = any(

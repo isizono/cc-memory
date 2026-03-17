@@ -198,7 +198,7 @@ class TestHasRecentRecording:
         assert has_recent_recording(entries) is False
 
     def test_add_decision_detected(self):
-        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"])]
+        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decisions"])]
         assert has_recent_recording(entries) is True
 
     def test_add_topic_detected(self):
@@ -209,7 +209,7 @@ class TestHasRecentRecording:
         entries = [
             _make_assistant_entry(text="thinking..."),
             _make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__search"]),
-            _make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"]),
+            _make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decisions"]),
         ]
         assert has_recent_recording(entries) is True
 
@@ -244,7 +244,7 @@ class TestHasContextRetrievalCalls:
 
     def test_recording_tool_not_detected(self):
         """記録ツールはコンテキスト取得とみなさない"""
-        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"])]
+        entries = [_make_assistant_entry(tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decisions"])]
         assert has_context_retrieval_calls(entries) is False
 
 

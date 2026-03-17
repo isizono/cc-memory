@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.activity_service import add_activity, update_activity
-from src.services.decision_service import add_decision
+from tests.helpers import add_decision
 from src.services.material_service import add_material
 from src.services.relation_service import add_relation
 from src.services.topic_service import add_topic
@@ -132,12 +132,29 @@ class TestCheckIn:
 
         assert "error" not in result
         assert len(result["materials"]) == 2
-        # カタログ形式: id, title, created_at のみ（contentなし）
+        # カタログ形式: id, title, snippet, created_at（contentなし）
         for m in result["materials"]:
             assert "id" in m
             assert "title" in m
+            assert "snippet" in m
             assert "created_at" in m
             assert "content" not in m
+        # snippetの値が正しい
+        assert result["materials"][0]["snippet"] == "# 設計\n詳細内容"
+        assert result["materials"][1]["snippet"] == "# 調査\n結果内容"
+
+    def test_check_in_materials_snippet_truncated(self, activity_id):
+        """materialsのsnippetが200文字に切り詰められる"""
+        long_content = "あ" * 250
+        add_material("長い資材", long_content, ["domain:test"],
+                      related=[{"type": "activity", "ids": [activity_id]}])
+
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert len(result["materials"]) == 1
+        assert len(result["materials"][0]["snippet"]) == 200
+        assert result["materials"][0]["snippet"] == "あ" * 200
 
     def test_check_in_recent_decisions_empty_without_relations(self, activity_id):
         """リレーションがない場合、recent_decisionsは空リスト"""

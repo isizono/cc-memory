@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 from src.db import init_database
 from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
+from tests.helpers import add_decision
 
 
 DEFAULT_TAGS = ["domain:test"]

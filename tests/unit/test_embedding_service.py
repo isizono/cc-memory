@@ -7,7 +7,7 @@ import numpy as np
 
 from src.db import init_database, get_connection, execute_query
 from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
+from tests.helpers import add_decision
 from src.services.activity_service import add_activity
 import src.services.embedding_service as emb
 

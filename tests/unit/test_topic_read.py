@@ -11,8 +11,9 @@ from src.services.topic_service import (
     add_topic,
     get_topics,
 )
-from src.services.discussion_log_service import add_log, get_logs
-from src.services.decision_service import add_decision, get_decisions
+from tests.helpers import add_log, add_decision
+from src.services.discussion_log_service import get_logs
+from src.services.decision_service import get_decisions
 
 
 DEFAULT_TAGS = ["domain:test"]

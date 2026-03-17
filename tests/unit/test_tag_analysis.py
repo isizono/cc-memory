@@ -7,9 +7,8 @@ import pytest
 
 from src.db import init_database, get_connection
 from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
 from src.services.activity_service import add_activity
-from src.services.discussion_log_service import add_log
+from tests.helpers import add_log, add_decision
 from src.services.tag_analysis_service import (
     analyze_tags,
     calc_pmi,

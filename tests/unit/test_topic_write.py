@@ -4,8 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.topic_service import add_topic
-from src.services.discussion_log_service import add_log
-from src.services.decision_service import add_decision
+from tests.helpers import add_log, add_decision
 
 
 @pytest.fixture
@@ -320,7 +319,7 @@ def test_add_log_title_none_content_empty_error(temp_db):
     )
 
     assert "error" in result
-    assert result["error"]["code"] == "VALIDATION_ERROR"
+    assert result["error"]["code"] == "ITEM_ERROR"
     assert "title and content cannot both be empty" in result["error"]["message"]
 
 

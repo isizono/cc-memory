@@ -14,9 +14,9 @@ _CC_MEMORY_PREFIX = "mcp__plugin_claude-code-memory_cc-memory__"
 # --- 記録ツール ---
 
 _RECORDING_TOOLS = {
-    "add_decision",
+    "add_decisions",
     "add_topic",
-    "add_log",
+    "add_logs",
 }
 
 # --- check-in系ツール ---
@@ -282,12 +282,12 @@ def _extract_user_content_text(entry: dict) -> str:
 
 
 _RECORDING_TOOLS_FULL = [
-    f"{_CC_MEMORY_PREFIX}add_decision",
+    f"{_CC_MEMORY_PREFIX}add_decisions",
     f"{_CC_MEMORY_PREFIX}add_topic",
-    f"{_CC_MEMORY_PREFIX}add_log",
+    f"{_CC_MEMORY_PREFIX}add_logs",
 ]
 
-_ADD_DECISION_TOOL = f"{_CC_MEMORY_PREFIX}add_decision"
+_ADD_DECISION_TOOL = f"{_CC_MEMORY_PREFIX}add_decisions"
 
 _ACTIVITY_CHECKIN_TOOLS_FULL = [
     f"{_CC_MEMORY_PREFIX}check_in",
@@ -328,7 +328,7 @@ def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
 
 
 def has_recent_recording(entries: list[dict]) -> bool:
-    """entriesにadd_decision/add_topic/add_logのツール呼び出しがあるかチェック。"""
+    """entriesにadd_decisions/add_topic/add_logsのツール呼び出しがあるかチェック。"""
     return _has_tool_calls(entries, _RECORDING_TOOLS_FULL)
 
 

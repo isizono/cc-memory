@@ -92,7 +92,7 @@ check-inするとtag_notes・資材・関連decisionsが一括で返り、status
 
 ## 決定事項の記録
 
-あなたとユーザーが何かに合意したら、`add_decision`または`add_log`で記録してください。
+あなたとユーザーが何かに合意したら、`add_decisions`または`add_logs`で記録してください。
 この記録は、将来あなたの代わりにやってくるAIセッションが一番頼りにするものです。
 記録がなければ、同じ議論を繰り返すことになり、ユーザーとあなたの作業が無駄になります。
 
@@ -200,37 +200,50 @@ def add_topic(
 
 
 @mcp.tool()
-def add_log(
-    topic_id: int,
-    title: Optional[str] = None,
-    content: str = "",
-    tags: Optional[list[str]] = None,
-) -> dict:
-    """トピックに議論ログを追加する。
+def add_logs(items: list[dict]) -> dict:
+    """複数のログを一括追加する（最大10件）。
 
-    title: ログのタイトル。省略するとcontentの先頭行から自動生成される。
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:discuss", "migration", "breaking-change", "schema"]
+    items: ログ情報の配列。各要素は以下のキーを持つ:
+        - topic_id (int, 必須): 対象トピックのID
+        - content (str, 必須): 議論内容（マークダウン可）
+        - title (str, optional): ログのタイトル。省略時はcontentの先頭行から自動生成
+        - tags (list[str], optional): 追加タグ。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:discuss", "migration", "breaking-change", "schema"]
+
+    Returns: {created: [...], errors: [{index, error}]}
     """
-    result = discussion_log_service.add_log(topic_id, title, content, tags)
-    if "error" not in result and tags:
-        _maybe_inject_tag_notes(result, tags)
+    result = discussion_log_service.add_logs(items)
+    if "error" not in result:
+        # tag_notes: 全アイテムのタグをUNIONして1回注入
+        all_tags = set()
+        for item in items:
+            if item.get("tags"):
+                all_tags.update(item["tags"])
+        if all_tags:
+            _maybe_inject_tag_notes(result, list(all_tags))
     return result
 
 
 @mcp.tool()
-def add_decision(
-    decision: str,
-    reason: str,
-    topic_id: int,
-    tags: Optional[list[str]] = None,
-) -> dict:
-    """決定事項を記録する。
+def add_decisions(items: list[dict]) -> dict:
+    """複数の決定事項を一括記録する（最大10件）。
 
-    tags: 追加タグ（optional）。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:design", "naming-convention", "backward-compat"]
+    items: 決定事項情報の配列。各要素は以下のキーを持つ:
+        - topic_id (int, 必須): 関連するトピックのID
+        - decision (str, 必須): 決定内容
+        - reason (str, 必須): 決定の理由
+        - tags (list[str], optional): 追加タグ。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:design", "naming-convention", "backward-compat"]
+
+    Returns: {created: [...], errors: [{index, error}]}
     """
-    result = decision_service.add_decision(decision, reason, topic_id, tags)
-    if "error" not in result and tags:
-        _maybe_inject_tag_notes(result, tags)
+    result = decision_service.add_decisions(items)
+    if "error" not in result:
+        # tag_notes: 全アイテムのタグをUNIONして1回注入
+        all_tags = set()
+        for item in items:
+            if item.get("tags"):
+                all_tags.update(item["tags"])
+        if all_tags:
+            _maybe_inject_tag_notes(result, list(all_tags))
     return result
 
 
@@ -575,7 +588,7 @@ def add_material(
 
     Args:
         title: 資材のタイトル
-        content: 資材の本文（マークダウン形式推奨）
+        content: 資材の本文（マークダウン形式推奨）。先頭1-2文は内容の説明・要約を書くこと（check-in時にsnippetとして表示される）
         tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)
         related: 関連エンティティ（optional）。[{"type": "topic"|"activity", "ids": [int, ...]}] 形式。作成と同時にリレーションを張る
 
@@ -583,6 +596,34 @@ def add_material(
         作成された資材情報（material_id, title, content, tags, created_at）
     """
     return material_service.add_material(title, content, tags, related=related)
+
+
+@mcp.tool()
+def update_material(
+    material_id: int,
+    content: str | None = None,
+    title: str | None = None,
+) -> dict:
+    """
+    既存の資材を更新する。contentとtitleを個別または同時に更新できる。
+
+    contentは全体置換（部分更新やappendではない）。
+    少なくとも1つのパラメータを指定する必要がある。
+
+    典型的な使い方:
+    - 内容を改訂: update_material(material_id=5, content="# 改訂版\n...")
+    - タイトル変更: update_material(material_id=5, title="新しいタイトル")
+    - 両方更新: update_material(material_id=5, content="...", title="...")
+
+    Args:
+        material_id: 資材のID
+        content: 新しい本文（全体置換。optional）。先頭1-2文は内容の説明・要約を書くこと（check-inやsearchのsnippetに使われるため）
+        title: 新しいタイトル（optional）
+
+    Returns:
+        更新された資材情報（material_id, title, content, tags, created_at）
+    """
+    return material_service.update_material(material_id, content=content, title=title)
 
 
 @mcp.tool()

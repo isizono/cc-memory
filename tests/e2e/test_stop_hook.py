@@ -314,7 +314,7 @@ class TestTopicChange:
             [
                 _make_user_entry("switching with record"),
                 _make_assistant_entry(
-                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
+                    tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decisions"],
                 ),
                 _make_assistant_entry(text=f"{META_TAG_TOPIC_C}\nresponse"),
             ],
@@ -634,7 +634,7 @@ class TestNudge:
     """nudgeイベントの生成"""
 
     def test_activity_nudge_on_decision_without_activity(self, env_setup):
-        """add_decision + add_activityなし → activity nudgeイベント"""
+        """add_decisions + add_activityなし → activity nudgeイベント"""
         state_dir = env_setup["state_dir"]
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
@@ -642,7 +642,7 @@ class TestNudge:
             _make_user_entry("hi"),
             CONTEXT_RETRIEVAL_ENTRY,
             _make_assistant_entry(
-                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decision"],
+                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_decisions"],
                 text=f"{META_TAG}\nrecorded",
             ),
         ], transcript)
@@ -659,7 +659,7 @@ class TestNudge:
         assert len(activity_nudges) >= 1
 
     def test_no_activity_nudge_when_checkin_present(self, env_setup):
-        """add_decision + check_in → activity nudge不発"""
+        """add_decisions + check_in → activity nudge不発"""
         state_dir = env_setup["state_dir"]
 
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
@@ -668,7 +668,7 @@ class TestNudge:
             CONTEXT_RETRIEVAL_ENTRY,
             _make_assistant_entry(
                 tool_calls=[
-                    "mcp__plugin_claude-code-memory_cc-memory__add_decision",
+                    "mcp__plugin_claude-code-memory_cc-memory__add_decisions",
                     "mcp__plugin_claude-code-memory_cc-memory__check_in",
                 ],
                 tool_inputs=[{}, {"activity_id": 1}],

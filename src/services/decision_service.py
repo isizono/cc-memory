@@ -7,78 +7,122 @@ from src.services.tag_service import (
     validate_and_parse_tags,
     ensure_tag_ids,
     link_tags,
-    get_effective_tags,
     get_effective_tags_batch,
+    get_effective_tags_batch_by_ids,
 )
 
 
-def add_decision(
-    decision: str,
-    reason: str,
-    topic_id: int,
-    tags: Optional[list[str]] = None,
-) -> dict:
+def add_decisions(items: list[dict]) -> dict:
     """
-    決定事項を記録する。
+    複数の決定事項を一括記録する（最大10件）。
+
+    SAVEPOINT方式で各アイテムを個別に処理し、部分成功を許容する。
+    embedding生成はcreated分のみ一括で行う。
 
     Args:
-        decision: 決定内容
-        reason: 決定の理由
-        topic_id: 関連するトピックのID（必須）
-        tags: 追加タグ（optional）。省略時はtopicのタグを継承
+        items: 決定事項情報のリスト。各要素は以下のキーを持つ:
+            - topic_id (int, 必須): 関連するトピックのID
+            - decision (str, 必須): 決定内容
+            - reason (str, 必須): 決定の理由
+            - tags (list[str], optional): 追加タグ。省略時はtopicのタグを継承
 
     Returns:
-        作成された決定事項情報
+        {created: [...], errors: [{index, error}]}
     """
-    # タグのバリデーション（tagsが指定された場合のみ）
-    parsed_tags = None
-    if tags is not None:
-        parsed_tags = validate_and_parse_tags(tags)
-        if isinstance(parsed_tags, dict):
-            return parsed_tags
+    # バリデーション: 1 <= len(items) <= 10
+    if not items:
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "items must not be empty",
+            }
+        }
+    if len(items) > 10:
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "items must not exceed 10",
+            }
+        }
+
+    created = []
+    errors = []
 
     conn = get_connection()
     try:
-        # decisionをINSERT
-        cursor = conn.execute(
-            "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
-            (topic_id, decision, reason),
-        )
-        decision_id = cursor.lastrowid
+        for i, item in enumerate(items):
+            conn.execute(f"SAVEPOINT item_{i}")
+            try:
+                topic_id = item.get("topic_id")
+                decision = item.get("decision", "")
+                reason = item.get("reason", "")
+                tags = item.get("tags")
 
-        # タグをリンク（指定された場合のみ）
-        if parsed_tags:
-            tag_ids = ensure_tag_ids(conn, parsed_tags)
-            link_tags(conn, "decision_tags", "decision_id", decision_id, tag_ids)
+                # タグのバリデーション（tagsが指定された場合のみ）
+                parsed_tags = None
+                if tags is not None:
+                    parsed_tags = validate_and_parse_tags(tags)
+                    if isinstance(parsed_tags, dict):
+                        raise ValueError(parsed_tags["error"]["message"])
+
+                # decisionをINSERT
+                cursor = conn.execute(
+                    "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
+                    (topic_id, decision, reason),
+                )
+                decision_id = cursor.lastrowid
+
+                # タグをリンク（指定された場合のみ）
+                if parsed_tags:
+                    tag_ids = ensure_tag_ids(conn, parsed_tags)
+                    link_tags(conn, "decision_tags", "decision_id", decision_id, tag_ids)
+
+                conn.execute(f"RELEASE SAVEPOINT item_{i}")
+                created.append({
+                    "decision_id": decision_id,
+                    "topic_id": topic_id,
+                    "decision": decision,
+                    "reason": reason,
+                })
+
+            except Exception as e:
+                conn.execute(f"ROLLBACK TO SAVEPOINT item_{i}")
+                conn.execute(f"RELEASE SAVEPOINT item_{i}")
+                error_code = "CONSTRAINT_VIOLATION" if isinstance(e, sqlite3.IntegrityError) else "ITEM_ERROR"
+                errors.append({
+                    "index": i,
+                    "error": {"code": error_code, "message": str(e)},
+                })
 
         conn.commit()
 
-        # 有効タグを取得（topic_tags UNION decision_tags）
-        effective_tags = get_effective_tags(conn, "decision", decision_id)
+        # created分の有効タグを一括取得
+        if created:
+            created_ids = [c["decision_id"] for c in created]
+            tags_map = get_effective_tags_batch_by_ids(conn, "decision", created_ids)
 
-        # embedding生成（失敗してもdecision作成には影響しない）
-        tag_text = " ".join(effective_tags) if effective_tags else ""
-        generate_and_store_embedding("decision", decision_id, build_embedding_text(decision, reason, tag_text))
+            # created_atを一括取得
+            placeholders = ",".join("?" * len(created_ids))
+            rows = conn.execute(
+                f"SELECT id, created_at FROM decisions WHERE id IN ({placeholders})",
+                tuple(created_ids),
+            ).fetchall()
+            created_at_map = {row["id"]: row["created_at"] for row in rows}
 
-        return {
-            "decision_id": decision_id,
-            "topic_id": topic_id,
-            "decision": decision,
-            "reason": reason,
-            "tags": effective_tags,
-            "created_at": row_to_dict(
-                conn.execute("SELECT created_at FROM decisions WHERE id = ?", (decision_id,)).fetchone()
-            )["created_at"],
-        }
+            for c in created:
+                c["tags"] = tags_map.get(c["decision_id"], [])
+                c["created_at"] = created_at_map.get(c["decision_id"])
 
-    except sqlite3.IntegrityError as e:
-        conn.rollback()
-        return {
-            "error": {
-                "code": "CONSTRAINT_VIOLATION",
-                "message": str(e),
-            }
-        }
+            # embedding一括生成（created分のみ。失敗してもエラーにしない）
+            for c in created:
+                tag_text = " ".join(c["tags"]) if c["tags"] else ""
+                generate_and_store_embedding(
+                    "decision", c["decision_id"],
+                    build_embedding_text(c["decision"], c["reason"], tag_text),
+                )
+
+        return {"created": created, "errors": errors}
+
     except Exception as e:
         conn.rollback()
         return {

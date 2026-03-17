@@ -20,9 +20,8 @@ from src.services.search_service import (
 )
 from src.services import search_service
 from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
 from src.services.activity_service import add_activity
-from src.services.discussion_log_service import add_log
+from tests.helpers import add_log, add_decision
 from src.services.material_service import add_material
 import src.services.embedding_service as emb
 

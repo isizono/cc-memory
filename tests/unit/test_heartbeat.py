@@ -167,7 +167,7 @@ class TestExtractCheckinActivityId:
                 tool_inputs=[{"activity_id": 55}],
             ),
             _make_assistant_entry(
-                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_log"],
+                tool_calls=["mcp__plugin_claude-code-memory_cc-memory__add_logs"],
                 tool_inputs=[{"topic_id": 1, "content": "log"}],
             ),
         ]
