@@ -82,7 +82,7 @@ class TestRecordNudge:
         ctx = output["hookSpecificOutput"]["additionalContext"]
         assert "<system-reminder>" in ctx
         assert "Self-check before continuing" in ctx
-        assert "add_decision" in ctx
+        assert "add_decisions" in ctx
 
     def test_nudge_consumed_after_injection(self, state_dir):
         """nudge消費後は空JSON"""

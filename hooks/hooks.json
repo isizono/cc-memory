@@ -39,7 +39,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_claude-code-memory_cc-memory__add_decision",
+        "matcher": "mcp__plugin_claude-code-memory_cc-memory__add_decisions",
         "hooks": [
           {
             "type": "command",

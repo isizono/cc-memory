@@ -93,7 +93,7 @@ class TestEventsJsonl:
 
     def test_append_then_read(self, hook_state):
         events = [
-            {"e": "tool", "name": "add_decision", "turn": 1},
+            {"e": "tool", "name": "add_decisions", "turn": 1},
             {"e": "meta", "topic": "test-topic", "turn": 1},
         ]
         hook_state.append_events(events)
