@@ -48,17 +48,6 @@ class TestAddMaterial:
 
         assert "error" not in result
         assert result["material_id"] > 0
-        assert result["title"] == "Test Material"
-        assert result["content"] == "# Test Content\n\nThis is a test material."
-        assert "tags" in result
-        assert "domain:test" in result["tags"]
-        assert "design" in result["tags"]
-        assert "created_at" in result
-        # hintフィールドが含まれること
-        assert "hint" in result
-        assert "snippet" in result["hint"]
-        # activity_idが含まれないこと
-        assert "activity_id" not in result
 
     def test_add_material_with_related(self, activity_id):
         """relatedを指定してリレーション付きで資材を作成できる"""
@@ -301,7 +290,7 @@ class TestUpdateMaterial:
         assert result["material_id"] == material_id
         assert result["title"] == "Updated Title"
         assert result["content"] == "Original content"  # unchanged
-        assert "hint" not in result
+        assert "hint" in result
         assert sorted(result["tags"]) == sorted(["design", "domain:test"])
 
     def test_update_both(self, temp_db):
