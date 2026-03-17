@@ -16,8 +16,8 @@ from src.services.tag_service import (
     _injected_tags,
 )
 from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
-from src.services.discussion_log_service import add_log
+from src.services.decision_service import add_decisions
+from src.services.discussion_log_service import add_logs
 from src.services.activity_service import add_activity
 from src.services.search_service import get_by_ids
 import src.services.embedding_service as emb
@@ -492,7 +492,11 @@ class TestGetLogsResultBasedInjection:
 
         topic = add_topic(title="Test Topic", description="Desc", tags=["domain:test"])
         topic_id = topic["topic_id"]
-        add_log(topic_id, title="Test Log", content="content", tags=["domain:test"])
+        add_result = add_logs([
+            {"topic_id": topic_id, "title": "Test Log", "content": "content", "tags": ["domain:test"]}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
         update_tag("domain:test", "テスト教訓")
 
         result = get_logs(topic_id)
@@ -510,7 +514,11 @@ class TestGetLogsResultBasedInjection:
 
         topic = add_topic(title="Test Topic", description="Desc", tags=["domain:empty"])
         topic_id = topic["topic_id"]
-        add_log(topic_id, title="Test Log", content="content")
+        add_result = add_logs([
+            {"topic_id": topic_id, "title": "Test Log", "content": "content"}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
 
         result = get_logs(topic_id)
         assert "error" not in result
@@ -529,7 +537,11 @@ class TestGetDecisionsResultBasedInjection:
 
         topic = add_topic(title="Test Topic", description="Desc", tags=["domain:test"])
         topic_id = topic["topic_id"]
-        add_decision("Test Decision", "reason", topic_id, tags=["domain:test"])
+        add_result = add_decisions([
+            {"topic_id": topic_id, "decision": "Test Decision", "reason": "reason", "tags": ["domain:test"]}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
         update_tag("domain:test", "テスト教訓")
 
         result = get_decisions(topic_id)
@@ -547,7 +559,11 @@ class TestGetDecisionsResultBasedInjection:
 
         topic = add_topic(title="Test Topic", description="Desc", tags=["domain:empty"])
         topic_id = topic["topic_id"]
-        add_decision("Test Decision", "reason", topic_id)
+        add_result = add_decisions([
+            {"topic_id": topic_id, "decision": "Test Decision", "reason": "reason"}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
 
         result = get_decisions(topic_id)
         assert "error" not in result
@@ -735,7 +751,11 @@ class TestHandlerGetLogsInjection:
 
         topic = add_topic(title="Handler Topic", description="Desc", tags=["domain:handler"])
         topic_id = topic["topic_id"]
-        add_log(topic_id, title="Handler Log", content="content", tags=["domain:handler"])
+        add_result = add_logs([
+            {"topic_id": topic_id, "title": "Handler Log", "content": "content", "tags": ["domain:handler"]}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
         result = get_logs.fn(topic_id)
@@ -749,7 +769,11 @@ class TestHandlerGetLogsInjection:
 
         topic = add_topic(title="Handler Topic", description="Desc", tags=["domain:handler"])
         topic_id = topic["topic_id"]
-        add_log(topic_id, title="Handler Log", content="content", tags=["domain:handler"])
+        add_result = add_logs([
+            {"topic_id": topic_id, "title": "Handler Log", "content": "content", "tags": ["domain:handler"]}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
         get_logs.fn(topic_id)
@@ -765,7 +789,11 @@ class TestHandlerGetDecisionsInjection:
 
         topic = add_topic(title="Handler Topic", description="Desc", tags=["domain:handler"])
         topic_id = topic["topic_id"]
-        add_decision("Handler Decision", "reason", topic_id, tags=["domain:handler"])
+        add_result = add_decisions([
+            {"topic_id": topic_id, "decision": "Handler Decision", "reason": "reason", "tags": ["domain:handler"]}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
         result = get_decisions.fn(topic_id)
@@ -779,7 +807,11 @@ class TestHandlerGetDecisionsInjection:
 
         topic = add_topic(title="Handler Topic", description="Desc", tags=["domain:handler"])
         topic_id = topic["topic_id"]
-        add_decision("Handler Decision", "reason", topic_id, tags=["domain:handler"])
+        add_result = add_decisions([
+            {"topic_id": topic_id, "decision": "Handler Decision", "reason": "reason", "tags": ["domain:handler"]}
+        ])
+        assert "error" not in add_result
+        assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
         get_decisions.fn(topic_id)
