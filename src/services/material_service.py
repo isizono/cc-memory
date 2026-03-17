@@ -15,6 +15,8 @@ from src.services.tag_service import (
 
 logger = logging.getLogger(__name__)
 
+SNIPPET_MAX_LEN = 200
+
 
 def _material_to_response(material: dict, tags: list[str]) -> dict:
     """資材データをAPIレスポンス形式に変換（全文含む）"""
@@ -24,6 +26,7 @@ def _material_to_response(material: dict, tags: list[str]) -> dict:
         "content": material["content"],
         "tags": tags,
         "created_at": material["created_at"],
+        "hint": "contentの先頭1-2文は内容の説明・要約にしてください（check-in時にsnippetとして表示されます）",
     }
 
 
@@ -32,6 +35,7 @@ def _material_to_catalog(material: dict, tags: list[str]) -> dict:
     return {
         "material_id": material["id"],
         "title": material["title"],
+        "snippet": (material.get("content") or "")[:SNIPPET_MAX_LEN],
         "tags": tags,
         "created_at": material["created_at"],
     }
@@ -90,20 +94,13 @@ def add_material(title: str, content: str, tags: list[str], related: list[dict] 
         # タグを取得（commit前）
         tag_strings = get_entity_tags(conn, "material_tags", "material_id", material_id)
 
-        # 作成した資材を取得（commit前）
-        row = conn.execute(
-            "SELECT * FROM materials WHERE id = ?", (material_id,)
-        ).fetchone()
-        if not row:
-            raise Exception("Failed to retrieve created material")
-
         conn.commit()
 
         # embedding生成（失敗してもmaterial作成には影響しない）
         tag_text = " ".join(tag_strings) if tag_strings else ""
         generate_and_store_embedding("material", material_id, build_embedding_text(title, content, tag_text))
 
-        return _material_to_response(row_to_dict(row), tag_strings)
+        return {"material_id": material_id}
 
     except sqlite3.IntegrityError as e:
         conn.rollback()
@@ -134,10 +131,10 @@ def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
         activity_id: アクティビティのID
 
     Returns:
-        資材カタログのリスト [{"id": int, "title": str, "tags": list[str], "created_at": str}, ...]
+        資材カタログのリスト [{"id": int, "title": str, "snippet": str, "tags": list[str], "created_at": str}, ...]
     """
     rows = conn.execute(
-        """SELECT m.id, m.title, m.created_at
+        """SELECT m.id, m.title, m.content, m.created_at
            FROM materials m
            JOIN activity_material_relations amr ON amr.material_id = m.id
            WHERE amr.activity_id = ?
@@ -150,11 +147,130 @@ def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
         {
             "id": row["id"],
             "title": row["title"],
+            "snippet": (row["content"] or "")[:SNIPPET_MAX_LEN],
             "tags": tags_map.get(row["id"], []),
             "created_at": row["created_at"],
         }
         for row in rows
     ]
+
+
+def update_material(
+    material_id: int,
+    content: str | None = None,
+    title: str | None = None,
+) -> dict:
+    """
+    Update an existing material's content and/or title.
+
+    Args:
+        material_id: ID of the material to update
+        content: New content (full replace, optional)
+        title: New title (optional)
+
+    Returns:
+        Updated material info
+    """
+    if content is None and title is None:
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "At least one of content or title must be provided",
+            }
+        }
+
+    if title is not None and not title.strip():
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "title must not be empty",
+            }
+        }
+
+    if content is not None and not content.strip():
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "content must not be empty",
+            }
+        }
+
+    conn = get_connection()
+    try:
+        # Check existence
+        row = conn.execute(
+            "SELECT * FROM materials WHERE id = ?", (material_id,)
+        ).fetchone()
+        if not row:
+            return {
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": f"Material with id {material_id} not found",
+                }
+            }
+
+        # Build dynamic SQL
+        set_parts = []
+        values = []
+
+        if title is not None:
+            set_parts.append("title = ?")
+            values.append(title)
+
+        if content is not None:
+            set_parts.append("content = ?")
+            values.append(content)
+
+        set_clause = ", ".join(set_parts)
+        values.append(material_id)
+
+        conn.execute(
+            f"UPDATE materials SET {set_clause} WHERE id = ?",
+            tuple(values),
+        )
+        conn.commit()
+
+        # Retrieve updated material
+        row = conn.execute(
+            "SELECT * FROM materials WHERE id = ?", (material_id,)
+        ).fetchone()
+        if not row:
+            raise Exception("Failed to retrieve updated material")
+
+        # Get tags
+        tag_strings = get_entity_tags(conn, "material_tags", "material_id", material_id)
+
+        # Regenerate embedding
+        updated = row_to_dict(row)
+        tag_text = " ".join(tag_strings) if tag_strings else ""
+        generate_and_store_embedding(
+            "material", material_id,
+            build_embedding_text(updated["title"], updated["content"], tag_text),
+        )
+
+        result = _material_to_response(updated, tag_strings)
+        if content is not None:
+            result["hint"] = "contentの先頭1-2文は内容の説明・要約を書いてください。check-inやsearchのsnippetに使われます。"
+        return result
+
+    except sqlite3.IntegrityError as e:
+        conn.rollback()
+        return {
+            "error": {
+                "code": "CONSTRAINT_VIOLATION",
+                "message": str(e),
+            }
+        }
+    except Exception as e:
+        conn.rollback()
+        return {
+            "error": {
+                "code": "DATABASE_ERROR",
+                "message": str(e),
+            }
+        }
+    finally:
+        conn.close()
 
 
 def get_material(material_id: int) -> dict:

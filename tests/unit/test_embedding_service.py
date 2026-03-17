@@ -376,7 +376,6 @@ def test_add_topic_succeeds_when_embedding_fails(temp_db, monkeypatch):
 
     assert "error" not in topic
     assert topic["topic_id"] is not None
-    assert topic["title"] == "Embedding失敗テスト"
 
     # vec_indexにはembeddingがない
     rows = execute_query(

@@ -51,11 +51,6 @@ class TestAddActivity:
 
         assert "error" not in result
         assert result["activity_id"] > 0
-        assert result["title"] == "New Activity"
-        assert result["description"] == "Activity description"
-        assert result["status"] == "pending"
-        assert "tags" in result
-        assert "domain:test" in result["tags"]
         assert "check_in_result" not in result
 
     def test_add_activity_tags_required(self, temp_db):
@@ -79,7 +74,25 @@ class TestAddActivity:
         )
 
         assert "error" not in result
-        assert sorted(result["tags"]) == ["domain:cc-memory", "hooks"]
+        assert result["activity_id"] > 0
+
+        # DBで直接確認
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT t.namespace, t.name
+                FROM tags t
+                JOIN activity_tags at ON t.id = at.tag_id
+                WHERE at.activity_id = ?
+                ORDER BY t.namespace, t.name
+                """,
+                (result["activity_id"],),
+            ).fetchall()
+            tag_names = sorted(f"{r['namespace']}:{r['name']}" if r['namespace'] else r['name'] for r in rows)
+            assert tag_names == ["domain:cc-memory", "hooks"]
+        finally:
+            conn.close()
 
     def test_add_activity_with_check_in_default(self, temp_db):
         """デフォルト（check_in=True）でcheck_in_resultが含まれる"""
@@ -108,7 +121,6 @@ class TestAddActivity:
         )
 
         assert "error" not in result
-        assert result["status"] == "pending"
         assert "check_in_result" not in result
 
     def test_add_activity_with_related(self, temp_db):

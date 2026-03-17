@@ -89,19 +89,11 @@ def add_activity(
         # タグを取得
         tag_strings = get_entity_tags(conn, "activity_tags", "activity_id", activity_id)
 
-        # 作成したアクティビティを取得
-        cursor = conn.execute("SELECT * FROM activities WHERE id = ?", (activity_id,))
-        row = cursor.fetchone()
-        if not row:
-            raise Exception("Failed to retrieve created activity")
-
-        activity = row_to_dict(row)
-
         # embedding生成（失敗してもactivity作成には影響しない）
         tag_text = " ".join(tag_strings) if tag_strings else ""
         generate_and_store_embedding("activity", activity_id, build_embedding_text(title, description, tag_text))
 
-        result = _activity_to_response(activity, tag_strings)
+        result = {"activity_id": activity_id}
 
     except sqlite3.IntegrityError as e:
         conn.rollback()

@@ -141,21 +141,32 @@ def build_instructions() -> str:
     return RULES
 
 
-def _maybe_inject_tag_notes(result: dict, tag_strings: list[str]) -> dict:
+def _maybe_inject_tag_notes(result: dict, tag_strings: list[str], mark: bool = True) -> dict:
     """結果dictにtag_notesを注入する（notes があれば）
 
     Note: always_inject_namespacesは渡さない（意図的）。
     intent:タグがこの経路で_injected_tagsに登録されるが、
     check_in経路はalways_inject_namespacesで常時注入が保証されるため問題ない。
+
+    Args:
+        mark: False の場合、_injected_tags を参照も更新もしない（読み取り経路用）。
     """
     conn = get_connection()
     try:
-        notes = collect_tag_notes_for_injection(conn, tag_strings)
+        notes = collect_tag_notes_for_injection(conn, tag_strings, mark=mark)
     finally:
         conn.close()
     if notes:
         result["tag_notes"] = notes
     return result
+
+
+def _collect_result_tags(items: list[dict]) -> list[str]:
+    """結果アイテムからユニークなタグを収集する"""
+    tags: set[str] = set()
+    for item in items:
+        tags.update(item.get("tags", []))
+    return sorted(tags)
 
 
 # MCPサーバーを作成
@@ -251,8 +262,10 @@ def get_topics(
     until: ISO日付文字列。この日付以前に作成されたトピックのみ返す
     """
     result = topic_service.get_topics(tags, limit, offset, since, until)
-    if "error" not in result and tags:
-        _maybe_inject_tag_notes(result, tags)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("topics", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
     return result
 
 
@@ -263,7 +276,12 @@ def get_logs(
     limit: int = 30,
 ) -> dict:
     """指定トピックの議論ログを取得する。"""
-    return discussion_log_service.get_logs(topic_id, start_id, limit)
+    result = discussion_log_service.get_logs(topic_id, start_id, limit)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("logs", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
+    return result
 
 
 @mcp.tool()
@@ -273,7 +291,12 @@ def get_decisions(
     limit: int = 30,
 ) -> dict:
     """指定トピックに関連する決定事項を取得する。"""
-    return decision_service.get_decisions(topic_id, start_id, limit)
+    result = decision_service.get_decisions(topic_id, start_id, limit)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("decisions", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
+    return result
 
 
 @mcp.tool()
@@ -504,8 +527,10 @@ def get_activities(
         アクティビティ一覧（total_countで該当ステータスの全件数を確認可能）
     """
     result = activity_service.get_activities(tags, status, limit, since, until)
-    if "error" not in result and tags:
-        _maybe_inject_tag_notes(result, tags)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("activities", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
     return result
 
 
@@ -563,7 +588,7 @@ def add_material(
 
     Args:
         title: 資材のタイトル
-        content: 資材の本文（マークダウン形式推奨）
+        content: 資材の本文（マークダウン形式推奨）。先頭1-2文は内容の説明・要約を書くこと（check-in時にsnippetとして表示される）
         tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)
         related: 関連エンティティ（optional）。[{"type": "topic"|"activity", "ids": [int, ...]}] 形式。作成と同時にリレーションを張る
 
@@ -571,6 +596,34 @@ def add_material(
         作成された資材情報（material_id, title, content, tags, created_at）
     """
     return material_service.add_material(title, content, tags, related=related)
+
+
+@mcp.tool()
+def update_material(
+    material_id: int,
+    content: str | None = None,
+    title: str | None = None,
+) -> dict:
+    """
+    既存の資材を更新する。contentとtitleを個別または同時に更新できる。
+
+    contentは全体置換（部分更新やappendではない）。
+    少なくとも1つのパラメータを指定する必要がある。
+
+    典型的な使い方:
+    - 内容を改訂: update_material(material_id=5, content="# 改訂版\n...")
+    - タイトル変更: update_material(material_id=5, title="新しいタイトル")
+    - 両方更新: update_material(material_id=5, content="...", title="...")
+
+    Args:
+        material_id: 資材のID
+        content: 新しい本文（全体置換。optional）。先頭1-2文は内容の説明・要約を書くこと（check-inやsearchのsnippetに使われるため）
+        title: 新しいタイトル（optional）
+
+    Returns:
+        更新された資材情報（material_id, title, content, tags, created_at）
+    """
+    return material_service.update_material(material_id, content=content, title=title)
 
 
 @mcp.tool()

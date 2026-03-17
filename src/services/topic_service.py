@@ -67,16 +67,6 @@ def add_topic(
         # タグを取得
         tag_strings = get_entity_tags(conn, "topic_tags", "topic_id", topic_id)
 
-        # 作成したトピックを取得
-        cursor = conn.execute(
-            "SELECT * FROM discussion_topics WHERE id = ?", (topic_id,)
-        )
-        row = cursor.fetchone()
-        if not row:
-            raise Exception("Failed to retrieve created topic")
-
-        topic = row_to_dict(row)
-
         # embedding生成（失敗してもtopic作成には影響しない）
         tag_text = " ".join(tag_strings) if tag_strings else ""
         embedding_text = build_embedding_text(title, description, tag_text)
@@ -85,13 +75,7 @@ def add_topic(
         # 類似トピックをサジェスト（生成済みembeddingを再利用しHTTPリクエストを削減）
         similar = find_similar_topics(embedding_text, exclude_id=topic_id, embedding=embedding_vec)
 
-        result = {
-            "topic_id": topic["id"],
-            "title": topic["title"],
-            "description": topic["description"],
-            "tags": tag_strings,
-            "created_at": topic["created_at"],
-        }
+        result = {"topic_id": topic_id}
         if similar:
             result["similar_topics"] = similar
         return result
