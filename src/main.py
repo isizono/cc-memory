@@ -586,6 +586,34 @@ def add_material(
 
 
 @mcp.tool()
+def update_material(
+    material_id: int,
+    content: str | None = None,
+    title: str | None = None,
+) -> dict:
+    """
+    既存の資材を更新する。contentとtitleを個別または同時に更新できる。
+
+    contentは全体置換（部分更新やappendではない）。
+    少なくとも1つのパラメータを指定する必要がある。
+
+    典型的な使い方:
+    - 内容を改訂: update_material(material_id=5, content="# 改訂版\n...")
+    - タイトル変更: update_material(material_id=5, title="新しいタイトル")
+    - 両方更新: update_material(material_id=5, content="...", title="...")
+
+    Args:
+        material_id: 資材のID
+        content: 新しい本文（全体置換。optional）。先頭1-2文は内容の説明・要約を書くこと（check-inやsearchのsnippetに使われるため）
+        title: 新しいタイトル（optional）
+
+    Returns:
+        更新された資材情報（material_id, title, content, tags, created_at）
+    """
+    return material_service.update_material(material_id, content=content, title=title)
+
+
+@mcp.tool()
 def get_material(
     material_id: int,
 ) -> dict:

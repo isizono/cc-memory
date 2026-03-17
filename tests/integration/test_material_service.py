@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database
 from src.services.activity_service import add_activity
-from src.services.material_service import add_material, get_material
+from src.services.material_service import add_material, get_material, update_material
 from src.services.search_service import get_by_id, get_by_ids
 
 
@@ -263,3 +263,108 @@ class TestGetByIdMaterial:
         # activity
         assert result["results"][1]["type"] == "activity"
         assert result["results"][1]["data"]["id"] == activity_id
+
+
+class TestUpdateMaterial:
+    """update_material integration tests"""
+
+    def _create_material(self):
+        """Helper to create a material for update tests"""
+        return add_material(
+            title="Original Title",
+            content="Original content",
+            tags=["domain:test", "design"],
+        )
+
+    def test_update_content(self, temp_db):
+        """Updating content only succeeds"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, content="Updated content")
+
+        assert "error" not in result
+        assert result["material_id"] == material_id
+        assert result["content"] == "Updated content"
+        assert result["title"] == "Original Title"  # unchanged
+        assert "hint" in result
+        assert sorted(result["tags"]) == sorted(["design", "domain:test"])
+
+    def test_update_title(self, temp_db):
+        """Updating title only succeeds"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, title="Updated Title")
+
+        assert "error" not in result
+        assert result["material_id"] == material_id
+        assert result["title"] == "Updated Title"
+        assert result["content"] == "Original content"  # unchanged
+        assert "hint" not in result
+        assert sorted(result["tags"]) == sorted(["design", "domain:test"])
+
+    def test_update_both(self, temp_db):
+        """Updating both content and title succeeds"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, content="New content", title="New Title")
+
+        assert "error" not in result
+        assert result["material_id"] == material_id
+        assert result["title"] == "New Title"
+        assert result["content"] == "New content"
+        assert "hint" in result
+
+    def test_update_neither_returns_validation_error(self, temp_db):
+        """Providing neither content nor title returns VALIDATION_ERROR"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id)
+
+        assert "error" in result
+        assert result["error"]["code"] == "VALIDATION_ERROR"
+        assert "At least one" in result["error"]["message"]
+
+    def test_update_not_found(self, temp_db):
+        """Non-existent material_id returns NOT_FOUND"""
+        result = update_material(9999, content="New content")
+
+        assert "error" in result
+        assert result["error"]["code"] == "NOT_FOUND"
+
+    def test_update_empty_title(self, temp_db):
+        """Empty title returns VALIDATION_ERROR"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, title="")
+
+        assert "error" in result
+        assert result["error"]["code"] == "VALIDATION_ERROR"
+        assert "title" in result["error"]["message"]
+
+    def test_update_persists_via_get_material(self, temp_db):
+        """get_materialで更新が永続化されていることを確認"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        update_material(material_id, content="Persisted content", title="Persisted Title")
+
+        fetched = get_material(material_id)
+        assert fetched["title"] == "Persisted Title"
+        assert fetched["content"] == "Persisted content"
+        assert sorted(fetched["tags"]) == sorted(["design", "domain:test"])
+
+    def test_update_empty_content(self, temp_db):
+        """Empty content returns VALIDATION_ERROR"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, content="")
+
+        assert "error" in result
+        assert result["error"]["code"] == "VALIDATION_ERROR"
+        assert "content" in result["error"]["message"]
