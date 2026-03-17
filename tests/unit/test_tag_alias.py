@@ -13,7 +13,6 @@ from src.services.tag_service import (
     ensure_tag_ids,
     resolve_tag_ids,
     update_tag,
-    link_tags,
 )
 from src.services.search_service import _resolve_tag_ids_readonly
 from src.services.topic_service import add_topic

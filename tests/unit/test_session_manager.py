@@ -2,8 +2,6 @@
 import threading
 import time
 
-import pytest
-
 from src.services.session_manager import SessionManager
 
 

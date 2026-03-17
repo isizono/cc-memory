@@ -2,7 +2,7 @@
 import os
 import tempfile
 import pytest
-from src.db import init_database, execute_query, get_connection
+from src.db import init_database, get_connection
 from src.services.activity_service import add_activity, get_activities, update_activity
 from src.services.tag_service import _injected_tags
 from src.services.activity_service import add_activity, get_activities, update_activity, ACTIVITY_DESC_MAX_LEN

@@ -11,7 +11,6 @@ import pytest
 from src.db import init_database, get_connection
 from src.services.tag_service import (
     update_tag,
-    ensure_tag_ids,
     collect_tag_notes_for_injection,
     _injected_tags,
 )

@@ -30,17 +30,6 @@ def _material_to_response(material: dict, tags: list[str]) -> dict:
     }
 
 
-def _material_to_catalog(material: dict, tags: list[str]) -> dict:
-    """資材データをカタログ形式に変換（全文なし）"""
-    return {
-        "material_id": material["id"],
-        "title": material["title"],
-        "snippet": (material.get("content") or "")[:SNIPPET_MAX_LEN],
-        "tags": tags,
-        "created_at": material["created_at"],
-    }
-
-
 def add_material(title: str, content: str, tags: list[str], related: list[dict] | None = None) -> dict:
     """
     資材を追加する

@@ -13,7 +13,6 @@ from src.services.tag_service import (
     link_tags,
     format_tags,
     get_entity_tags,
-    get_effective_tags,
     get_effective_tags_batch,
 )
 import src.services.embedding_service as emb

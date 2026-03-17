@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from src.db import init_database, get_connection
+from src.db import init_database
 from scripts.snapshot import (
     get_row_counts,
     health_check,
