@@ -271,6 +271,7 @@ class TestUpdateMaterial:
         assert result["content"] == "Updated content"
         assert result["title"] == "Original Title"  # unchanged
         assert "hint" in result
+        assert sorted(result["tags"]) == sorted(["design", "domain:test"])
 
     def test_update_title(self, temp_db):
         """Updating title only succeeds"""
@@ -283,7 +284,8 @@ class TestUpdateMaterial:
         assert result["material_id"] == material_id
         assert result["title"] == "Updated Title"
         assert result["content"] == "Original content"  # unchanged
-        assert "hint" in result
+        assert "hint" not in result
+        assert sorted(result["tags"]) == sorted(["design", "domain:test"])
 
     def test_update_both(self, temp_db):
         """Updating both content and title succeeds"""
@@ -326,6 +328,18 @@ class TestUpdateMaterial:
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
         assert "title" in result["error"]["message"]
+
+    def test_update_persists_via_get_material(self, temp_db):
+        """get_materialで更新が永続化されていることを確認"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        update_material(material_id, content="Persisted content", title="Persisted Title")
+
+        fetched = get_material(material_id)
+        assert fetched["title"] == "Persisted Title"
+        assert fetched["content"] == "Persisted content"
+        assert sorted(fetched["tags"]) == sorted(["design", "domain:test"])
 
     def test_update_empty_content(self, temp_db):
         """Empty content returns VALIDATION_ERROR"""

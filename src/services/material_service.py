@@ -251,7 +251,8 @@ def update_material(
         )
 
         result = _material_to_response(updated, tag_strings)
-        result["hint"] = "contentの先頭1-2文は内容の説明・要約を書いてください。check-inやsearchのsnippetに使われます。"
+        if content is not None:
+            result["hint"] = "contentの先頭1-2文は内容の説明・要約を書いてください。check-inやsearchのsnippetに使われます。"
         return result
 
     except sqlite3.IntegrityError as e:
