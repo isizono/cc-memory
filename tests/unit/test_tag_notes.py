@@ -15,7 +15,7 @@ from src.services.tag_service import (
     _injected_tags,
 )
 from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
+from tests.helpers import add_decision
 from src.services.search_service import get_by_ids
 import src.services.embedding_service as emb
 

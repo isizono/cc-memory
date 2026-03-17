@@ -8,90 +8,135 @@ from src.services.tag_service import (
     validate_and_parse_tags,
     ensure_tag_ids,
     link_tags,
-    get_effective_tags,
     get_effective_tags_batch,
+    get_effective_tags_batch_by_ids,
 )
 
 
-def add_log(
-    topic_id: int,
-    title: Optional[str] = None,
-    content: str = "",
-    tags: Optional[list[str]] = None,
-) -> dict:
+def _auto_generate_title(content: str) -> str | None:
+    """contentの先頭行からtitleを自動生成する。生成できない場合はNoneを返す。"""
+    first_line = re.split(r'\n|\\n', content.strip(), maxsplit=1)[0].strip()
+    title = first_line[:50] if len(first_line) > 50 else first_line
+    return title if title else None
+
+
+def add_logs(items: list[dict]) -> dict:
     """
-    トピックに議論ログ（1やりとり）を追加する。
+    複数のログを一括追加する（最大10件）。
+
+    SAVEPOINT方式で各アイテムを個別に処理し、部分成功を許容する。
+    embedding生成はcreated分のみ一括で行う。
 
     Args:
-        topic_id: 対象トピックのID
-        title: ログのタイトル。省略時はcontentの先頭行から自動生成される
-        content: 議論内容（マークダウン可）
-        tags: 追加タグ（optional）。省略時はtopicのタグを継承
+        items: ログ情報のリスト。各要素は以下のキーを持つ:
+            - topic_id (int, 必須): 対象トピックのID
+            - content (str, 必須): 議論内容（マークダウン可）
+            - title (str, optional): ログのタイトル。省略時はcontentの先頭行から自動生成
+            - tags (list[str], optional): 追加タグ。省略時はtopicのタグを継承
 
     Returns:
-        作成されたログ情報
+        {created: [...], errors: [{index, error}]}
     """
-    if not title or not title.strip():
-        # titleが未指定・空の場合、contentから自動生成を試みる
-        first_line = re.split(r'\n|\\n', content.strip(), maxsplit=1)[0].strip()
-        title = first_line[:50] if len(first_line) > 50 else first_line
-        if not title:
-            return {
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "title and content cannot both be empty"
-                }
+    # バリデーション: 1 <= len(items) <= 10
+    if not items:
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "items must not be empty",
             }
+        }
+    if len(items) > 10:
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "items must not exceed 10",
+            }
+        }
 
-    # タグのバリデーション（tagsが指定された場合のみ）
-    parsed_tags = None
-    if tags is not None:
-        parsed_tags = validate_and_parse_tags(tags)
-        if isinstance(parsed_tags, dict):
-            return parsed_tags
+    created = []
+    errors = []
 
     conn = get_connection()
     try:
-        # ログをINSERT
-        cursor = conn.execute(
-            "INSERT INTO discussion_logs (topic_id, title, content) VALUES (?, ?, ?)",
-            (topic_id, title, content),
-        )
-        log_id = cursor.lastrowid
+        for i, item in enumerate(items):
+            conn.execute(f"SAVEPOINT item_{i}")
+            try:
+                topic_id = item.get("topic_id")
+                content = item.get("content", "")
+                title = item.get("title")
+                tags = item.get("tags")
 
-        # タグをリンク（指定された場合のみ）
-        if parsed_tags:
-            tag_ids = ensure_tag_ids(conn, parsed_tags)
-            link_tags(conn, "log_tags", "log_id", log_id, tag_ids)
+                # title自動生成
+                if not title or not title.strip():
+                    title = _auto_generate_title(content)
+                    if not title:
+                        raise ValueError("title and content cannot both be empty")
+
+                # タグのバリデーション（tagsが指定された場合のみ）
+                parsed_tags = None
+                if tags is not None:
+                    parsed_tags = validate_and_parse_tags(tags)
+                    if isinstance(parsed_tags, dict):
+                        raise ValueError(parsed_tags["error"]["message"])
+
+                # ログをINSERT
+                cursor = conn.execute(
+                    "INSERT INTO discussion_logs (topic_id, title, content) VALUES (?, ?, ?)",
+                    (topic_id, title, content),
+                )
+                log_id = cursor.lastrowid
+
+                # タグをリンク（指定された場合のみ）
+                if parsed_tags:
+                    tag_ids = ensure_tag_ids(conn, parsed_tags)
+                    link_tags(conn, "log_tags", "log_id", log_id, tag_ids)
+
+                conn.execute(f"RELEASE SAVEPOINT item_{i}")
+                created.append({
+                    "log_id": log_id,
+                    "topic_id": topic_id,
+                    "title": title,
+                    "content": content,
+                })
+
+            except Exception as e:
+                conn.execute(f"ROLLBACK TO SAVEPOINT item_{i}")
+                conn.execute(f"RELEASE SAVEPOINT item_{i}")
+                error_code = "CONSTRAINT_VIOLATION" if isinstance(e, sqlite3.IntegrityError) else "ITEM_ERROR"
+                errors.append({
+                    "index": i,
+                    "error": {"code": error_code, "message": str(e)},
+                })
 
         conn.commit()
 
-        # 有効タグを取得（topic_tags UNION log_tags）
-        effective_tags = get_effective_tags(conn, "log", log_id)
+        # created分の有効タグを一括取得
+        if created:
+            created_ids = [c["log_id"] for c in created]
+            tags_map = get_effective_tags_batch_by_ids(conn, "log", created_ids)
 
-        # embedding生成（失敗してもlog作成には影響しない）
-        tag_text = " ".join(effective_tags) if effective_tags else ""
-        generate_and_store_embedding("log", log_id, build_embedding_text(title, content, tag_text))
+            # created_atを一括取得
+            placeholders = ",".join("?" * len(created_ids))
+            rows = conn.execute(
+                f"SELECT id, created_at FROM discussion_logs WHERE id IN ({placeholders})",
+                tuple(created_ids),
+            ).fetchall()
+            created_at_map = {row["id"]: row["created_at"] for row in rows}
 
-        return {
-            "log_id": log_id,
-            "topic_id": topic_id,
-            "title": title,
-            "content": content,
-            "tags": effective_tags,
-            "created_at": row_to_dict(
-                conn.execute("SELECT created_at FROM discussion_logs WHERE id = ?", (log_id,)).fetchone()
-            )["created_at"],
-        }
+            for c in created:
+                c["tags"] = tags_map.get(c["log_id"], [])
+                c["created_at"] = created_at_map.get(c["log_id"])
 
-    except sqlite3.IntegrityError as e:
-        conn.rollback()
-        return {
-            "error": {
-                "code": "CONSTRAINT_VIOLATION",
-                "message": str(e),
-            }
-        }
+            # embedding一括生成（created分のみ。失敗してもエラーにしない）
+            for c in created:
+                tag_text = " ".join(c["tags"]) if c["tags"] else ""
+                generate_and_store_embedding(
+                    "log", c["log_id"],
+                    build_embedding_text(c["title"], c["content"], tag_text),
+                )
+
+        return {"created": created, "errors": errors}
+
     except Exception as e:
         conn.rollback()
         return {

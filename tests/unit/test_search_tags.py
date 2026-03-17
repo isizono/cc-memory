@@ -4,9 +4,8 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.topic_service import add_topic
-from src.services.decision_service import add_decision
 from src.services.activity_service import add_activity
-from src.services.discussion_log_service import add_log
+from tests.helpers import add_log, add_decision
 from src.services.tag_service import search_tags, _SEARCH_TAGS_RRF_K
 import src.services.embedding_service as emb
 

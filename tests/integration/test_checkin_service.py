@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.activity_service import add_activity, update_activity
-from src.services.decision_service import add_decision
+from tests.helpers import add_decision
 from src.services.material_service import add_material
 from src.services.relation_service import add_relation
 from src.services.topic_service import add_topic

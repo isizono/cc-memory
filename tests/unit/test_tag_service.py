@@ -320,7 +320,7 @@ class TestGetEffectiveTagsBatch:
     def test_batch_returns_topic_tags(self, temp_db):
         """topicのタグがdecisionに継承される"""
         from src.services.topic_service import add_topic
-        from src.services.decision_service import add_decision
+        from tests.helpers import add_decision
 
         topic = add_topic(title="Test", description="Test", tags=["domain:test"])
         dec = add_decision(
@@ -340,7 +340,7 @@ class TestGetEffectiveTagsBatch:
     def test_batch_includes_entity_tags(self, temp_db):
         """entity個別タグも含まれる"""
         from src.services.topic_service import add_topic
-        from src.services.decision_service import add_decision
+        from tests.helpers import add_decision
 
         topic = add_topic(title="Test", description="Test", tags=["domain:test"])
         dec = add_decision(
@@ -376,7 +376,7 @@ class TestGetEffectiveTagsBatch:
     def test_batch_multiple_entities(self, temp_db):
         """複数entityのタグを一括取得"""
         from src.services.topic_service import add_topic
-        from src.services.discussion_log_service import add_log
+        from tests.helpers import add_log
 
         topic = add_topic(title="Test", description="Test", tags=["domain:test"])
         log1 = add_log(topic_id=topic["topic_id"], title="Log 1", content="Content 1")
