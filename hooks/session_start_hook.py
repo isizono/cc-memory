@@ -3,6 +3,7 @@
 サービス層経由でDBからデータを取得し、セッション開始時のコンテキストを注入する。
 - アクティビティ一覧（active = in_progress + pending）
 - リマインダー（active=1）
+- 検索フローガイダンス（静的テキスト）
 """
 import json
 import sys
@@ -111,6 +112,18 @@ def _build_reminders_section(conn) -> str:
     return "\n".join(lines) + "\n"
 
 
+_SEARCH_FLOW_GUIDE = """\
+# 検索フロー
+
+1. アクティブコンテキストにIDがあれば`get_by_ids`で直接取得する。なければ`search`で検索する
+2. `search`結果のsnippetを確認し、詳細が必要なものを`get_by_ids`でピンポイント取得する
+3. `get_by_ids`の典型ユースケース:
+   - search結果からのチェリーピック（関連する上位N件をまとめて詳細取得）
+   - ログ・decision内の参照先をまとめて取得
+   - ユーザーがIDで「これ何？」と聞いたとき
+"""
+
+
 def _build_session_context() -> str:
     """サービス層経由でセッション開始時のコンテキストを組み立てる。
 
@@ -133,8 +146,8 @@ def _build_session_context() -> str:
                 # セクション単位で失敗を許容し、残りのセクションは返す
                 pass
 
-        if not sections:
-            return ""
+        # 静的セクション（DB不要）
+        sections.append(_SEARCH_FLOW_GUIDE)
 
         context = "\n".join(sections)
         context += "\n詳細はsearch / get_decisions / get_logs / check_in等で取得してください。"

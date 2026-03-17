@@ -123,13 +123,14 @@ class TestSessionStartHookBasic:
         assert result["hookSpecificOutput"]["hookEventName"] == "SessionStart"
         assert "additionalContext" in result["hookSpecificOutput"]
 
-    def test_empty_db_returns_empty_context(self, temp_db):
-        """データが空の場合、additionalContextが空文字列"""
+    def test_empty_db_returns_static_guide_only(self, temp_db):
+        """データが空の場合、静的な検索フローガイドのみ出力される"""
         # 初期データを削除
         conn = get_connection()
         try:
             conn.execute("DELETE FROM reminders")
             conn.execute("DELETE FROM discussion_topics")
+            conn.execute("DELETE FROM activities")
             conn.commit()
         finally:
             conn.close()
@@ -137,7 +138,9 @@ class TestSessionStartHookBasic:
         result = _run_session_start_hook(temp_db)
 
         context = result["hookSpecificOutput"]["additionalContext"]
-        assert context == ""
+        assert "検索フロー" in context
+        assert "アクティビティ一覧" not in context
+        assert "リマインダー" not in context
 
 
 class TestSessionStartHookActivities:
