@@ -180,18 +180,67 @@ class TestSessionStartHookActivities:
         assert "完了済み" not in context
 
 
-class TestSessionStartHookTopics:
-    """トピック一覧の注入テスト"""
+class TestSessionStartHookTopicsRemoved:
+    """トピック一覧が廃止されていることのテスト"""
 
-    def test_topics_section_present(self, temp_db):
-        """トピックがあればトピック一覧セクションが含まれる"""
-        _seed_topic( "テストトピック")
+    def test_topics_section_not_present(self, temp_db):
+        """トピックがあってもトピック一覧セクションは表示されない"""
+        _seed_topic("テストトピック")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
 
-        assert "# トピック一覧" in context
-        assert "テストトピック" in context
+        assert "# トピック一覧" not in context
+        assert "テストトピック" not in context
+
+
+class TestSessionStartHookDuplicateActivities:
+    """複数domainに属するアクティビティの重複排除テスト"""
+
+    def _seed_activity_multi_domain(self, title: str, domains: list[str], status: str = "in_progress") -> int:
+        """複数domainに属するアクティビティを作成"""
+        conn = get_connection()
+        try:
+            cursor = conn.execute(
+                "INSERT INTO activities (title, description, status) VALUES (?, ?, ?)",
+                (title, "desc", status),
+            )
+            activity_id = cursor.lastrowid
+
+            for domain in domains:
+                tag_row = conn.execute(
+                    "SELECT id FROM tags WHERE namespace = 'domain' AND name = ?",
+                    (domain,),
+                ).fetchone()
+                if tag_row:
+                    tag_id = tag_row["id"]
+                else:
+                    cursor = conn.execute(
+                        "INSERT INTO tags (namespace, name) VALUES ('domain', ?)",
+                        (domain,),
+                    )
+                    tag_id = cursor.lastrowid
+
+                conn.execute(
+                    "INSERT INTO activity_tags (activity_id, tag_id) VALUES (?, ?)",
+                    (activity_id, tag_id),
+                )
+            conn.commit()
+            return activity_id
+        finally:
+            conn.close()
+
+    def test_multi_domain_activity_shown_once(self, temp_db):
+        """複数domainに属するアクティビティは1回だけ表示される"""
+        activity_id = self._seed_activity_multi_domain(
+            "[作業] 重複テスト", ["alpha", "beta"]
+        )
+
+        result = _run_session_start_hook(temp_db)
+        context = result["hookSpecificOutput"]["additionalContext"]
+
+        # アクティビティIDが1回だけ出現する
+        assert context.count(f"[{activity_id}]") == 1
 
 
 class TestSessionStartHookReminders:
@@ -230,7 +279,7 @@ class TestSessionStartHookFooter:
 
     def test_footer_present_when_content_exists(self, temp_db):
         """コンテンツがある場合、フッターの案内文が含まれる"""
-        _seed_topic( "何かのトピック")
+        _seed_activity("[作業] フッターテスト用", status="in_progress")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
