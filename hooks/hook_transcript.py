@@ -328,7 +328,7 @@ def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
 
 
 def has_recent_recording(entries: list[dict]) -> bool:
-    """entriesにadd_decision/add_topic/add_logのツール呼び出しがあるかチェック。"""
+    """entriesにadd_decisions/add_topic/add_logsのツール呼び出しがあるかチェック。"""
     return _has_tool_calls(entries, _RECORDING_TOOLS_FULL)
 
 
