@@ -986,6 +986,7 @@ def collect_tag_notes_for_injection(
     conn: sqlite3.Connection,
     tag_strings: list[str],
     always_inject_namespaces: list[str] | None = None,
+    mark: bool = True,
 ) -> list[dict] | None:
     """未注入タグの notes を収集し、注入済みとしてマークする。
 
@@ -995,6 +996,8 @@ def collect_tag_notes_for_injection(
         always_inject_namespaces: 常時注入するnamespaceのリスト（例: ["intent"]）。
             このnamespaceに属するタグは _injected_tags チェックをスキップし、
             毎回 notes を返す。_injected_tags には登録しない。
+        mark: True（デフォルト）の場合、_injected_tags のチェックと更新を行う。
+            False の場合、_injected_tags を参照も更新もしない（読み取り経路用）。
 
     Returns:
         notes があるタグの一覧。なければ None
@@ -1014,14 +1017,17 @@ def collect_tag_notes_for_injection(
             normal_tags.append(t)
             normal_parsed.append((ns, name))
 
-    # 通常タグ: 未注入のもののみ
-    new_normal = [
-        (t, p) for t, p in zip(normal_tags, normal_parsed)
-        if t not in _injected_tags
-    ]
-
-    # 通常タグをすべてマーク（notes の有無に関わらず）
-    _injected_tags.update(t for t, _ in new_normal)
+    if mark:
+        # 通常タグ: 未注入のもののみ
+        new_normal = [
+            (t, p) for t, p in zip(normal_tags, normal_parsed)
+            if t not in _injected_tags
+        ]
+        # 通常タグをすべてマーク（notes の有無に関わらず）
+        _injected_tags.update(t for t, _ in new_normal)
+    else:
+        # mark=False: 全タグをクエリ対象にし、_injected_tags は更新しない
+        new_normal = list(zip(normal_tags, normal_parsed))
 
     # クエリ対象: new_normal + always（always_tagsは毎回クエリ）
     parsed = [p for _, p in new_normal] + always_parsed
