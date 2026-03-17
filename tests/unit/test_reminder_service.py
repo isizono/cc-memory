@@ -27,9 +27,6 @@ class TestAddReminder:
 
         assert "error" not in result
         assert result["reminder_id"] is not None
-        assert result["content"] == "テストリマインダー"
-        assert result["active"] == 1
-        assert result["created_at"] is not None
 
     def test_add_reminder_empty_content(self, temp_db):
         """空文字のcontentでバリデーションエラーになる"""

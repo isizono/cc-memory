@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Instructions injected into the MCP server
 RULES = """# cc-memory 利用ガイド
 
-このツール群は、過去の会話コンテキスト（トピック・決定事項・ログ・アクティビティ）の取得と記録を行います。
+このツール群は、過去の会話コンテキスト（トピック・決定事項・ログ・アクティビティ・資材）の取得と記録を行います。
 取得と記録の両輪を回すことで、ユーザーの繰り返し説明を防ぎ、次のAIセッションに文脈を引き継いだり、あなたの作業に必要な情報を入手できたりします。
 この仕組みがうまく回るには、あなたの協力が不可欠です。
 記録は自分のためだけでなく、次に来るエージェントのためのものです。責任を持って残してください。
@@ -42,15 +42,6 @@ decisions・logs（議論の詳細な経緯はlogsに入っていることが多
 一度関連がありそうなキーワードで`search`してみてください。ユーザーに意図を直接聞く前に検索、です。
 
 取得フロー例: `get_topics`・`get_activities`で文脈の存在をチェック → `check_in`で作業コンテキストを取得 → `search`・`get_decisions`・`get_logs`で詳細な文脈を取得
-
-### 検索フロー
-
-1. アクティブコンテキストにIDがあれば`get_by_ids`で直接取得する。なければ`search`で検索する
-2. `search`結果のsnippetを確認し、詳細が必要なものを`get_by_ids`でピンポイント取得する
-3. `get_by_ids`の典型ユースケース:
-   - search結果からのチェリーピック（関連する上位N件をまとめて詳細取得）
-   - ログ・decision内の参照先をまとめて取得
-   - ユーザーがIDで「これ何？」と聞いたとき
 
 ## メタタグ
 
@@ -84,7 +75,7 @@ decisions・logs（議論の詳細な経緯はlogsに入っていることが多
     ただの話し合いや調査もこれに相当します。必ずしも次のステップに移るわけではないので、積極的に作成してcheck inしてください
   - **設計（design）**: どう作業するかをユーザーと合意し、作業アクティビティを作ります。
     決して急がず、ユーザーが納得するまで辛抱強くサポートしてください。
-    作業アクティビティには詳しい背景情報を書いてください。ほとんどの場合、作業は別のAIが担当します。
+    作業アクティビティには詳しい背景情報を書いてください。別のセッションが引き継ぐ可能性があります。
   - **作業（implement）**: 着手前にアクティビティの仕様と関連するdecisionを確認します。
     完了したらユーザーの承認を得てからアクティビティを閉じてください。
 これらはそのまま`intent:`タグに対応します。
@@ -112,9 +103,9 @@ check-inするとtag_notes・資材・関連decisionsが一括で返り、status
 普段は見返されないかもしれませんが、いざ必要になったときに
 そのトピックについての詳細な情報が失われていないことがとても重要です。
 
-### 資材（material）
+## 資材（material）
 
-セッション中に生成された情報（ドラフト、分析結果、SA出力など）はセッション終了とともに消えます。
+セッション中に生成された情報（ドラフト、分析結果、調査レポートなど）はセッション終了とともに消えます。
 これらの生情報は要約せず、`add_material`でタグ付きの独立エンティティとして保存してください。
 資材は決定事項と違って「双方の合意」が不要な成果物です。成果物が出た時点でユーザーに確認せず呼んでください。
 `related`で関連するアクティビティやトピックとリレーションを張れます。
@@ -150,21 +141,32 @@ def build_instructions() -> str:
     return RULES
 
 
-def _maybe_inject_tag_notes(result: dict, tag_strings: list[str]) -> dict:
+def _maybe_inject_tag_notes(result: dict, tag_strings: list[str], mark: bool = True) -> dict:
     """結果dictにtag_notesを注入する（notes があれば）
 
     Note: always_inject_namespacesは渡さない（意図的）。
     intent:タグがこの経路で_injected_tagsに登録されるが、
     check_in経路はalways_inject_namespacesで常時注入が保証されるため問題ない。
+
+    Args:
+        mark: False の場合、_injected_tags を参照も更新もしない（読み取り経路用）。
     """
     conn = get_connection()
     try:
-        notes = collect_tag_notes_for_injection(conn, tag_strings)
+        notes = collect_tag_notes_for_injection(conn, tag_strings, mark=mark)
     finally:
         conn.close()
     if notes:
         result["tag_notes"] = notes
     return result
+
+
+def _collect_result_tags(items: list[dict]) -> list[str]:
+    """結果アイテムからユニークなタグを収集する"""
+    tags: set[str] = set()
+    for item in items:
+        tags.update(item.get("tags", []))
+    return sorted(tags)
 
 
 # MCPサーバーを作成
@@ -247,8 +249,10 @@ def get_topics(
     until: ISO日付文字列。この日付以前に作成されたトピックのみ返す
     """
     result = topic_service.get_topics(tags, limit, offset, since, until)
-    if "error" not in result and tags:
-        _maybe_inject_tag_notes(result, tags)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("topics", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
     return result
 
 
@@ -259,7 +263,12 @@ def get_logs(
     limit: int = 30,
 ) -> dict:
     """指定トピックの議論ログを取得する。"""
-    return discussion_log_service.get_logs(topic_id, start_id, limit)
+    result = discussion_log_service.get_logs(topic_id, start_id, limit)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("logs", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
+    return result
 
 
 @mcp.tool()
@@ -269,7 +278,12 @@ def get_decisions(
     limit: int = 30,
 ) -> dict:
     """指定トピックに関連する決定事項を取得する。"""
-    return decision_service.get_decisions(topic_id, start_id, limit)
+    result = decision_service.get_decisions(topic_id, start_id, limit)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("decisions", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
+    return result
 
 
 @mcp.tool()
@@ -500,8 +514,10 @@ def get_activities(
         アクティビティ一覧（total_countで該当ステータスの全件数を確認可能）
     """
     result = activity_service.get_activities(tags, status, limit, since, until)
-    if "error" not in result and tags:
-        _maybe_inject_tag_notes(result, tags)
+    if "error" not in result:
+        all_tags = _collect_result_tags(result.get("activities", []))
+        if all_tags:
+            _maybe_inject_tag_notes(result, all_tags, mark=False)
     return result
 
 

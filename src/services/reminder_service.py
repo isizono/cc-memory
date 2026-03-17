@@ -44,20 +44,7 @@ def add_reminder(content: str) -> dict:
         reminder_id = cursor.lastrowid
         conn.commit()
 
-        row = conn.execute(
-            "SELECT * FROM reminders WHERE id = ?",
-            (reminder_id,),
-        ).fetchone()
-        if not row:
-            raise Exception("Failed to retrieve created reminder")
-
-        reminder = row_to_dict(row)
-        return {
-            "reminder_id": reminder["id"],
-            "content": reminder["content"],
-            "active": reminder["active"],
-            "created_at": reminder["created_at"],
-        }
+        return {"reminder_id": reminder_id}
 
     except Exception as e:
         conn.rollback()

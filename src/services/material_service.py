@@ -94,20 +94,13 @@ def add_material(title: str, content: str, tags: list[str], related: list[dict] 
         # タグを取得（commit前）
         tag_strings = get_entity_tags(conn, "material_tags", "material_id", material_id)
 
-        # 作成した資材を取得（commit前）
-        row = conn.execute(
-            "SELECT * FROM materials WHERE id = ?", (material_id,)
-        ).fetchone()
-        if not row:
-            raise Exception("Failed to retrieve created material")
-
         conn.commit()
 
         # embedding生成（失敗してもmaterial作成には影響しない）
         tag_text = " ".join(tag_strings) if tag_strings else ""
         generate_and_store_embedding("material", material_id, build_embedding_text(title, content, tag_text))
 
-        return _material_to_response(row_to_dict(row), tag_strings)
+        return {"material_id": material_id}
 
     except sqlite3.IntegrityError as e:
         conn.rollback()

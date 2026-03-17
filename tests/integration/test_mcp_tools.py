@@ -30,10 +30,6 @@ def test_add_topic_with_tags(temp_db):
 
     assert "error" not in result
     assert result["topic_id"] > 0
-    assert result["title"] == "test-topic"
-    assert result["description"] == "テストトピック"
-    assert "domain:test" in result["tags"]
-    assert "created_at" in result
 
 
 def test_add_topic_tags_required(temp_db):
@@ -59,9 +55,6 @@ def test_add_activity_with_tags(temp_db):
 
     assert "error" not in result
     assert result["activity_id"] > 0
-    assert result["title"] == "test-activity"
-    assert result["status"] == "pending"
-    assert "domain:test" in result["tags"]
 
 
 def test_add_activity_tags_required(temp_db):

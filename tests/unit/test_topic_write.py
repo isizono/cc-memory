@@ -34,11 +34,6 @@ def test_add_topic_success(temp_db):
 
     assert "error" not in result
     assert result["topic_id"] > 0
-    assert result["title"] == "開発フローの詳細"
-    assert result["description"] == "プランモードの使い方、タスク分解の粒度を決定する"
-    assert "tags" in result
-    assert "domain:test" in result["tags"]
-    assert "created_at" in result
 
 
 def test_add_topic_tags_stored(temp_db):
@@ -50,7 +45,6 @@ def test_add_topic_tags_stored(temp_db):
     )
 
     assert "error" not in result
-    assert sorted(result["tags"]) == ["domain:cc-memory", "hooks", "intent:design"]
 
     # DBで直接確認
     conn = get_connection()
@@ -103,7 +97,25 @@ def test_add_topic_duplicate_tags(temp_db):
     )
 
     assert "error" not in result
-    assert sorted(result["tags"]) == ["domain:test", "hooks"]
+    assert result["topic_id"] > 0
+
+    # DBで直接確認
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.namespace, t.name
+            FROM tags t
+            JOIN topic_tags tt ON t.id = tt.tag_id
+            WHERE tt.topic_id = ?
+            ORDER BY t.namespace, t.name
+            """,
+            (result["topic_id"],),
+        ).fetchall()
+        tag_names = sorted(f"{r['namespace']}:{r['name']}" if r['namespace'] else r['name'] for r in rows)
+        assert tag_names == ["domain:test", "hooks"]
+    finally:
+        conn.close()
 
 
 def test_add_topic_empty_string_tags(temp_db):
@@ -115,7 +127,25 @@ def test_add_topic_empty_string_tags(temp_db):
     )
 
     assert "error" not in result
-    assert sorted(result["tags"]) == ["domain:test", "hooks"]
+    assert result["topic_id"] > 0
+
+    # DBで直接確認
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.namespace, t.name
+            FROM tags t
+            JOIN topic_tags tt ON t.id = tt.tag_id
+            WHERE tt.topic_id = ?
+            ORDER BY t.namespace, t.name
+            """,
+            (result["topic_id"],),
+        ).fetchall()
+        tag_names = sorted(f"{r['namespace']}:{r['name']}" if r['namespace'] else r['name'] for r in rows)
+        assert tag_names == ["domain:test", "hooks"]
+    finally:
+        conn.close()
 
 
 def test_add_topic_empty_string_tags_only(temp_db):
@@ -181,7 +211,9 @@ def test_add_log_without_tags(temp_db):
     )
 
     assert "error" not in result
-    assert sorted(result["tags"]) == sorted(topic["tags"])
+    # topicの継承タグが効いている
+    assert "domain:test" in result["tags"]
+    assert "hooks" in result["tags"]
 
 
 def test_add_log_multiple(temp_db):
@@ -357,7 +389,9 @@ def test_add_decision_without_tags(temp_db):
     )
 
     assert "error" not in result
-    assert sorted(result["tags"]) == sorted(topic["tags"])
+    # topicの継承タグが効いている
+    assert "domain:test" in result["tags"]
+    assert "intent:design" in result["tags"]
 
 
 def test_add_decision_without_topic(temp_db):
