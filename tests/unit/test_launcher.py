@@ -400,25 +400,12 @@ class TestMainRetryLoop:
             ensure_count["calls"] += 1
             return True
 
-        monkeypatch.setattr(launcher, "_cleanup_done", False)
+        self._setup_main(monkeypatch, [
+            launcher.ServerDisconnected("lost"),
+            None,
+        ])
+        # _setup_mainの後にcounting_ensureで再上書き
         monkeypatch.setattr(launcher, "_ensure_server_running", counting_ensure)
-        monkeypatch.setattr(launcher, "_register_session", lambda: True)
-        monkeypatch.setattr(launcher, "_unregister_session", lambda: True)
-        monkeypatch.setattr(launcher.time, "sleep", lambda _: None)
-
-        bridge_effects = [launcher.ServerDisconnected("lost"), None]
-        call_count = {"bridge": 0}
-
-        def fake_asyncio_run(coro):
-            coro.close()
-            idx = call_count["bridge"]
-            call_count["bridge"] += 1
-            effect = bridge_effects[idx]
-            if isinstance(effect, Exception):
-                raise effect
-            return effect
-
-        monkeypatch.setattr(launcher.asyncio, "run", fake_asyncio_run)
         launcher.main()
         assert ensure_count["calls"] == 2
 
@@ -429,30 +416,14 @@ class TestMainRetryLoop:
         def tracking_sleep(seconds):
             sleep_values.append(seconds)
 
-        monkeypatch.setattr(launcher, "_cleanup_done", False)
-        monkeypatch.setattr(launcher, "_ensure_server_running", lambda: True)
-        monkeypatch.setattr(launcher, "_register_session", lambda: True)
-        monkeypatch.setattr(launcher, "_unregister_session", lambda: True)
+        self._setup_main(monkeypatch, [
+            launcher.ServerDisconnected("lost"),
+            launcher.ServerDisconnected("lost"),
+            launcher.ServerDisconnected("lost"),
+            launcher.ServerDisconnected("lost"),
+        ])
+        # _setup_mainのsleep上書きの後にtracking_sleepで再上書き
         monkeypatch.setattr(launcher.time, "sleep", tracking_sleep)
-
-        bridge_effects = [
-            launcher.ServerDisconnected("lost"),
-            launcher.ServerDisconnected("lost"),
-            launcher.ServerDisconnected("lost"),
-            launcher.ServerDisconnected("lost"),
-        ]
-        call_count = {"bridge": 0}
-
-        def fake_asyncio_run(coro):
-            coro.close()
-            idx = call_count["bridge"]
-            call_count["bridge"] += 1
-            effect = bridge_effects[idx]
-            if isinstance(effect, Exception):
-                raise effect
-            return effect
-
-        monkeypatch.setattr(launcher.asyncio, "run", fake_asyncio_run)
         launcher.main()
         assert sleep_values == [2, 4, 8]
 

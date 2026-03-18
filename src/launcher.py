@@ -226,6 +226,7 @@ async def _bridge() -> None:
                         except Exception:
                             logger.exception("Failed to parse stdin message")
             except Exception:
+                stdin_eof = True  # stdin エラーも「stdin 側起因」として扱う
                 logger.debug("stdin reader ended")
             finally:
                 if buffer.strip():
@@ -299,23 +300,15 @@ def main() -> None:
             break  # stdin EOF → 正常終了
         except KeyboardInterrupt:
             break
-        except ServerDisconnected as e:
+        except Exception as e:
+            # anyioのExceptionGroupによりServerDisconnectedが直接キャッチできない
+            # ケースがあるため、例外の種類を問わず統一的にリトライする
             if attempt >= MAX_RETRIES:
-                logger.error("Bridge disconnected, max retries (%d) exceeded: %s", MAX_RETRIES, e)
+                logger.error("Bridge failed, max retries (%d) exceeded: %s", MAX_RETRIES, e)
                 break
             backoff = 2 ** (attempt + 1)  # 2秒, 4秒, 8秒
             logger.warning(
-                "Bridge disconnected (%s), retrying in %ds (%d/%d)",
-                e, backoff, attempt + 1, MAX_RETRIES,
-            )
-            time.sleep(backoff)
-        except Exception as e:
-            if attempt >= MAX_RETRIES:
-                logger.error("Bridge failed unexpectedly, max retries (%d) exceeded: %s", MAX_RETRIES, e)
-                break
-            backoff = 2 ** (attempt + 1)
-            logger.warning(
-                "Bridge failed unexpectedly (%s), retrying in %ds (%d/%d)",
+                "Bridge failed (%s), retrying in %ds (%d/%d)",
                 e, backoff, attempt + 1, MAX_RETRIES,
             )
             time.sleep(backoff)
