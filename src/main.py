@@ -608,27 +608,31 @@ def update_material(
     material_id: int,
     content: str | None = None,
     title: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict:
     """
-    既存の資材を更新する。contentとtitleを個別または同時に更新できる。
+    既存の資材を更新する。content、title、tagsを個別または同時に更新できる。
 
     contentは全体置換（部分更新やappendではない）。
+    tagsは全置換（指定時は既存タグを全削除して新しいタグに置き換える）。
     少なくとも1つのパラメータを指定する必要がある。
 
     典型的な使い方:
     - 内容を改訂: update_material(material_id=5, content="# 改訂版\n...")
     - タイトル変更: update_material(material_id=5, title="新しいタイトル")
-    - 両方更新: update_material(material_id=5, content="...", title="...")
+    - タグ変更: update_material(material_id=5, tags=["domain:cc-memory", "design"])
+    - 複数同時: update_material(material_id=5, content="...", title="...", tags=["..."])
 
     Args:
         material_id: 資材のID
         content: 新しい本文（全体置換。optional）。先頭1-2文は内容の説明・要約を書くこと（check-inやsearchのsnippetに使われるため）
         title: 新しいタイトル（optional）
+        tags: 新しいタグ配列（指定時は全置換。1個以上必須。optional）
 
     Returns:
-        更新された資材情報（material_id, title, content, tags, created_at）
+        更新された資材情報
     """
-    return material_service.update_material(material_id, content=content, title=title)
+    return material_service.update_material(material_id, content=content, title=title, tags=tags)
 
 
 @mcp.tool()

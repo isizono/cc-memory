@@ -357,3 +357,50 @@ class TestUpdateMaterial:
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
         assert "content" in result["error"]["message"]
+
+    def test_update_tags(self, temp_db):
+        """Updating tags only succeeds and replaces all tags"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, tags=["domain:new", "refactor"])
+
+        assert "error" not in result
+        assert result["material_id"] == material_id
+
+        fetched = get_material(material_id)
+        assert sorted(fetched["tags"]) == sorted(["domain:new", "refactor"])
+
+    def test_update_tags_empty_list(self, temp_db):
+        """Empty tags list returns TAGS_REQUIRED error"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, tags=[])
+
+        assert "error" in result
+        assert result["error"]["code"] == "TAGS_REQUIRED"
+
+    def test_update_tags_with_content(self, temp_db):
+        """Updating tags and content simultaneously succeeds"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, content="New content", tags=["domain:updated"])
+
+        assert "error" not in result
+
+        fetched = get_material(material_id)
+        assert fetched["content"] == "New content"
+        assert fetched["tags"] == ["domain:updated"]
+
+    def test_update_tags_none_preserves_existing(self, temp_db):
+        """tags=None does not change existing tags"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, title="New Title")
+        assert "error" not in result
+
+        fetched = get_material(material_id)
+        assert sorted(fetched["tags"]) == sorted(["design", "domain:test"])

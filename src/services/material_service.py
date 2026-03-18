@@ -148,25 +148,34 @@ def update_material(
     material_id: int,
     content: str | None = None,
     title: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict:
     """
-    Update an existing material's content and/or title.
+    Update an existing material's content, title, and/or tags.
 
     Args:
         material_id: ID of the material to update
         content: New content (full replace, optional)
         title: New title (optional)
+        tags: New tags (full replace, optional. At least 1 required when specified)
 
     Returns:
         Updated material info
     """
-    if content is None and title is None:
+    if content is None and title is None and tags is None:
         return {
             "error": {
                 "code": "VALIDATION_ERROR",
-                "message": "At least one of content or title must be provided",
+                "message": "At least one of content, title, or tags must be provided",
             }
         }
+
+    # タグのバリデーション（tags指定時のみ）
+    parsed_tags = None
+    if tags is not None:
+        parsed_tags = validate_and_parse_tags(tags, required=True)
+        if isinstance(parsed_tags, dict):
+            return parsed_tags
 
     if title is not None and not title.strip():
         return {
@@ -198,7 +207,7 @@ def update_material(
                 }
             }
 
-        # Build dynamic SQL
+        # Build dynamic SQL for title/content
         set_parts = []
         values = []
 
@@ -210,13 +219,20 @@ def update_material(
             set_parts.append("content = ?")
             values.append(content)
 
-        set_clause = ", ".join(set_parts)
-        values.append(material_id)
+        if set_parts:
+            set_clause = ", ".join(set_parts)
+            values.append(material_id)
+            conn.execute(
+                f"UPDATE materials SET {set_clause} WHERE id = ?",
+                tuple(values),
+            )
 
-        conn.execute(
-            f"UPDATE materials SET {set_clause} WHERE id = ?",
-            tuple(values),
-        )
+        # タグの全置換（tags指定時のみ）
+        if parsed_tags is not None:
+            conn.execute("DELETE FROM material_tags WHERE material_id = ?", (material_id,))
+            tag_ids = ensure_tag_ids(conn, parsed_tags)
+            link_tags(conn, "material_tags", "material_id", material_id, tag_ids)
+
         conn.commit()
 
         # Retrieve updated material
