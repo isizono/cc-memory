@@ -2,7 +2,7 @@
 
 サービス層経由でDBからデータを取得し、セッション開始時のコンテキストを注入する。
 - アクティビティ一覧（active = in_progress + pending）
-- リマインダー（active=1）
+- 振る舞い（active=1）
 - 検索フローガイダンス（静的テキスト）
 """
 import json
@@ -21,7 +21,7 @@ from src.services.activity_service import (
     get_active_domains_with_conn,
     get_active_activities_by_tag_with_conn,
 )
-from src.services.reminder_service import get_active_reminder_contents_with_conn
+from src.services.habit_service import get_active_habit_contents_with_conn
 from scripts.snapshot import health_check, should_take_snapshot, take_snapshot
 
 
@@ -99,14 +99,14 @@ def _build_activities_section(conn) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _build_reminders_section(conn) -> str:
-    """リマインダー一覧を組み立てる。"""
-    contents = get_active_reminder_contents_with_conn(conn)
+def _build_habits_section(conn) -> str:
+    """振る舞い一覧を組み立てる。"""
+    contents = get_active_habit_contents_with_conn(conn)
 
     if not contents:
         return ""
 
-    lines = ["# リマインダー"]
+    lines = ["# 振る舞い"]
     for content in contents:
         lines.append(f"- {content}")
 
@@ -175,7 +175,7 @@ def _build_session_context() -> str:
         builders = [
             _build_snapshot_section,
             _build_activities_section,
-            _build_reminders_section,
+            _build_habits_section,
         ]
         for builder in builders:
             try:

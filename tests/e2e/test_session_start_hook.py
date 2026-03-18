@@ -100,17 +100,17 @@ def _seed_topic(title: str) -> int:
         conn.close()
 
 
-def _seed_reminder(content: str, active: int = 1) -> int:
-    """テスト用リマインダーを作成"""
+def _seed_habit(content: str, active: int = 1) -> int:
+    """テスト用振る舞いを作成"""
     conn = get_connection()
     try:
         cursor = conn.execute(
-            "INSERT INTO reminders (content, active) VALUES (?, ?)",
+            "INSERT INTO habits (content, active) VALUES (?, ?)",
             (content, active),
         )
-        reminder_id = cursor.lastrowid
+        habit_id = cursor.lastrowid
         conn.commit()
-        return reminder_id
+        return habit_id
     finally:
         conn.close()
 
@@ -131,7 +131,7 @@ class TestSessionStartHookBasic:
         # 初期データを削除
         conn = get_connection()
         try:
-            conn.execute("DELETE FROM reminders")
+            conn.execute("DELETE FROM habits")
             conn.execute("DELETE FROM discussion_topics")
             conn.execute("DELETE FROM activities")
             conn.commit()
@@ -143,7 +143,7 @@ class TestSessionStartHookBasic:
         context = result["hookSpecificOutput"]["additionalContext"]
         assert "検索フロー" in context
         assert "アクティビティ一覧" not in context
-        assert "リマインダー" not in context
+        assert "振る舞い" not in context
 
 
 class TestSessionStartHookActivities:
@@ -172,10 +172,10 @@ class TestSessionStartHookActivities:
         """completedアクティビティは表示されない"""
         _seed_activity( "[作業] 完了済み", status="completed")
 
-        # 初期リマインダー削除
+        # 初期振る舞いデータ削除
         conn = get_connection()
         try:
-            conn.execute("DELETE FROM reminders")
+            conn.execute("DELETE FROM habits")
             conn.commit()
         finally:
             conn.close()
@@ -249,27 +249,27 @@ class TestSessionStartHookDuplicateActivities:
         assert context.count(f"[{activity_id}]") == 1
 
 
-class TestSessionStartHookReminders:
-    """リマインダーの注入テスト"""
+class TestSessionStartHookHabits:
+    """振る舞いの注入テスト"""
 
-    def test_reminders_section_present(self, temp_db):
-        """アクティブなリマインダーがあればリマインダーセクションが含まれる"""
-        _seed_reminder( "テスト用リマインダー")
+    def test_habits_section_present(self, temp_db):
+        """アクティブな振る舞いがあれば振る舞いセクションが含まれる"""
+        _seed_habit("テスト用振る舞い")
 
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
 
-        assert "# リマインダー" in context
-        assert "テスト用リマインダー" in context
+        assert "# 振る舞い" in context
+        assert "テスト用振る舞い" in context
 
-    def test_inactive_reminder_not_shown(self, temp_db):
-        """inactive(active=0)のリマインダーは表示されない"""
-        _seed_reminder( "無効なリマインダー", active=0)
+    def test_inactive_habit_not_shown(self, temp_db):
+        """inactive(active=0)の振る舞いは表示されない"""
+        _seed_habit("無効な振る舞い", active=0)
 
-        # 他のアクティブリマインダーも削除
+        # 他のアクティブな振る舞いも削除
         conn = get_connection()
         try:
-            conn.execute("DELETE FROM reminders WHERE active = 1")
+            conn.execute("DELETE FROM habits WHERE active = 1")
             conn.commit()
         finally:
             conn.close()
@@ -277,7 +277,7 @@ class TestSessionStartHookReminders:
         result = _run_session_start_hook(temp_db)
         context = result["hookSpecificOutput"]["additionalContext"]
 
-        assert "無効なリマインダー" not in context
+        assert "無効な振る舞い" not in context
 
 
 class TestSessionStartHookFooter:

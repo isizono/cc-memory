@@ -10,7 +10,7 @@ from src.services import (
     search_service,
     activity_service,
     material_service,
-    reminder_service,
+    habit_service,
     relation_service,
 )
 from src.services.checkin_service import check_in as _check_in
@@ -752,21 +752,21 @@ def get_map(
 
 
 @mcp.tool()
-def add_reminder(content: str) -> dict:
-    """リマインダーを追加する。check-in時に自動注入される。"""
-    return reminder_service.add_reminder(content)
+def add_habit(content: str) -> dict:
+    """エージェントの振る舞いを登録する。check-in時に自動注入され、以降の行動に反映される。"覚えといて"と言われた行動ルールはここに登録する"""
+    return habit_service.add_habit(content)
 
 
 @mcp.tool()
-def list_reminders() -> dict:
-    """リマインダー一覧を取得する。"""
-    return reminder_service.list_reminders()
+def get_habits() -> dict:
+    """登録済みの振る舞い一覧を取得する"""
+    return habit_service.get_habits()
 
 
 @mcp.tool()
-def update_reminder(reminder_id: int, content: Optional[str] = None, active: Optional[bool] = None) -> dict:
-    """リマインダーを更新する。active=Falseで無効化、active=Trueで再有効化。"""
-    return reminder_service.update_reminder(reminder_id, content=content, active=active)
+def update_habit(habit_id: int, content: Optional[str] = None, active: Optional[bool] = None) -> dict:
+    """振る舞いを更新する。active=Falseで無効化、active=Trueで再有効化"""
+    return habit_service.update_habit(habit_id, content=content, active=active)
 
 
 @mcp.tool()

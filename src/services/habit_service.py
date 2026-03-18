@@ -1,4 +1,4 @@
-"""リマインダー管理サービス"""
+"""振る舞い管理サービス"""
 import logging
 
 from src.db import get_connection, row_to_dict
@@ -6,26 +6,26 @@ from src.db import get_connection, row_to_dict
 logger = logging.getLogger(__name__)
 
 
-def get_active_reminder_contents_with_conn(conn) -> list[str]:
-    """有効なリマインダーのcontent一覧を取得する（conn共有版）。
+def get_active_habit_contents_with_conn(conn) -> list[str]:
+    """有効な振る舞いのcontent一覧を取得する（conn共有版）。
 
     Returns:
         [content, ...]
     """
     rows = conn.execute(
-        "SELECT content FROM reminders WHERE active = 1"
+        "SELECT content FROM habits WHERE active = 1"
     ).fetchall()
     return [r["content"] for r in rows]
 
 
-def add_reminder(content: str) -> dict:
-    """リマインダーを追加する。
+def add_habit(content: str) -> dict:
+    """振る舞いを追加する。
 
     Args:
-        content: リマインダーの内容（空文字不可）
+        content: 振る舞いの内容（空文字不可）
 
     Returns:
-        作成されたリマインダー情報
+        作成された振る舞い情報
     """
     if not content or not content.strip():
         return {
@@ -38,13 +38,13 @@ def add_reminder(content: str) -> dict:
     conn = get_connection()
     try:
         cursor = conn.execute(
-            "INSERT INTO reminders (content) VALUES (?)",
+            "INSERT INTO habits (content) VALUES (?)",
             (content,),
         )
-        reminder_id = cursor.lastrowid
+        habit_id = cursor.lastrowid
         conn.commit()
 
-        return {"reminder_id": reminder_id}
+        return {"habit_id": habit_id}
 
     except Exception as e:
         conn.rollback()
@@ -58,31 +58,31 @@ def add_reminder(content: str) -> dict:
         conn.close()
 
 
-def list_reminders() -> dict:
-    """リマインダー一覧を取得する。
+def get_habits() -> dict:
+    """振る舞い一覧を取得する。
 
     Returns:
-        リマインダー一覧とtotal_count
+        振る舞い一覧とtotal_count
     """
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM reminders ORDER BY id"
+            "SELECT * FROM habits ORDER BY id"
         ).fetchall()
 
-        reminders = []
+        habits = []
         for row in rows:
-            reminder = row_to_dict(row)
-            reminders.append({
-                "reminder_id": reminder["id"],
-                "content": reminder["content"],
-                "active": reminder["active"],
-                "created_at": reminder["created_at"],
+            habit = row_to_dict(row)
+            habits.append({
+                "habit_id": habit["id"],
+                "content": habit["content"],
+                "active": habit["active"],
+                "created_at": habit["created_at"],
             })
 
         return {
-            "reminders": reminders,
-            "total_count": len(reminders),
+            "habits": habits,
+            "total_count": len(habits),
         }
 
     except Exception as e:
@@ -96,16 +96,16 @@ def list_reminders() -> dict:
         conn.close()
 
 
-def update_reminder(reminder_id: int, content: str | None = None, active: bool | None = None) -> dict:
-    """リマインダーを更新する。
+def update_habit(habit_id: int, content: str | None = None, active: bool | None = None) -> dict:
+    """振る舞いを更新する。
 
     Args:
-        reminder_id: リマインダーID
+        habit_id: 振る舞いID
         content: 新しい内容（optional）
         active: 有効/無効フラグ（True/False、optional）
 
     Returns:
-        更新されたリマインダー情報
+        更新された振る舞い情報
     """
     if content is None and active is None:
         return {
@@ -135,14 +135,14 @@ def update_reminder(reminder_id: int, content: str | None = None, active: bool |
     try:
         # 存在チェック
         row = conn.execute(
-            "SELECT * FROM reminders WHERE id = ?",
-            (reminder_id,),
+            "SELECT * FROM habits WHERE id = ?",
+            (habit_id,),
         ).fetchone()
         if not row:
             return {
                 "error": {
                     "code": "NOT_FOUND",
-                    "message": f"Reminder with id {reminder_id} not found",
+                    "message": f"Habit with id {habit_id} not found",
                 }
             }
 
@@ -159,28 +159,28 @@ def update_reminder(reminder_id: int, content: str | None = None, active: bool |
             values.append(active)
 
         set_clause = ", ".join(set_parts)
-        values.append(reminder_id)
+        values.append(habit_id)
 
         conn.execute(
-            f"UPDATE reminders SET {set_clause} WHERE id = ?",
+            f"UPDATE habits SET {set_clause} WHERE id = ?",
             tuple(values),
         )
         conn.commit()
 
-        # 更新後のリマインダーを取得
+        # 更新後の振る舞いを取得
         row = conn.execute(
-            "SELECT * FROM reminders WHERE id = ?",
-            (reminder_id,),
+            "SELECT * FROM habits WHERE id = ?",
+            (habit_id,),
         ).fetchone()
         if not row:
-            raise Exception("Failed to retrieve updated reminder")
+            raise Exception("Failed to retrieve updated habit")
 
-        reminder = row_to_dict(row)
+        habit = row_to_dict(row)
         return {
-            "reminder_id": reminder["id"],
-            "content": reminder["content"],
-            "active": reminder["active"],
-            "created_at": reminder["created_at"],
+            "habit_id": habit["id"],
+            "content": habit["content"],
+            "active": habit["active"],
+            "created_at": habit["created_at"],
         }
 
     except Exception as e:
