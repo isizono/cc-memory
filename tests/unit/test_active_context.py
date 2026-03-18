@@ -139,7 +139,7 @@ def test_get_active_domains_excludes_completed(temp_db):
         title="Done", description="Desc",
         tags=["domain:completed-proj"], check_in=False,
     )
-    update_activity(result["activity_id"], new_status="completed")
+    update_activity(result["activity_id"], status="completed")
 
     domains = get_active_domains()
     names = [d["name"] for d in domains]
@@ -220,7 +220,7 @@ def test_get_active_activities_by_tag_has_updated_at(temp_db):
 def test_get_active_activities_by_tag_excludes_completed(temp_db):
     """completedアクティビティは含まれない"""
     result = add_activity(title="Done Activity", description="Desc", tags=["domain:test-proj"], check_in=False)
-    update_activity(result["activity_id"], new_status="completed")
+    update_activity(result["activity_id"], status="completed")
 
     tag_id = _get_tag_id("domain", "test-proj")
     activities = get_active_activities_by_tag(tag_id)
@@ -232,7 +232,7 @@ def test_get_active_activities_by_tag_sort_order(temp_db):
     """in_progressが先、その後pending"""
     r1 = add_activity(title="Pending Activity", description="Desc", tags=["domain:test-proj"], check_in=False)
     r2 = add_activity(title="In Progress Activity", description="Desc", tags=["domain:test-proj"], check_in=False)
-    update_activity(r2["activity_id"], new_status="in_progress")
+    update_activity(r2["activity_id"], status="in_progress")
 
     tag_id = _get_tag_id("domain", "test-proj")
     activities = get_active_activities_by_tag(tag_id)
@@ -294,7 +294,7 @@ def test_build_activities_section_status_marker_pending(temp_db):
 def test_build_activities_section_status_marker_in_progress(temp_db):
     """in_progressアクティビティに●マーカーが付く"""
     r = add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
-    update_activity(r["activity_id"], new_status="in_progress")
+    update_activity(r["activity_id"], status="in_progress")
 
     result = _build_active_context_wrapper()
 
@@ -339,7 +339,7 @@ def test_build_activities_section_in_progress_limit(temp_db):
             title=f"[作業] IP Activity {i}", description="Desc",
             tags=["domain:myapp"], check_in=False,
         )
-        update_activity(r["activity_id"], new_status="in_progress")
+        update_activity(r["activity_id"], status="in_progress")
 
     result = _build_active_context_wrapper()
 
@@ -369,7 +369,7 @@ def test_build_activities_section_overflow_count(temp_db):
             title=f"[作業] IP {i}", description="Desc",
             tags=["domain:myapp"], check_in=False,
         )
-        update_activity(r["activity_id"], new_status="in_progress")
+        update_activity(r["activity_id"], status="in_progress")
     for i in range(3):
         add_activity(
             title=f"[作業] Pending {i}", description="Desc",
@@ -388,7 +388,7 @@ def test_build_activities_section_no_overflow_when_within_limits(temp_db):
         title="[作業] IP 1", description="Desc",
         tags=["domain:myapp"], check_in=False,
     )
-    update_activity(r["activity_id"], new_status="in_progress")
+    update_activity(r["activity_id"], status="in_progress")
     add_activity(
         title="[作業] Pending 1", description="Desc",
         tags=["domain:myapp"], check_in=False,
@@ -454,7 +454,7 @@ def test_build_activities_section_raises_on_invalid_db(temp_db):
 def test_build_activities_section_completed_activities_excluded(temp_db):
     """completedアクティビティは表示されない"""
     result = add_activity(title="Done Activity", description="Desc", tags=["domain:myapp"], check_in=False)
-    update_activity(result["activity_id"], new_status="completed")
+    update_activity(result["activity_id"], status="completed")
 
     ctx = _build_active_context_wrapper()
 
@@ -467,7 +467,7 @@ def test_build_activities_section_format(temp_db):
         title="[議論] stop_hookのスキップ機能", description="Desc",
         tags=["domain:cc-memory"], check_in=False,
     )
-    update_activity(r["activity_id"], new_status="in_progress")
+    update_activity(r["activity_id"], status="in_progress")
     add_activity(
         title="[作業] アクティブコンテキスト改善", description="Desc",
         tags=["domain:cc-memory"], check_in=False,

@@ -181,7 +181,7 @@ def check_in(activity_id: int) -> dict:
         # NOTE: update_activityは内部で別コネクションを使用する（既存APIの制約）。
         # check_inのトランザクションとは独立してコミットされる。
         if activity["status"] != "in_progress":
-            update_result = activity_service.update_activity(activity_id, new_status="in_progress")
+            update_result = activity_service.update_activity(activity_id, status="in_progress")
             if "error" in update_result:
                 logger.warning(
                     "Failed to update activity %d status: %s",

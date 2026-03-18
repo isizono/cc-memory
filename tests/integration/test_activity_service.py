@@ -316,7 +316,7 @@ class TestGetActivities:
         """tags未指定 + status指定で全ドメインからフィルタ"""
         activity_a = add_activity(title="Activity A", description="Desc", tags=["domain:test"], check_in=False)
         add_activity(title="Activity B", description="Desc", tags=["domain:other"], check_in=False)
-        update_activity(activity_a["activity_id"], new_status="completed")
+        update_activity(activity_a["activity_id"], status="completed")
 
         result = get_activities(status="completed")
 
@@ -328,8 +328,8 @@ class TestGetActivities:
         """completedのソート順がupdated_at DESCになっている"""
         a1 = add_activity(title="Old completed", description="Desc", tags=DEFAULT_TAGS, check_in=False)
         a2 = add_activity(title="New completed", description="Desc", tags=DEFAULT_TAGS, check_in=False)
-        update_activity(a1["activity_id"], new_status="completed")
-        update_activity(a2["activity_id"], new_status="completed")
+        update_activity(a1["activity_id"], status="completed")
+        update_activity(a2["activity_id"], status="completed")
 
         # a1のupdated_atを古い値に書き換えてソート順を明確にする
         conn = get_connection()
@@ -433,7 +433,7 @@ class TestGetActivities:
         """since + status組み合わせ"""
         a1 = add_activity(title="Old Completed", description="Desc", tags=DEFAULT_TAGS, check_in=False)
         a2 = add_activity(title="New Pending", description="Desc", tags=DEFAULT_TAGS, check_in=False)
-        update_activity(a1["activity_id"], new_status="completed")
+        update_activity(a1["activity_id"], status="completed")
 
         # update_activityが内部でupdated_at=CURRENT_TIMESTAMPを設定するため、
         # テスト用に手動で上書きしてsince条件の検証を可能にする
@@ -504,7 +504,7 @@ class TestUpdateActivity:
     def test_update_status_to_in_progress(self, activity_with_db):
         """ステータスをin_progressに更新できる"""
         activity = activity_with_db["activity"]
-        result = update_activity(activity["activity_id"], new_status="in_progress")
+        result = update_activity(activity["activity_id"], status="in_progress")
 
         assert "error" not in result
         assert result["status"] == "in_progress"
@@ -512,7 +512,7 @@ class TestUpdateActivity:
     def test_update_status_to_completed(self, activity_with_db):
         """ステータスをcompletedに更新できる"""
         activity = activity_with_db["activity"]
-        result = update_activity(activity["activity_id"], new_status="completed")
+        result = update_activity(activity["activity_id"], status="completed")
 
         assert "error" not in result
         assert result["status"] == "completed"
@@ -520,14 +520,14 @@ class TestUpdateActivity:
     def test_update_status_invalid(self, activity_with_db):
         """無効なステータスでエラーになる"""
         activity = activity_with_db["activity"]
-        result = update_activity(activity["activity_id"], new_status="invalid_status")
+        result = update_activity(activity["activity_id"], status="invalid_status")
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
 
     def test_update_activity_not_found(self, temp_db):
         """存在しないアクティビティIDでエラーになる"""
-        result = update_activity(9999, new_status="in_progress")
+        result = update_activity(9999, status="in_progress")
 
         assert "error" in result
         assert result["error"]["code"] == "NOT_FOUND"

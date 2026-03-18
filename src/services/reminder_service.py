@@ -96,13 +96,13 @@ def list_reminders() -> dict:
         conn.close()
 
 
-def update_reminder(reminder_id: int, content: str | None = None, active: int | None = None) -> dict:
+def update_reminder(reminder_id: int, content: str | None = None, active: bool | None = None) -> dict:
     """リマインダーを更新する。
 
     Args:
         reminder_id: リマインダーID
         content: 新しい内容（optional）
-        active: 有効/無効フラグ（0 or 1、optional）
+        active: 有効/無効フラグ（True/False、optional）
 
     Returns:
         更新されたリマインダー情報
@@ -123,11 +123,11 @@ def update_reminder(reminder_id: int, content: str | None = None, active: int | 
             }
         }
 
-    if active is not None and active not in (0, 1):
+    if active is not None and not isinstance(active, bool):
         return {
             "error": {
                 "code": "VALIDATION_ERROR",
-                "message": "active must be 0 or 1",
+                "message": "active must be True or False",
             }
         }
 

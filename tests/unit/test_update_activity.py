@@ -43,7 +43,7 @@ class TestUpdateActivitySuccess:
 
     def test_update_status(self, test_activity):
         """ステータスのみ変更できる"""
-        result = update_activity(test_activity["activity_id"], new_status="in_progress")
+        result = update_activity(test_activity["activity_id"], status="in_progress")
 
         assert "error" not in result
         assert result["activity_id"] == test_activity["activity_id"]
@@ -69,7 +69,7 @@ class TestUpdateActivitySuccess:
         """複数フィールドを同時に変更できる"""
         result = update_activity(
             test_activity["activity_id"],
-            new_status="in_progress",
+            status="in_progress",
             title="Updated Title",
             description="Updated Description",
         )
@@ -81,7 +81,7 @@ class TestUpdateActivitySuccess:
     def test_update_persists_via_get_activities(self, test_activity):
         """更新がDBに永続化されていることをget_activitiesで確認する"""
         activity_id = test_activity["activity_id"]
-        update_activity(activity_id, title="Persisted Title", description="Persisted Desc", new_status="in_progress")
+        update_activity(activity_id, title="Persisted Title", description="Persisted Desc", status="in_progress")
 
         result = get_activities(status="in_progress")
         activities = result["activities"]
@@ -93,7 +93,7 @@ class TestUpdateActivitySuccess:
 
     def test_update_preserves_tags(self, test_activity):
         """update_activityでタグが保持される（レスポンスはactivity_id+statusのみ）"""
-        result = update_activity(test_activity["activity_id"], new_status="in_progress")
+        result = update_activity(test_activity["activity_id"], status="in_progress")
 
         assert "error" not in result
         assert result["activity_id"] == test_activity["activity_id"]
@@ -117,21 +117,21 @@ class TestUpdateActivityError:
 
     def test_not_found(self, temp_db):
         """存在しないアクティビティIDでNOT_FOUNDになる"""
-        result = update_activity(9999, new_status="in_progress")
+        result = update_activity(9999, status="in_progress")
 
         assert "error" in result
         assert result["error"]["code"] == "NOT_FOUND"
 
     def test_invalid_status(self, test_activity):
         """無効なステータスでINVALID_STATUSになる"""
-        result = update_activity(test_activity["activity_id"], new_status="invalid")
+        result = update_activity(test_activity["activity_id"], status="invalid")
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
 
     def test_active_status_rejected(self, test_activity):
         """activeはget_activities用エイリアスであり、update_activityでは無効"""
-        result = update_activity(test_activity["activity_id"], new_status="active")
+        result = update_activity(test_activity["activity_id"], status="active")
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
@@ -170,7 +170,7 @@ class TestUpdateActivityError:
 
     def test_blocked_status_rejected(self, test_activity):
         """blockedステータスがINVALID_STATUSになる"""
-        result = update_activity(test_activity["activity_id"], new_status="blocked")
+        result = update_activity(test_activity["activity_id"], status="blocked")
 
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATUS"
@@ -202,7 +202,7 @@ class TestUpdateActivityTags:
     def test_update_tags_none(self, test_activity):
         """tags=None（未指定）ではタグ変更なし（レスポンスはactivity_id+statusのみ）"""
         # まずステータスだけ変更
-        result = update_activity(test_activity["activity_id"], new_status="in_progress")
+        result = update_activity(test_activity["activity_id"], status="in_progress")
 
         assert "error" not in result
         assert result["activity_id"] == test_activity["activity_id"]

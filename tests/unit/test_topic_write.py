@@ -4,6 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.topic_service import add_topic
+from src.services.activity_service import add_activity
 from tests.helpers import add_log, add_decision
 
 
@@ -512,5 +513,162 @@ def test_on_delete_cascade_discussion_logs(temp_db):
 
     # discussion_logsがカスケード削除されて0件になることを確認
     assert _count_logs(topic_id) == 0
+
+
+# ========================================
+# add_topic の related 引数テスト
+# ========================================
+
+
+def test_add_topic_with_related_topic(temp_db):
+    """related指定でトピック作成時にトピック間リレーションが張られる"""
+    # 先にリレーション先のトピックを作成
+    t1 = add_topic(title="関連トピック", description="関連先", tags=DEFAULT_TAGS)
+    assert "error" not in t1
+
+    # related付きでトピックを作成
+    t2 = add_topic(
+        title="新しいトピック",
+        description="related付き",
+        tags=DEFAULT_TAGS,
+        related=[{"type": "topic", "ids": [t1["topic_id"]]}],
+    )
+
+    assert "error" not in t2
+    assert t2["topic_id"] > 0
+
+    # topic_relationsにリレーションが保存されていることを確認
+    conn = get_connection()
+    try:
+        id_1 = min(t1["topic_id"], t2["topic_id"])
+        id_2 = max(t1["topic_id"], t2["topic_id"])
+        row = conn.execute(
+            "SELECT * FROM topic_relations WHERE topic_id_1 = ? AND topic_id_2 = ?",
+            (id_1, id_2),
+        ).fetchone()
+        assert row is not None
+    finally:
+        conn.close()
+
+
+def test_add_topic_with_related_activity(temp_db):
+    """related指定でトピック作成時にトピック-アクティビティ間リレーションが張られる"""
+    # アクティビティを先に作成
+    activity = add_activity(
+        title="テストアクティビティ",
+        description="テスト用",
+        tags=DEFAULT_TAGS,
+        check_in=False,
+    )
+    assert "error" not in activity
+
+    # related付きでトピックを作成
+    t = add_topic(
+        title="アクティビティ関連トピック",
+        description="related付き",
+        tags=DEFAULT_TAGS,
+        related=[{"type": "activity", "ids": [activity["activity_id"]]}],
+    )
+
+    assert "error" not in t
+    assert t["topic_id"] > 0
+
+    # topic_activity_relationsにリレーションが保存されていることを確認
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM topic_activity_relations WHERE topic_id = ? AND activity_id = ?",
+            (t["topic_id"], activity["activity_id"]),
+        ).fetchone()
+        assert row is not None
+    finally:
+        conn.close()
+
+
+def test_add_topic_related_missing_ids_key(temp_db):
+    """related内にidsキーが欠落している場合にVALIDATION_ERRORが返る"""
+    result = add_topic(
+        title="idsキー欠落",
+        description="テスト",
+        tags=DEFAULT_TAGS,
+        related=[{"type": "topic"}],
+    )
+    assert "error" in result
+    assert result["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_add_topic_related_missing_type_key(temp_db):
+    """related内にtypeキーが欠落している場合にVALIDATION_ERRORが返る"""
+    result = add_topic(
+        title="typeキー欠落",
+        description="テスト",
+        tags=DEFAULT_TAGS,
+        related=[{"ids": [1]}],
+    )
+    assert "error" in result
+    assert result["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_add_topic_related_invalid_type(temp_db):
+    """related内のtypeが不正な場合にINVALID_ENTITY_TYPEが返る"""
+    result = add_topic(
+        title="不正type",
+        description="テスト",
+        tags=DEFAULT_TAGS,
+        related=[{"type": "invalid", "ids": [1]}],
+    )
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_ENTITY_TYPE"
+
+
+def test_add_topic_related_empty_ids(temp_db):
+    """related内のidsが空リストの場合にVALIDATION_ERRORが返る"""
+    result = add_topic(
+        title="空ids",
+        description="テスト",
+        tags=DEFAULT_TAGS,
+        related=[{"type": "topic", "ids": []}],
+    )
+    assert "error" in result
+    assert result["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_add_topic_related_empty_list(temp_db):
+    """related=[]の場合はリレーションなしでトピックが正常に作成される"""
+    result = add_topic(
+        title="空リスト",
+        description="related空リスト",
+        tags=DEFAULT_TAGS,
+        related=[],
+    )
+    assert "error" not in result
+    assert result["topic_id"] > 0
+
+
+def test_add_topic_without_related(temp_db):
+    """related未指定でリレーションなしのトピックが作成される"""
+    t = add_topic(
+        title="リレーションなし",
+        description="related未指定",
+        tags=DEFAULT_TAGS,
+    )
+
+    assert "error" not in t
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM topic_relations WHERE topic_id_1 = ? OR topic_id_2 = ?",
+            (t["topic_id"], t["topic_id"]),
+        ).fetchone()
+        assert row["cnt"] == 0
+
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM topic_activity_relations WHERE topic_id = ?",
+            (t["topic_id"],),
+        ).fetchone()
+        assert row["cnt"] == 0
+    finally:
+        conn.close()
 
 

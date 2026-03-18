@@ -187,13 +187,15 @@ def add_topic(
     title: str,
     description: str,
     tags: list[str],
+    related: list[dict] | None = None,
 ) -> dict:
     """新しい議論トピックを追加する。
 
     tags: タグ配列(必須、1個以上)。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["domain:cc-memory", "intent:implement", "error-handling", "validation", "stdin"]
+    related: 関連エンティティ（optional）。[{"type": "topic"|"activity", "ids": [int, ...]}] 形式。作成と同時にリレーションを張る
 
     レスポンスに類似トピック(similar_topics)が含まれる場合がある。重複トピックの防止やリレーション追加の参考にすること。"""
-    result = topic_service.add_topic(title, description, tags)
+    result = topic_service.add_topic(title, description, tags, related=related)
     if "error" not in result:
         _maybe_inject_tag_notes(result, tags)
     return result
@@ -542,7 +544,7 @@ def get_activities(
 @mcp.tool()
 def update_activity(
     activity_id: int,
-    new_status: Optional[str] = None,
+    status: Optional[str] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
     tags: Optional[list[str]] = None,
@@ -551,8 +553,8 @@ def update_activity(
     アクティビティのステータス・タイトル・説明・タグを更新する。
 
     典型的な使い方:
-    - アクティビティ開始: update_activity(activity_id, new_status="in_progress")
-    - アクティビティ完了: update_activity(activity_id, new_status="completed")
+    - アクティビティ開始: update_activity(activity_id, status="in_progress")
+    - アクティビティ完了: update_activity(activity_id, status="completed")
     - タイトル変更: update_activity(activity_id, title="新しいタイトル")
     - 説明更新: update_activity(activity_id, description="新しい説明")
     - タグ変更: update_activity(activity_id, tags=["domain:cc-memory", "intent:implement"])
@@ -561,7 +563,7 @@ def update_activity(
 
     Args:
         activity_id: アクティビティID
-        new_status: 新しいステータス（pending/in_progress/completed）
+        status: 新しいステータス（pending/in_progress/completed）
         title: 新しいタイトル
         description: 新しい説明
         tags: 新しいタグ配列（指定時は全置換。1個以上必須）
@@ -569,7 +571,7 @@ def update_activity(
     Returns:
         更新されたアクティビティ情報
     """
-    return activity_service.update_activity(activity_id, new_status, title, description, tags)
+    return activity_service.update_activity(activity_id, status, title, description, tags)
 
 
 @mcp.tool()
@@ -762,8 +764,8 @@ def list_reminders() -> dict:
 
 
 @mcp.tool()
-def update_reminder(reminder_id: int, content: Optional[str] = None, active: Optional[int] = None) -> dict:
-    """リマインダーを更新する。active=0で無効化、active=1で再有効化。"""
+def update_reminder(reminder_id: int, content: Optional[str] = None, active: Optional[bool] = None) -> dict:
+    """リマインダーを更新する。active=Falseで無効化、active=Trueで再有効化。"""
     return reminder_service.update_reminder(reminder_id, content=content, active=active)
 
 

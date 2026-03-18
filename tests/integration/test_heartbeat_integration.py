@@ -188,7 +188,7 @@ class TestBuildActiveContextHeartbeat:
             title="[作業] HB機能実装", description="Desc", tags=["domain:hb-ctx"], check_in=False,
         )
         aid = activity["activity_id"]
-        update_activity(aid, new_status="in_progress")
+        update_activity(aid, status="in_progress")
 
         # heartbeatを活性化
         conn = get_connection()
@@ -225,7 +225,7 @@ class TestBuildActiveContextHeartbeat:
             title="[作業] HB活性", description="Desc", tags=["domain:hb-mix"], check_in=False,
         )
         hb_aid = hb_activity["activity_id"]
-        update_activity(hb_aid, new_status="in_progress")
+        update_activity(hb_aid, status="in_progress")
 
         normal_activity = add_activity(
             title="[作業] 通常", description="Desc", tags=["domain:hb-mix"], check_in=False,
