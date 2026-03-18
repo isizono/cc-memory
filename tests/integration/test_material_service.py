@@ -399,7 +399,8 @@ class TestUpdateMaterial:
         created = self._create_material()
         material_id = created["material_id"]
 
-        update_material(material_id, title="New Title")
+        result = update_material(material_id, title="New Title")
+        assert "error" not in result
 
         fetched = get_material(material_id)
         assert sorted(fetched["tags"]) == sorted(["design", "domain:test"])
