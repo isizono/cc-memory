@@ -103,24 +103,24 @@ class TestUpdateHabit:
         assert result["content"] == "更新後の振る舞い"
         assert result["active"] == 1
 
-    def test_update_active_to_zero(self, temp_db):
-        """active=0で無効化できる"""
+    def test_update_active_to_false(self, temp_db):
+        """active=Falseで無効化できる"""
         created = add_habit("無効化する振る舞い")
         habit_id = created["habit_id"]
 
-        result = update_habit(habit_id, active=0)
+        result = update_habit(habit_id, active=False)
 
         assert "error" not in result
         assert result["habit_id"] == habit_id
         assert result["active"] == 0
 
-    def test_update_active_to_one(self, temp_db):
-        """active=1で再有効化できる"""
+    def test_update_active_to_true(self, temp_db):
+        """active=Trueで再有効化できる"""
         created = add_habit("再有効化する振る舞い")
         habit_id = created["habit_id"]
-        update_habit(habit_id, active=0)
+        update_habit(habit_id, active=False)
 
-        result = update_habit(habit_id, active=1)
+        result = update_habit(habit_id, active=True)
 
         assert "error" not in result
         assert result["active"] == 1
@@ -130,7 +130,7 @@ class TestUpdateHabit:
         created = add_habit("元の振る舞い")
         habit_id = created["habit_id"]
 
-        result = update_habit(habit_id, content="新しい振る舞い", active=0)
+        result = update_habit(habit_id, content="新しい振る舞い", active=False)
 
         assert "error" not in result
         assert result["content"] == "新しい振る舞い"
@@ -163,7 +163,7 @@ class TestUpdateHabit:
         assert result["error"]["code"] == "VALIDATION_ERROR"
 
     def test_update_invalid_active(self, temp_db):
-        """active=2のような無効値でバリデーションエラーになる"""
+        """非bool値でバリデーションエラーになる"""
         created = add_habit("元の振る舞い")
         habit_id = created["habit_id"]
 
@@ -171,4 +171,4 @@ class TestUpdateHabit:
 
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
-        assert "active must be 0 or 1" in result["error"]["message"]
+        assert "active must be True or False" in result["error"]["message"]

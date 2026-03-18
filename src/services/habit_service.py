@@ -96,13 +96,13 @@ def get_habits() -> dict:
         conn.close()
 
 
-def update_habit(habit_id: int, content: str | None = None, active: int | None = None) -> dict:
+def update_habit(habit_id: int, content: str | None = None, active: bool | None = None) -> dict:
     """振る舞いを更新する。
 
     Args:
         habit_id: 振る舞いID
         content: 新しい内容（optional）
-        active: 有効/無効フラグ（0 or 1、optional）
+        active: 有効/無効フラグ（True/False、optional）
 
     Returns:
         更新された振る舞い情報
@@ -123,11 +123,11 @@ def update_habit(habit_id: int, content: str | None = None, active: int | None =
             }
         }
 
-    if active is not None and active not in (0, 1):
+    if active is not None and not isinstance(active, bool):
         return {
             "error": {
                 "code": "VALIDATION_ERROR",
-                "message": "active must be 0 or 1",
+                "message": "active must be True or False",
             }
         }
 

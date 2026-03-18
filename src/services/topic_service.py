@@ -4,6 +4,7 @@ import sqlite3
 from typing import Optional
 from src.db import get_connection, row_to_dict
 from src.services.embedding_service import build_embedding_text, generate_and_store_embedding
+from src.services.relation_service import _add_relation_with_conn, _validate_targets
 from src.services.search_service import find_similar_topics
 from src.services.tag_service import (
     validate_and_parse_tags,
@@ -34,6 +35,7 @@ def add_topic(
     title: str,
     description: str,
     tags: list[str],
+    related: list[dict] | None = None,
 ) -> dict:
     """
     新しい議論トピックを追加する。
@@ -42,6 +44,7 @@ def add_topic(
         title: トピックのタイトル
         description: トピックの説明（必須）
         tags: タグ配列（必須、1個以上）
+        related: 関連エンティティ [{"type": "topic", "ids": [1, 2]}, ...] (optional)
 
     Returns:
         作成されたトピック情報
@@ -50,6 +53,12 @@ def add_topic(
     parsed_tags = validate_and_parse_tags(tags, required=True)
     if isinstance(parsed_tags, dict):
         return parsed_tags
+
+    # relatedのバリデーション
+    if related:
+        err = _validate_targets("topic", related)
+        if err:
+            return err
 
     conn = get_connection()
     try:
@@ -63,6 +72,10 @@ def add_topic(
         # タグをリンク
         tag_ids = ensure_tag_ids(conn, parsed_tags)
         link_tags(conn, "topic_tags", "topic_id", topic_id, tag_ids)
+
+        # リレーションを追加
+        if related:
+            _add_relation_with_conn(conn, "topic", topic_id, related)
 
         conn.commit()
 

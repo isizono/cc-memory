@@ -82,7 +82,7 @@ class TestCheckIn:
     def test_check_in_already_in_progress(self, activity_id):
         """すでにin_progressの場合、status変更なしでcheck-in成功"""
         # 先にin_progressに変更
-        update_activity(activity_id, new_status="in_progress")
+        update_activity(activity_id, status="in_progress")
 
         result = check_in(activity_id)
 
@@ -91,7 +91,7 @@ class TestCheckIn:
 
     def test_check_in_completed_activity(self, activity_id):
         """completedのアクティビティもin_progressに戻る"""
-        update_activity(activity_id, new_status="completed")
+        update_activity(activity_id, status="completed")
 
         result = check_in(activity_id)
 
