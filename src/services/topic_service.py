@@ -14,6 +14,8 @@ from src.services.tag_service import (
     get_entity_tags_batch,
 )
 
+TOPIC_DESC_MAX_LEN = 200
+
 
 def get_recent_topics_with_conn(conn, limit: int = 10) -> list[dict]:
     """最近作成されたトピックのID・タイトルを取得する（conn共有版）。
@@ -234,7 +236,7 @@ def get_topics(
                 topics.append({
                     "id": topic["id"],
                     "title": topic["title"],
-                    "description": topic["description"],
+                    "description": (topic["description"] or "")[:TOPIC_DESC_MAX_LEN],
                     "tags": tags_map.get(topic["id"], []),
                     "created_at": topic["created_at"],
                 })

@@ -10,6 +10,7 @@ from src.db import init_database, get_connection
 from src.services.topic_service import (
     add_topic,
     get_topics,
+    TOPIC_DESC_MAX_LEN,
 )
 from tests.helpers import add_log, add_decision
 from src.services.discussion_log_service import get_logs
@@ -352,6 +353,20 @@ def test_get_topics_has_tags_field(temp_db):
     assert "subject_id" not in topic
     assert "parent_topic_id" not in topic
     assert "ancestors" not in topic
+
+
+def test_get_topics_description_truncated(temp_db):
+    """descriptionが長い場合、TOPIC_DESC_MAX_LENで切り詰められる"""
+    long_desc = "A" * 500
+    add_topic(title="Long Desc Topic", description=long_desc, tags=DEFAULT_TAGS)
+
+    result = get_topics(tags=DEFAULT_TAGS)
+
+    assert "error" not in result
+    topic = result["topics"][0]
+    assert len(topic["description"]) == TOPIC_DESC_MAX_LEN
+    assert topic["description"] == "A" * TOPIC_DESC_MAX_LEN
+
 
 
 # ========================================
