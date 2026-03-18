@@ -556,7 +556,7 @@ def search_tags(
             if namespace is not None:
                 like_rows = conn.execute(
                     """
-                    SELECT t.id, t.namespace, t.name, t.notes, t.canonical_id,
+                    SELECT t.id, t.namespace, t.name, t.notes, t.description, t.canonical_id,
                       ct.namespace AS canonical_namespace, ct.name AS canonical_name,
                       (SELECT COUNT(*) FROM topic_tags WHERE tag_id = t.id) +
                       (SELECT COUNT(*) FROM activity_tags WHERE tag_id = t.id) +
@@ -574,7 +574,7 @@ def search_tags(
             else:
                 like_rows = conn.execute(
                     """
-                    SELECT t.id, t.namespace, t.name, t.notes, t.canonical_id,
+                    SELECT t.id, t.namespace, t.name, t.notes, t.description, t.canonical_id,
                       ct.namespace AS canonical_namespace, ct.name AS canonical_name,
                       (SELECT COUNT(*) FROM topic_tags WHERE tag_id = t.id) +
                       (SELECT COUNT(*) FROM activity_tags WHERE tag_id = t.id) +
@@ -646,7 +646,7 @@ def search_tags(
                 placeholders = ",".join("?" * len(missing_ids))
                 missing_rows = conn.execute(
                     f"""
-                    SELECT t.id, t.namespace, t.name, t.notes, t.canonical_id,
+                    SELECT t.id, t.namespace, t.name, t.notes, t.description, t.canonical_id,
                       ct.namespace AS canonical_namespace, ct.name AS canonical_name,
                       (SELECT COUNT(*) FROM topic_tags WHERE tag_id = t.id) +
                       (SELECT COUNT(*) FROM activity_tags WHERE tag_id = t.id) +
@@ -687,6 +687,7 @@ def search_tags(
                     "usage_count": r["usage_count"],
                     "score": round(score, 4),
                     "canonical": canonical,
+                    "description": r["description"],
                 }
                 if include_notes:
                     entry["notes"] = r["notes"]
@@ -720,8 +721,10 @@ def update_tag(
     notes: str | None = None,
     canonical: str | None = None,
     rename: str | None = None,
+    description: str | None = None,
 ) -> dict:
-    """既存タグの notes（教訓・運用ルール）、canonical（エイリアス先）、またはname（リネーム）を更新する。
+    """既存タグの notes（教訓・運用ルール）、canonical（エイリアス先）、name（リネーム）、
+    またはdescription（短い説明文）を更新する。
 
     Args:
         tag: タグ文字列（例: "domain:cc-memory", "hooks"）
@@ -731,20 +734,22 @@ def update_tag(
                    付け替え済みの紐付けは戻らない。
         rename: 新しいタグ名。namespace変更も可能（例: "hooks" → "domain:hooks"）。
                 新名が既存タグと衝突する場合はエラー。
+        description: タグの短い説明文（最大100文字）。空文字はNULLに正規化される。
 
     Returns:
         成功時: {"tag": str, "notes": str, "updated": True} (notes更新時)
                 {"tag": str, "canonical": str | None, "updated": True} (canonical更新時)
                 {"tag": str, "renamed_to": str, "updated": True} (rename時)
+                {"tag": str, "description": str | None, "updated": True} (description更新時)
         失敗時: {"error": {"code": ..., "message": ...}}
     """
-    # バリデーション: 相互排他（notes, canonical, rename は1つだけ指定可能）
-    specified = [p for p in (notes, canonical, rename) if p is not None]
+    # バリデーション: 相互排他（notes, canonical, rename, description は1つだけ指定可能）
+    specified = [p for p in (notes, canonical, rename, description) if p is not None]
     if len(specified) > 1:
         return {
             "error": {
                 "code": "CONFLICTING_PARAMS",
-                "message": "Only one of 'notes', 'canonical', or 'rename' can be specified. Use separate calls.",
+                "message": "Only one of 'notes', 'canonical', 'rename', or 'description' can be specified. Use separate calls.",
             }
         }
 
@@ -753,7 +758,7 @@ def update_tag(
         return {
             "error": {
                 "code": "MISSING_PARAMS",
-                "message": "At least one of 'notes', 'canonical', or 'rename' must be specified.",
+                "message": "At least one of 'notes', 'canonical', 'rename', or 'description' must be specified.",
             }
         }
 
@@ -825,6 +830,18 @@ def update_tag(
             conn.commit()
             new_tag_str = f"{new_namespace}:{new_name}" if new_namespace else new_name
             return {"tag": tag_str, "renamed_to": new_tag_str, "updated": True}
+
+        # --- description 更新 ---
+        if description is not None:
+            # 空文字→NULL正規化
+            if description == "":
+                description = None
+            conn.execute(
+                "UPDATE tags SET description = ? WHERE id = ?",
+                (description, tag_id),
+            )
+            conn.commit()
+            return {"tag": tag_str, "description": description, "updated": True}
 
         # --- notes 更新 ---
         if notes is not None:
@@ -970,6 +987,25 @@ def update_tag(
                 "message": str(e),
             }
         }
+    finally:
+        conn.close()
+
+
+def get_available_intents() -> list[dict]:
+    """intent:タグ一覧をdescription付きで返す（canonical除外、アルファベット順）"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT name, description FROM tags
+            WHERE namespace = 'intent' AND canonical_id IS NULL
+            ORDER BY name ASC
+            """,
+        ).fetchall()
+        return [
+            {"tag": f"intent:{r['name']}", "description": r["description"]}
+            for r in rows
+        ]
     finally:
         conn.close()
 

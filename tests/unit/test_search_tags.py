@@ -157,9 +157,22 @@ def test_search_tags_response_format(temp_db):
     assert "usage_count" in tag
     assert "score" in tag
     assert "canonical" in tag
+    assert "description" in tag
     assert isinstance(tag["id"], int)
     assert isinstance(tag["usage_count"], int)
     assert isinstance(tag["score"], float)
+
+
+def test_search_tags_description_value(temp_db):
+    """descriptionが設定されたタグで値が正しく返る"""
+    from src.services.tag_service import update_tag
+    add_topic(title="Topic 1", description="Desc", tags=["domain:test"])
+    update_tag("domain:test", description="テスト用タグ")
+
+    result = search_tags("test")
+    assert "error" not in result
+    test_tag = next(t for t in result["tags"] if t["name"] == "test")
+    assert test_tag["description"] == "テスト用タグ"
 
 
 def test_search_tags_canonical(temp_db):

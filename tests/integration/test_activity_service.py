@@ -52,6 +52,7 @@ class TestAddActivity:
         assert "error" not in result
         assert result["activity_id"] > 0
         assert "check_in_result" not in result
+        assert "available_intents" in result
 
     def test_add_activity_tags_required(self, temp_db):
         """tags=[]でTAGS_REQUIREDエラーになる"""
@@ -209,6 +210,70 @@ class TestAddActivity:
         assert "related_topics" in check_in_result
         assert any(t["id"] == topic_id for t in check_in_result["related_topics"])
         assert "recent_decisions" in check_in_result
+
+    def test_add_activity_available_intents_format(self, temp_db):
+        """available_intentsの各要素に"tag"と"description"がある"""
+        result = add_activity(
+            title="Activity",
+            description="Desc",
+            tags=DEFAULT_TAGS,
+            check_in=False,
+        )
+
+        assert "error" not in result
+        assert "available_intents" in result
+        for intent in result["available_intents"]:
+            assert "tag" in intent
+            assert "description" in intent
+            assert intent["tag"].startswith("intent:")
+
+    def test_add_activity_available_intents_alphabetical(self, temp_db):
+        """available_intentsがアルファベット順"""
+        result = add_activity(
+            title="Activity",
+            description="Desc",
+            tags=DEFAULT_TAGS,
+            check_in=False,
+        )
+
+        assert "error" not in result
+        intent_names = [i["tag"] for i in result["available_intents"]]
+        assert intent_names == sorted(intent_names)
+
+    def test_add_activity_available_intents_excludes_canonical(self, temp_db):
+        """canonical_id持ちのintentはavailable_intentsから除外される"""
+        from src.services.tag_service import update_tag
+
+        # intent:debugとintent:investigateを作成するためにactivityを作成
+        add_activity(
+            title="Setup",
+            description="Desc",
+            tags=["domain:test", "intent:investigate"],
+            check_in=False,
+        )
+
+        # intent:testaliasを作ってintent:investigateのエイリアスにする
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO tags (namespace, name) VALUES ('intent', 'testalias')",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        update_tag("intent:testalias", canonical="intent:investigate")
+
+        result = add_activity(
+            title="Activity",
+            description="Desc",
+            tags=DEFAULT_TAGS,
+            check_in=False,
+        )
+
+        assert "error" not in result
+        intent_tags = [i["tag"] for i in result["available_intents"]]
+        assert "intent:testalias" not in intent_tags
 
 
 class TestGetActivities:

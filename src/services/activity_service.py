@@ -14,6 +14,7 @@ from src.services.tag_service import (
     link_tags,
     get_entity_tags,
     get_entity_tags_batch,
+    get_available_intents,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,10 @@ def add_activity(
         generate_and_store_embedding("activity", activity_id, build_embedding_text(title, description, tag_text))
 
         result = {"activity_id": activity_id}
+        try:
+            result["available_intents"] = get_available_intents()
+        except Exception:
+            result["available_intents"] = []
 
     except sqlite3.IntegrityError as e:
         conn.rollback()
