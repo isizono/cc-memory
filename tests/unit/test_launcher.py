@@ -315,3 +315,164 @@ class TestProjectRoot:
         import os
         assert os.path.isdir(launcher._PROJECT_ROOT)
         assert os.path.isfile(os.path.join(launcher._PROJECT_ROOT, "pyproject.toml"))
+
+
+class TestServerDisconnected:
+    def test_is_exception(self):
+        """ServerDisconnectedがExceptionのサブクラスである"""
+        assert issubclass(launcher.ServerDisconnected, Exception)
+
+    def test_can_be_raised_and_caught(self):
+        """ServerDisconnectedをraise/catchできる"""
+        with pytest.raises(launcher.ServerDisconnected, match="test message"):
+            raise launcher.ServerDisconnected("test message")
+
+
+class TestMainRetryLoop:
+    """main()のリトライループの動作検証"""
+
+    def _setup_main(self, monkeypatch, bridge_side_effects):
+        """main()テスト用の共通セットアップ
+
+        bridge_side_effectsにはasyncio.run(_bridge())の戻り値/例外のリストを渡す。
+        """
+        monkeypatch.setattr(launcher, "_cleanup_done", False)
+        monkeypatch.setattr(launcher, "_ensure_server_running", lambda: True)
+        monkeypatch.setattr(launcher, "_register_session", lambda: True)
+        monkeypatch.setattr(launcher, "_unregister_session", lambda: True)
+        monkeypatch.setattr(launcher.time, "sleep", lambda _: None)
+
+        call_count = {"bridge": 0}
+
+        def fake_asyncio_run(coro):
+            # コルーチンを破棄（awaitしない）
+            coro.close()
+            idx = call_count["bridge"]
+            call_count["bridge"] += 1
+            effect = bridge_side_effects[idx]
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
+
+        monkeypatch.setattr(launcher.asyncio, "run", fake_asyncio_run)
+        return call_count
+
+    def test_normal_exit_no_retry(self, monkeypatch):
+        """stdin EOF（正常終了）ではリトライしない"""
+        call_count = self._setup_main(monkeypatch, [None])  # bridge returns None
+        launcher.main()
+        assert call_count["bridge"] == 1
+
+    def test_server_disconnected_retries(self, monkeypatch):
+        """ServerDisconnectedでリトライし、次の接続で成功する"""
+        call_count = self._setup_main(monkeypatch, [
+            launcher.ServerDisconnected("lost"),  # attempt 0: fail
+            None,  # attempt 1: success
+        ])
+        launcher.main()
+        assert call_count["bridge"] == 2
+
+    def test_max_retries_exceeded(self, monkeypatch):
+        """MAX_RETRIES回リトライしても失敗したら終了する"""
+        call_count = self._setup_main(monkeypatch, [
+            launcher.ServerDisconnected("lost"),  # attempt 0
+            launcher.ServerDisconnected("lost"),  # attempt 1
+            launcher.ServerDisconnected("lost"),  # attempt 2
+            launcher.ServerDisconnected("lost"),  # attempt 3 (max)
+        ])
+        launcher.main()
+        assert call_count["bridge"] == launcher.MAX_RETRIES + 1
+
+    def test_unexpected_exception_retries(self, monkeypatch):
+        """予期しない例外でもリトライする"""
+        call_count = self._setup_main(monkeypatch, [
+            ConnectionError("connection reset"),  # attempt 0: fail
+            None,  # attempt 1: success
+        ])
+        launcher.main()
+        assert call_count["bridge"] == 2
+
+    def test_ensure_server_called_each_attempt(self, monkeypatch):
+        """リトライのたびに_ensure_server_runningが呼ばれる"""
+        ensure_count = {"calls": 0}
+
+        def counting_ensure():
+            ensure_count["calls"] += 1
+            return True
+
+        monkeypatch.setattr(launcher, "_cleanup_done", False)
+        monkeypatch.setattr(launcher, "_ensure_server_running", counting_ensure)
+        monkeypatch.setattr(launcher, "_register_session", lambda: True)
+        monkeypatch.setattr(launcher, "_unregister_session", lambda: True)
+        monkeypatch.setattr(launcher.time, "sleep", lambda _: None)
+
+        bridge_effects = [launcher.ServerDisconnected("lost"), None]
+        call_count = {"bridge": 0}
+
+        def fake_asyncio_run(coro):
+            coro.close()
+            idx = call_count["bridge"]
+            call_count["bridge"] += 1
+            effect = bridge_effects[idx]
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
+
+        monkeypatch.setattr(launcher.asyncio, "run", fake_asyncio_run)
+        launcher.main()
+        assert ensure_count["calls"] == 2
+
+    def test_backoff_values(self, monkeypatch):
+        """バックオフが2秒, 4秒, 8秒の順で適用される"""
+        sleep_values = []
+
+        def tracking_sleep(seconds):
+            sleep_values.append(seconds)
+
+        monkeypatch.setattr(launcher, "_cleanup_done", False)
+        monkeypatch.setattr(launcher, "_ensure_server_running", lambda: True)
+        monkeypatch.setattr(launcher, "_register_session", lambda: True)
+        monkeypatch.setattr(launcher, "_unregister_session", lambda: True)
+        monkeypatch.setattr(launcher.time, "sleep", tracking_sleep)
+
+        bridge_effects = [
+            launcher.ServerDisconnected("lost"),
+            launcher.ServerDisconnected("lost"),
+            launcher.ServerDisconnected("lost"),
+            launcher.ServerDisconnected("lost"),
+        ]
+        call_count = {"bridge": 0}
+
+        def fake_asyncio_run(coro):
+            coro.close()
+            idx = call_count["bridge"]
+            call_count["bridge"] += 1
+            effect = bridge_effects[idx]
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
+
+        monkeypatch.setattr(launcher.asyncio, "run", fake_asyncio_run)
+        launcher.main()
+        assert sleep_values == [2, 4, 8]
+
+    def test_cleanup_called_once(self, monkeypatch):
+        """main()終了時にcleanupが1回だけ呼ばれる"""
+        cleanup_count = {"calls": 0}
+
+        def counting_cleanup():
+            cleanup_count["calls"] += 1
+
+        monkeypatch.setattr(launcher, "_cleanup_done", False)
+        monkeypatch.setattr(launcher, "_cleanup", counting_cleanup)
+        monkeypatch.setattr(launcher, "_ensure_server_running", lambda: True)
+        monkeypatch.setattr(launcher, "_register_session", lambda: True)
+        monkeypatch.setattr(launcher.time, "sleep", lambda _: None)
+
+        def fake_asyncio_run(coro):
+            coro.close()
+            return None
+
+        monkeypatch.setattr(launcher.asyncio, "run", fake_asyncio_run)
+        launcher.main()
+        assert cleanup_count["calls"] == 1

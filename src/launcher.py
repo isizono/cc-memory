@@ -3,7 +3,7 @@
 Claude Code が stdio プロトコルで接続してくるエントリーポイント。
 HTTPサーバーが未起動なら自動でデーモン起動し、
 stdinからのJSON-RPCメッセージをStreamable HTTP経由で転送する。
-終了時にセッション解除を行う。
+サーバー側切断時は自動再接続を試み、stdin EOF時にセッション解除を行う。
 """
 import asyncio
 import atexit
@@ -19,6 +19,15 @@ import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# リトライ設定
+MAX_RETRIES = 3
+
+
+class ServerDisconnected(Exception):
+    """サーバー側の切断を示す例外。stdin EOFとの区別に使用する。"""
+    pass
+
 
 # サーバー接続設定（HTTP_HOST, HTTP_PORTはmain.pyと共有）
 from src.http_config import HTTP_HOST, HTTP_PORT
@@ -169,6 +178,7 @@ async def _bridge() -> None:
     """stdinからJSON-RPCメッセージを読み、HTTP POST /mcpに転送し、レスポンスをstdoutに書く。
 
     MCP SDK の streamable_http_client を利用し、ストリーム間のブリッジを行う。
+    正常終了（stdin EOF）時はreturn、サーバー側切断時はServerDisconnectedをraiseする。
     """
     # 遅延import: デーモン起動ロジックはMCP SDKに依存しないため、
     # ブリッジ実行時まで重いimportを遅延させて起動速度を確保する
@@ -177,6 +187,11 @@ async def _bridge() -> None:
     from mcp.client.streamable_http import streamable_http_client
     from mcp.shared.message import SessionMessage
 
+    # stdin EOFとサーバー切断を区別するためのフラグ
+    # stdin EOF: stdin_to_serverが先に終了 → 正常終了
+    # サーバー切断: server_to_stdoutが先に終了 → stdin_eofがFalse → ServerDisconnected
+    stdin_eof = False
+
     async with streamable_http_client(
         url=MCP_ENDPOINT,
         terminate_on_close=False,
@@ -184,6 +199,7 @@ async def _bridge() -> None:
 
         async def stdin_to_server() -> None:
             """stdinから1行ずつ読み、write_streamに送る。"""
+            nonlocal stdin_eof
             loop = asyncio.get_running_loop()
             reader = asyncio.StreamReader()
             transport, _ = await loop.connect_read_pipe(
@@ -195,6 +211,7 @@ async def _bridge() -> None:
                 while True:
                     chunk = await reader.read(65536)
                     if not chunk:
+                        stdin_eof = True
                         break
                     buffer += chunk
                     while b"\n" in buffer:
@@ -219,7 +236,11 @@ async def _bridge() -> None:
                 await write_stream.aclose()
 
         async def server_to_stdout() -> None:
-            """read_streamからメッセージを受信し、stdoutに書く。"""
+            """read_streamからメッセージを受信し、stdoutに書く。
+
+            read_streamが終了したとき、stdin_eofがFalseならサーバー側切断と判断し
+            ServerDisconnectedをraiseしてtask group全体をキャンセルする。
+            """
             try:
                 async for session_msg_or_exc in read_stream:
                     if isinstance(session_msg_or_exc, Exception):
@@ -235,6 +256,9 @@ async def _bridge() -> None:
                 pass
             except Exception:
                 logger.debug("stdout writer ended", exc_info=True)
+            finally:
+                if not stdin_eof:
+                    raise ServerDisconnected("Server connection lost")
 
         async with anyio.create_task_group() as tg:
             tg.start_soon(stdin_to_server)
@@ -242,7 +266,11 @@ async def _bridge() -> None:
 
 
 def main() -> None:
-    """ランチャーのメインエントリーポイント"""
+    """ランチャーのメインエントリーポイント
+
+    サーバー側切断時は自動でリトライする（最大MAX_RETRIES回）。
+    stdin EOF（Claude Code終了）時は即座に終了する。
+    """
     # ログ設定（stderrへ出力、stdoutはMCPプロトコル用）
     logging.basicConfig(
         level=logging.INFO,
@@ -250,27 +278,49 @@ def main() -> None:
         stream=sys.stderr,
     )
 
-    # 1. HTTPサーバーの起動確認
-    if not _ensure_server_running():
-        logger.error("Failed to ensure HTTP server is running")
-        sys.exit(1)
-
-    # 2. セッション登録
-    if not _register_session():
-        logger.error("Failed to register session")
-        sys.exit(1)
-
-    # 3. クリーンアップ登録
+    # クリーンアップ登録（ループの外で1回だけ）
     atexit.register(_cleanup)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # atexitが発火する
 
-    # 4. stdio <-> HTTP ブリッジ起動
-    try:
-        asyncio.run(_bridge())
-    except KeyboardInterrupt:
-        pass
-    finally:
-        _cleanup()
+    for attempt in range(MAX_RETRIES + 1):
+        # 1. HTTPサーバーの起動確認
+        if not _ensure_server_running():
+            logger.error("Failed to ensure HTTP server is running")
+            sys.exit(1)
+
+        # 2. セッション登録
+        if not _register_session():
+            logger.error("Failed to register session")
+            sys.exit(1)
+
+        # 3. stdio <-> HTTP ブリッジ起動
+        try:
+            asyncio.run(_bridge())
+            break  # stdin EOF → 正常終了
+        except KeyboardInterrupt:
+            break
+        except ServerDisconnected as e:
+            if attempt >= MAX_RETRIES:
+                logger.error("Bridge disconnected, max retries (%d) exceeded: %s", MAX_RETRIES, e)
+                break
+            backoff = 2 ** (attempt + 1)  # 2秒, 4秒, 8秒
+            logger.warning(
+                "Bridge disconnected (%s), retrying in %ds (%d/%d)",
+                e, backoff, attempt + 1, MAX_RETRIES,
+            )
+            time.sleep(backoff)
+        except Exception as e:
+            if attempt >= MAX_RETRIES:
+                logger.error("Bridge failed unexpectedly, max retries (%d) exceeded: %s", MAX_RETRIES, e)
+                break
+            backoff = 2 ** (attempt + 1)
+            logger.warning(
+                "Bridge failed unexpectedly (%s), retrying in %ds (%d/%d)",
+                e, backoff, attempt + 1, MAX_RETRIES,
+            )
+            time.sleep(backoff)
+
+    _cleanup()
 
 
 if __name__ == "__main__":
