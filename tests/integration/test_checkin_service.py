@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.activity_service import add_activity, update_activity
-from tests.helpers import add_decision
+from tests.helpers import add_decision, add_log
 from src.services.material_service import add_material
 from src.services.relation_service import add_relation
 from src.services.topic_service import add_topic
@@ -359,3 +359,145 @@ class TestCheckInRelations:
 
         assert "error" not in result
         assert len(result["recent_decisions"]) == DECISIONS_FULL_LIMIT
+
+
+class TestCheckInCoverage:
+    """coverageフィールドのテスト"""
+
+    def test_coverage_field_exists(self, activity_id):
+        """coverageフィールドがトップレベルに含まれる"""
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert "coverage" in result
+        assert "decisions" in result["coverage"]
+        assert "materials" in result["coverage"]
+        assert "logs" in result["coverage"]
+
+    def test_coverage_is_first_key(self, activity_id):
+        """coverageがレスポンスの最初のキーである"""
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        keys = list(result.keys())
+        assert keys[0] == "coverage"
+
+    def test_coverage_no_relations_format(self, activity_id):
+        """リレーションなしの場合、coverage分母は0"""
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert result["coverage"]["decisions"] == "0/0"
+        assert result["coverage"]["materials"] == "0/0"
+        assert result["coverage"]["logs"] == "0/0"
+
+    def test_coverage_with_decisions(self, temp_db):
+        """decisionsがある場合、coverageの分母に件数が反映される"""
+        topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
+        for i in range(3):
+            add_decision(decision=f"決定{i}", reason="理由", topic_id=topic["topic_id"])
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [topic["topic_id"]]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        # 分子: min(3, DECISIONS_FULL_LIMIT) = 3, 分母: 3
+        assert result["coverage"]["decisions"] == "3/3"
+
+    def test_coverage_decisions_exceeds_limit(self, temp_db):
+        """decisions総数がDECISIONS_FULL_LIMITを超えた場合、分子は制限値になる"""
+        topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
+        total = DECISIONS_FULL_LIMIT + 5
+        for i in range(total):
+            add_decision(decision=f"決定{i}", reason="理由", topic_id=topic["topic_id"])
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [topic["topic_id"]]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        assert result["coverage"]["decisions"] == f"{DECISIONS_FULL_LIMIT}/{total}"
+
+    def test_coverage_with_materials(self, activity_id):
+        """materialsがある場合、coverageの分母に件数が反映される"""
+        add_material("資材1", "内容1", DEFAULT_TAGS, related=[{"type": "activity", "ids": [activity_id]}])
+        add_material("資材2", "内容2", DEFAULT_TAGS, related=[{"type": "activity", "ids": [activity_id]}])
+
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert result["coverage"]["materials"] == "2/2"
+
+    def test_coverage_logs_always_zero_numerator(self, temp_db):
+        """logsの分子は常に0（本文を含めないため）"""
+        topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
+        for i in range(3):
+            add_log(topic_id=topic["topic_id"], title=f"ログ{i}", content=f"内容{i}")
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [topic["topic_id"]]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        assert result["coverage"]["logs"] == "0/3"
+
+    def test_coverage_zero_related_topics(self, activity_id):
+        """関連topic 0件の場合、coverage "0/0"が返る（Edge case）"""
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert result["coverage"]["decisions"] == "0/0"
+        assert result["coverage"]["materials"] == "0/0"
+        assert result["coverage"]["logs"] == "0/0"
+
+
+class TestCheckInLogsCatalog:
+    """logsカタログのテスト"""
+
+    def test_logs_field_exists(self, activity_id):
+        """logsフィールドが常に存在する"""
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert "logs" in result
+
+    def test_logs_empty_without_relations(self, activity_id):
+        """リレーションなしの場合、logsは空リスト"""
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert result["logs"] == []
+
+    def test_logs_catalog_id_and_title_only(self, temp_db):
+        """logsカタログはid + titleのみ（contentなし）"""
+        topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
+        add_log(topic_id=topic["topic_id"], title="初回議論", content="詳細な内容")
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [topic["topic_id"]]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        assert len(result["logs"]) == 1
+        assert "id" in result["logs"][0]
+        assert "title" in result["logs"][0]
+        assert "content" not in result["logs"][0]
+        assert result["logs"][0]["title"] == "初回議論"
+
+    def test_logs_catalog_multiple_topics(self, temp_db):
+        """複数topicのlogsがカタログに集約される"""
+        t1 = add_topic(title="トピック1", description="Desc", tags=DEFAULT_TAGS)
+        t2 = add_topic(title="トピック2", description="Desc", tags=DEFAULT_TAGS)
+        add_log(topic_id=t1["topic_id"], title="ログA", content="内容A")
+        add_log(topic_id=t2["topic_id"], title="ログB", content="内容B")
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [t1["topic_id"], t2["topic_id"]]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        assert len(result["logs"]) == 2
+        titles = {l["title"] for l in result["logs"]}
+        assert "ログA" in titles
+        assert "ログB" in titles

@@ -144,80 +144,145 @@ def add_decisions(items: list[dict]) -> dict:
 
 
 def get_decisions(
-    topic_id: int,
+    entity_type: str,
+    entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
 ) -> dict:
     """
-    指定トピックに関連する決定事項を取得する。
+    指定エンティティに関連する決定事項を取得する。
 
     Args:
-        topic_id: 対象トピックのID
+        entity_type: エンティティタイプ（"topic" または "activity"）
+        entity_id: 対象エンティティのID
         start_id: 取得開始位置の決定事項ID（ページネーション用）
         limit: 取得件数上限（最大30件）
 
     Returns:
         決定事項一覧（各decisionにtags付き）
+        entity_type == "topic": 従来通りtopic_idで直接取得
+        entity_type == "activity": related topics（上限10件）経由でdecisions集約
     """
     conn = get_connection()
     try:
         # limitを30件に制限
         limit = min(limit, 30)
 
-        # topic_nameを取得
-        topic_row = conn.execute(
-            "SELECT title FROM discussion_topics WHERE id = ?",
-            (topic_id,),
-        ).fetchone()
-        topic_name = topic_row["title"] if topic_row else None
+        if entity_type == "topic":
+            topic_id = entity_id
 
-        if topic_name is None:
+            # topic_nameを取得
+            topic_row = conn.execute(
+                "SELECT title FROM discussion_topics WHERE id = ?",
+                (topic_id,),
+            ).fetchone()
+            topic_name = topic_row["title"] if topic_row else None
+
+            if topic_name is None:
+                return {
+                    "topic_id": topic_id,
+                    "topic_name": None,
+                    "decisions": [],
+                }
+
+            if start_id is None:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM decisions
+                    WHERE topic_id = ?
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (topic_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM decisions
+                    WHERE topic_id = ? AND id >= ?
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (topic_id, start_id, limit),
+                ).fetchall()
+
+            # バッチでタグ取得
+            tags_map = get_effective_tags_batch(conn, "decision", topic_id)
+
+            decisions = []
+            for row in rows:
+                dec = row_to_dict(row)
+                decisions.append({
+                    "id": dec["id"],
+                    "decision": dec["decision"],
+                    "reason": dec["reason"],
+                    "tags": tags_map.get(dec["id"], []),
+                    "created_at": dec["created_at"],
+                })
+
             return {
                 "topic_id": topic_id,
-                "topic_name": None,
-                "decisions": [],
+                "topic_name": topic_name,
+                "decisions": decisions,
             }
 
-        if start_id is None:
-            rows = conn.execute(
-                """
-                SELECT * FROM decisions
-                WHERE topic_id = ?
-                ORDER BY created_at ASC, id ASC
-                LIMIT ?
-                """,
-                (topic_id, limit),
+        elif entity_type == "activity":
+            # activity → related topics（上限10件）→ decisions集約
+            relation_rows = conn.execute(
+                "SELECT target_type, target_id FROM relations_view WHERE source_type = ? AND source_id = ?",
+                ("activity", entity_id),
             ).fetchall()
+            topic_ids = [r["target_id"] for r in relation_rows if r["target_type"] == "topic"][:10]
+
+            if not topic_ids:
+                return {"decisions": []}
+
+            placeholders = ",".join("?" * len(topic_ids))
+            if start_id is None:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM decisions
+                    WHERE topic_id IN ({placeholders})
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    tuple(topic_ids) + (limit,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM decisions
+                    WHERE topic_id IN ({placeholders}) AND id <= ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    tuple(topic_ids) + (start_id, limit),
+                ).fetchall()
+
+            # 全topic_idを横断してバッチでタグ取得
+            decision_ids = [row_to_dict(row)["id"] for row in rows]
+            tags_map = get_effective_tags_batch_by_ids(conn, "decision", decision_ids) if decision_ids else {}
+
+            decisions = []
+            for row in rows:
+                dec = row_to_dict(row)
+                decisions.append({
+                    "id": dec["id"],
+                    "decision": dec["decision"],
+                    "reason": dec["reason"],
+                    "tags": tags_map.get(dec["id"], []),
+                    "created_at": dec["created_at"],
+                })
+
+            return {"decisions": decisions}
+
         else:
-            rows = conn.execute(
-                """
-                SELECT * FROM decisions
-                WHERE topic_id = ? AND id >= ?
-                ORDER BY created_at ASC, id ASC
-                LIMIT ?
-                """,
-                (topic_id, start_id, limit),
-            ).fetchall()
-
-        # バッチでタグ取得
-        tags_map = get_effective_tags_batch(conn, "decision", topic_id)
-
-        decisions = []
-        for row in rows:
-            dec = row_to_dict(row)
-            decisions.append({
-                "id": dec["id"],
-                "decision": dec["decision"],
-                "reason": dec["reason"],
-                "tags": tags_map.get(dec["id"], []),
-                "created_at": dec["created_at"],
-            })
-
-        return {
-            "topic_id": topic_id,
-            "topic_name": topic_name,
-            "decisions": decisions,
-        }
+            return {
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": f"Invalid entity_type: {entity_type}. Must be 'topic' or 'activity'",
+                }
+            }
 
     except Exception as e:
         return {

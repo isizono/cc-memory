@@ -273,12 +273,25 @@ def get_topics(
 
 @mcp.tool()
 def get_logs(
-    topic_id: int,
+    entity_type: str,
+    entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
 ) -> dict:
-    """指定トピックの議論ログを取得する。"""
-    result = discussion_log_service.get_logs(topic_id, start_id, limit)
+    """
+    指定エンティティの議論ログを取得する。
+
+    Args:
+        entity_type: エンティティタイプ（"topic" または "activity"）
+        entity_id: 対象エンティティのID
+        start_id: 取得開始位置のログID（ページネーション用）
+        limit: 取得件数上限（最大30件）
+
+    Returns:
+        議論ログ一覧（各logにtags付き）
+        entity_type == "activity" の場合はrelated topics経由でlogs集約
+    """
+    result = discussion_log_service.get_logs(entity_type, entity_id, start_id, limit)
     if "error" not in result:
         all_tags = _collect_result_tags(result.get("logs", []))
         if all_tags:
@@ -288,12 +301,25 @@ def get_logs(
 
 @mcp.tool()
 def get_decisions(
-    topic_id: int,
+    entity_type: str,
+    entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
 ) -> dict:
-    """指定トピックに関連する決定事項を取得する。"""
-    result = decision_service.get_decisions(topic_id, start_id, limit)
+    """
+    指定エンティティに関連する決定事項を取得する。
+
+    Args:
+        entity_type: エンティティタイプ（"topic" または "activity"）
+        entity_id: 対象エンティティのID
+        start_id: 取得開始位置の決定事項ID（ページネーション用）
+        limit: 取得件数上限（最大30件）
+
+    Returns:
+        決定事項一覧（各decisionにtags付き）
+        entity_type == "activity" の場合はrelated topics経由でdecisions集約
+    """
+    result = decision_service.get_decisions(entity_type, entity_id, start_id, limit)
     if "error" not in result:
         all_tags = _collect_result_tags(result.get("decisions", []))
         if all_tags:
@@ -666,12 +692,13 @@ def check_in(
     tag_notes・資材カタログ・関連decisionsを一括取得し、
     statusがin_progress以外なら自動的にin_progressに更新する。
     summaryフィールドをそのまま出力すること。
+    coverageが低い項目（目安: 50%未満）がある場合、特にlogsは議論の経緯を含むため優先的に取得を検討してください。
 
     Args:
         activity_id: アクティビティID
 
     Returns:
-        check-in結果（activity, related_topics, related_activities, tag_notes, materials, recent_decisions, catalog, summary）
+        check-in結果（coverage, activity, related_topics, related_activities, tag_notes, materials, recent_decisions, logs, catalog, summary）
     """
     return _check_in(activity_id)
 

@@ -498,7 +498,7 @@ class TestGetLogsResultBasedInjection:
         assert add_result["errors"] == []
         update_tag("domain:test", "テスト教訓")
 
-        result = get_logs(topic_id)
+        result = get_logs("topic", topic_id)
         assert "error" not in result
         assert len(result["logs"]) >= 1
 
@@ -519,7 +519,7 @@ class TestGetLogsResultBasedInjection:
         assert "error" not in add_result
         assert add_result["errors"] == []
 
-        result = get_logs(topic_id)
+        result = get_logs("topic", topic_id)
         assert "error" not in result
 
         _apply_result_based_injection(result, "logs")
@@ -543,7 +543,7 @@ class TestGetDecisionsResultBasedInjection:
         assert add_result["errors"] == []
         update_tag("domain:test", "テスト教訓")
 
-        result = get_decisions(topic_id)
+        result = get_decisions("topic", topic_id)
         assert "error" not in result
         assert len(result["decisions"]) >= 1
 
@@ -564,7 +564,7 @@ class TestGetDecisionsResultBasedInjection:
         assert "error" not in add_result
         assert add_result["errors"] == []
 
-        result = get_decisions(topic_id)
+        result = get_decisions("topic", topic_id)
         assert "error" not in result
 
         _apply_result_based_injection(result, "decisions")
@@ -757,7 +757,7 @@ class TestHandlerGetLogsInjection:
         assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
-        result = get_logs.fn(topic_id)
+        result = get_logs.fn("topic", topic_id)
         assert "error" not in result
         assert "tag_notes" in result
         assert any(n["tag"] == "domain:handler" for n in result["tag_notes"])
@@ -775,7 +775,7 @@ class TestHandlerGetLogsInjection:
         assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
-        get_logs.fn(topic_id)
+        get_logs.fn("topic", topic_id)
         assert "domain:handler" not in _injected_tags
 
 
@@ -795,7 +795,7 @@ class TestHandlerGetDecisionsInjection:
         assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
-        result = get_decisions.fn(topic_id)
+        result = get_decisions.fn("topic", topic_id)
         assert "error" not in result
         assert "tag_notes" in result
         assert any(n["tag"] == "domain:handler" for n in result["tag_notes"])
@@ -813,5 +813,5 @@ class TestHandlerGetDecisionsInjection:
         assert add_result["errors"] == []
         update_tag("domain:handler", "ハンドラ経由テスト")
 
-        get_decisions.fn(topic_id)
+        get_decisions.fn("topic", topic_id)
         assert "domain:handler" not in _injected_tags
