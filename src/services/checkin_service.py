@@ -85,6 +85,36 @@ def _get_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -
     return decisions
 
 
+def _count_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -> int:
+    """複数トピックのdecisionsの総件数を取得する。"""
+    if not topic_ids:
+        return 0
+    placeholders = ",".join("?" * len(topic_ids))
+    row = conn.execute(
+        f"SELECT COUNT(*) FROM decisions WHERE topic_id IN ({placeholders})",
+        tuple(topic_ids),
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def _get_logs_catalog_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -> list[dict]:
+    """複数トピックのlogsカタログ（id + titleのみ）を横断取得し、新しい順にフラット化する。"""
+    if not topic_ids:
+        return []
+    placeholders = ",".join("?" * len(topic_ids))
+    rows = conn.execute(
+        f"""
+        SELECT id, title
+        FROM discussion_logs
+        WHERE topic_id IN ({placeholders})
+        ORDER BY id DESC
+        """,
+        tuple(topic_ids),
+    ).fetchall()
+
+    return [{"id": row["id"], "title": row["title"]} for row in rows]
+
+
 def _extract_intent_tag(tags: list[str]) -> str:
     """タグリストからintent:プレフィックスのタグを抽出する。なければ「(未設定)」。"""
     for tag in tags:
@@ -114,7 +144,7 @@ def _build_summary(
 def check_in(activity_id: int) -> dict:
     """アクティビティにcheck-inする。
 
-    関連情報（tag_notes, materials, decisions, catalog）を集約取得し、
+    関連情報（tag_notes, materials, decisions, logs catalog, catalog）を集約取得し、
     status自動更新とsummary生成を行う。
 
     リレーション対応:
@@ -135,8 +165,8 @@ def check_in(activity_id: int) -> dict:
         activity_id: アクティビティID
 
     Returns:
-        check-in結果（activity, related_topics, related_activities, tag_notes,
-        materials, recent_decisions, catalog, summary）
+        check-in結果（coverage, activity, related_topics, related_activities, tag_notes,
+        materials, recent_decisions, logs, catalog, summary）
     """
     conn = get_connection()
     try:
@@ -174,10 +204,28 @@ def check_in(activity_id: int) -> dict:
         # 5. recent_decisions取得（関連topic横断、フラット15件）
         recent_decisions = _get_decisions_from_topics(conn, direct["topic"])
 
-        # 6. 2次カタログ取得（depth 1-2）
+        # 6. logsカタログ取得（id + titleのみ、関連topic横断）
+        logs_catalog = _get_logs_catalog_from_topics(conn, direct["topic"])
+
+        # 7. coverage算出
+        total_decisions = _count_decisions_from_topics(conn, direct["topic"])
+        total_materials_row = conn.execute(
+            "SELECT COUNT(*) FROM activity_material_relations WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        total_materials = total_materials_row[0] if total_materials_row else 0
+        total_logs = len(logs_catalog)
+
+        coverage = {
+            "decisions": f"{len(recent_decisions)}/{total_decisions}",
+            "materials": f"{len(materials)}/{total_materials}",
+            "logs": f"0/{total_logs}",  # logsはタイトルのみ返却のため常に0
+        }
+
+        # 8. 2次カタログ取得（depth 1-2）
         catalog = _get_map_with_conn(conn, "activity", activity_id, min_depth=1, max_depth=2)
 
-        # 7. status自動更新（in_progress以外ならin_progressに変更）
+        # 9. status自動更新（in_progress以外ならin_progressに変更）
         # NOTE: update_activityは内部で別コネクションを使用する（既存APIの制約）。
         # check_inのトランザクションとは独立してコミットされる。
         if activity["status"] != "in_progress":
@@ -191,11 +239,12 @@ def check_in(activity_id: int) -> dict:
             else:
                 activity["status"] = "in_progress"
 
-        # 8. summary生成
+        # 10. summary生成
         summary = _build_summary(activity, tags)
 
-        # 戻り値組み立て
+        # 戻り値組み立て（coverageをトップレベルの最初のキーに）
         result = {
+            "coverage": coverage,
             "activity": {
                 "id": activity["id"],
                 "title": activity["title"],
@@ -216,6 +265,7 @@ def check_in(activity_id: int) -> dict:
         result["tag_notes"] = tag_notes
         result["materials"] = materials
         result["recent_decisions"] = recent_decisions
+        result["logs"] = logs_catalog
         if catalog:
             result["catalog"] = catalog
         result["summary"] = summary

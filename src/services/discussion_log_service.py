@@ -154,63 +154,128 @@ def add_logs(items: list[dict]) -> dict:
 
 
 def get_logs(
-    topic_id: int,
+    entity_type: str,
+    entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
 ) -> dict:
     """
-    指定トピックの議論ログを取得する。
+    指定エンティティの議論ログを取得する。
 
     Args:
-        topic_id: 対象トピックのID
+        entity_type: エンティティタイプ（"topic" または "activity"）
+        entity_id: 対象エンティティのID
         start_id: 取得開始位置のログID（ページネーション用）
         limit: 取得件数上限（最大30件）
 
     Returns:
         議論ログ一覧（各logにtags付き）
+        entity_type == "topic": 従来通りtopic_idで直接取得
+        entity_type == "activity": related topics（上限10件）経由でlogs集約
     """
     conn = get_connection()
     try:
         # limitを30件に制限
         limit = min(limit, 30)
 
-        if start_id is None:
-            rows = conn.execute(
-                """
-                SELECT * FROM discussion_logs
-                WHERE topic_id = ?
-                ORDER BY created_at ASC, id ASC
-                LIMIT ?
-                """,
-                (topic_id, limit),
+        if entity_type == "topic":
+            topic_id = entity_id
+            if start_id is None:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM discussion_logs
+                    WHERE topic_id = ?
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (topic_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM discussion_logs
+                    WHERE topic_id = ? AND id >= ?
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (topic_id, start_id, limit),
+                ).fetchall()
+
+            # バッチでタグ取得
+            tags_map = get_effective_tags_batch(conn, "log", topic_id)
+
+            logs = []
+            for row in rows:
+                log = row_to_dict(row)
+                logs.append({
+                    "id": log["id"],
+                    "topic_id": log["topic_id"],
+                    "title": log["title"],
+                    "content": log["content"],
+                    "tags": tags_map.get(log["id"], []),
+                    "created_at": log["created_at"],
+                })
+
+            return {"logs": logs}
+
+        elif entity_type == "activity":
+            # activity → related topics（上限10件）→ logs集約
+            relation_rows = conn.execute(
+                "SELECT target_type, target_id FROM relations_view WHERE source_type = ? AND source_id = ?",
+                ("activity", entity_id),
             ).fetchall()
+            topic_ids = [r["target_id"] for r in relation_rows if r["target_type"] == "topic"][:10]
+
+            if not topic_ids:
+                return {"logs": []}
+
+            placeholders = ",".join("?" * len(topic_ids))
+            if start_id is None:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM discussion_logs
+                    WHERE topic_id IN ({placeholders})
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    tuple(topic_ids) + (limit,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM discussion_logs
+                    WHERE topic_id IN ({placeholders}) AND id <= ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    tuple(topic_ids) + (start_id, limit),
+                ).fetchall()
+
+            # 全topic_idを横断してバッチでタグ取得
+            log_ids = [row_to_dict(row)["id"] for row in rows]
+            tags_map = get_effective_tags_batch_by_ids(conn, "log", log_ids) if log_ids else {}
+
+            logs = []
+            for row in rows:
+                log = row_to_dict(row)
+                logs.append({
+                    "id": log["id"],
+                    "topic_id": log["topic_id"],
+                    "title": log["title"],
+                    "content": log["content"],
+                    "tags": tags_map.get(log["id"], []),
+                    "created_at": log["created_at"],
+                })
+
+            return {"logs": logs}
+
         else:
-            rows = conn.execute(
-                """
-                SELECT * FROM discussion_logs
-                WHERE topic_id = ? AND id >= ?
-                ORDER BY created_at ASC, id ASC
-                LIMIT ?
-                """,
-                (topic_id, start_id, limit),
-            ).fetchall()
-
-        # バッチでタグ取得
-        tags_map = get_effective_tags_batch(conn, "log", topic_id)
-
-        logs = []
-        for row in rows:
-            log = row_to_dict(row)
-            logs.append({
-                "id": log["id"],
-                "topic_id": log["topic_id"],
-                "title": log["title"],
-                "content": log["content"],
-                "tags": tags_map.get(log["id"], []),
-                "created_at": log["created_at"],
-            })
-
-        return {"logs": logs}
+            return {
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": f"Invalid entity_type: {entity_type}. Must be 'topic' or 'activity'",
+                }
+            }
 
     except Exception as e:
         return {

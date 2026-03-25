@@ -377,7 +377,7 @@ def test_get_topics_description_truncated(temp_db):
 def test_get_logs_empty(temp_db):
     """ログが存在しない場合、空の配列が返る"""
     topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
-    result = get_logs(topic_id=topic["topic_id"])
+    result = get_logs("topic", topic["topic_id"])
 
     assert "error" not in result
     assert result["logs"] == []
@@ -392,7 +392,7 @@ def test_get_logs_multiple(temp_db):
     log2 = add_log(topic_id=topic["topic_id"], title="Title 2", content="Log 2")
     log3 = add_log(topic_id=topic["topic_id"], title="Title 3", content="Log 3")
 
-    result = get_logs(topic_id=topic["topic_id"])
+    result = get_logs("topic", topic["topic_id"])
 
     assert "error" not in result
     assert len(result["logs"]) == 3
@@ -413,12 +413,13 @@ def test_get_logs_with_pagination(temp_db):
         logs.append(log)
 
     # 最初の3件を取得
-    result1 = get_logs(topic_id=topic["topic_id"], limit=3)
+    result1 = get_logs("topic", topic["topic_id"], limit=3)
     assert len(result1["logs"]) == 3
 
     # 4件目から取得
     result2 = get_logs(
-        topic_id=topic["topic_id"],
+        "topic",
+        topic["topic_id"],
         start_id=logs[3]["log_id"],
         limit=3,
     )
@@ -431,7 +432,7 @@ def test_get_logs_with_tags(temp_db):
     topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
     add_log(topic_id=topic["topic_id"], title="Log 1", content="Content 1")
 
-    result = get_logs(topic_id=topic["topic_id"])
+    result = get_logs("topic", topic["topic_id"])
 
     assert "error" not in result
     assert len(result["logs"]) == 1
@@ -448,7 +449,7 @@ def test_get_logs_with_tags(temp_db):
 def test_get_decisions_empty(temp_db):
     """決定事項が存在しない場合、空の配列が返る"""
     topic = add_topic(title="Topic", description="Test description", tags=DEFAULT_TAGS)
-    result = get_decisions(topic_id=topic["topic_id"])
+    result = get_decisions("topic", topic["topic_id"])
 
     assert "error" not in result
     assert result["topic_id"] == topic["topic_id"]
@@ -461,7 +462,7 @@ def test_get_decisions_topic_name_included(temp_db):
     topic = add_topic(title="テスト用トピック", description="Test", tags=DEFAULT_TAGS)
     add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason 1")
 
-    result = get_decisions(topic_id=topic["topic_id"])
+    result = get_decisions("topic", topic["topic_id"])
 
     assert result["topic_id"] == topic["topic_id"]
     assert result["topic_name"] == "テスト用トピック"
@@ -471,7 +472,7 @@ def test_get_decisions_topic_name_included(temp_db):
 
 def test_get_decisions_nonexistent_topic(temp_db):
     """存在しないtopic_idの場合、topic_name=nullで空配列"""
-    result = get_decisions(topic_id=999999)
+    result = get_decisions("topic", 999999)
 
     assert "error" not in result
     assert result["topic_id"] == 999999
@@ -500,7 +501,7 @@ def test_get_decisions_multiple(temp_db):
         reason="Reason 3",
     )
 
-    result = get_decisions(topic_id=topic["topic_id"])
+    result = get_decisions("topic", topic["topic_id"])
 
     assert "error" not in result
     assert len(result["decisions"]) == 3
@@ -525,12 +526,13 @@ def test_get_decisions_with_pagination(temp_db):
         decisions.append(dec)
 
     # 最初の3件を取得
-    result1 = get_decisions(topic_id=topic["topic_id"], limit=3)
+    result1 = get_decisions("topic", topic["topic_id"], limit=3)
     assert len(result1["decisions"]) == 3
 
     # 4件目から取得
     result2 = get_decisions(
-        topic_id=topic["topic_id"],
+        "topic",
+        topic["topic_id"],
         start_id=decisions[3]["decision_id"],
         limit=3,
     )
@@ -543,7 +545,7 @@ def test_get_decisions_with_tags(temp_db):
     topic = add_topic(title="Topic", description="Test", tags=DEFAULT_TAGS)
     add_decision(topic_id=topic["topic_id"], decision="Dec 1", reason="Reason 1")
 
-    result = get_decisions(topic_id=topic["topic_id"])
+    result = get_decisions("topic", topic["topic_id"])
 
     assert "error" not in result
     assert len(result["decisions"]) == 1
@@ -562,7 +564,7 @@ def test_get_decisions_with_extra_tags(temp_db):
         tags=["intent:design"],
     )
 
-    result = get_decisions(topic_id=topic["topic_id"])
+    result = get_decisions("topic", topic["topic_id"])
 
     assert "error" not in result
     assert len(result["decisions"]) == 1
