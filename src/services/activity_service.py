@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 # get_activitiesでdescriptionを切り詰める上限文字数
 ACTIVITY_DESC_MAX_LEN = 200
-from src.config import HEARTBEAT_TIMEOUT_MINUTES
+from src.config import HEARTBEAT_TIMEOUT_MINUTES, SNOOZE_DURATION_DAYS
 # DB格納可能なステータス値
-REAL_STATUSES = {"pending", "in_progress", "completed"}
+REAL_STATUSES = {"pending", "in_progress", "completed", "snoozed"}
 # "active"エイリアスが展開されるステータス
 ACTIVE_STATUSES = ("in_progress", "pending")
 # get_activities用（エイリアス含む）
@@ -183,6 +183,15 @@ def get_activities(
 
     conn = get_connection()
     try:
+        # Lazy evaluation: 期限切れsnoozedを自動復活
+        conn.execute(
+            """UPDATE activities SET status = 'pending', updated_at = CURRENT_TIMESTAMP
+               WHERE status = 'snoozed'
+                 AND updated_at <= datetime('now', '-' || ? || ' days')""",
+            (SNOOZE_DURATION_DAYS,),
+        )
+        conn.commit()
+
         # タグフィルタでactivity_idsを絞り込む（tags指定時のみ）
         activity_ids = None
         if parsed_tags is not None:

@@ -7,6 +7,7 @@ DB_PATH: str | None = os.environ.get("CCM_DB_PATH") or os.environ.get("DISCUSSIO
 
 # --- Activity ---
 HEARTBEAT_TIMEOUT_MINUTES: int = int(os.environ.get("CCM_HEARTBEAT_TIMEOUT", "20"))
+SNOOZE_DURATION_DAYS: int = int(os.environ.get("CCM_SNOOZE_DURATION_DAYS", "3"))
 
 # --- Active Context 表示 ---
 IN_PROGRESS_LIMIT: int = int(os.environ.get("CCM_IN_PROGRESS_LIMIT", "3"))
