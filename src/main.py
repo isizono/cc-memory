@@ -12,6 +12,7 @@ from src.services import (
     material_service,
     habit_service,
     relation_service,
+    pin_service,
 )
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import search_tags as _search_tags, update_tag as _update_tag, collect_tag_notes_for_injection
@@ -795,6 +796,32 @@ def get_habits() -> dict:
 def update_habit(habit_id: int, content: Optional[str] = None, active: Optional[bool] = None) -> dict:
     """振る舞いを更新する。active=Falseで無効化、active=Trueで再有効化"""
     return habit_service.update_habit(habit_id, content=content, active=active)
+
+
+@mcp.tool()
+def update_pin(entity_type: str, entity_id: int, pinned: bool) -> dict:
+    """エンティティのpinを切り替える。
+
+    pinnedエンティティはcheck-in時にcontentごと返される。
+    pin基準: 「これを知らずに着手したら間違った方向に進む」レベルの情報。
+    unpin基準: 「もう知らなくてもいい状態になったか」。
+
+    pinすべき例:
+    - 方向転換を記録したログ（以前の方針と異なる判断をした経緯）
+    - プロジェクトの根幹に関わるdecision（アーキテクチャ選定、命名規約など）
+    - 必読のmaterial（設計ドキュメント、仕様書など）
+
+    pinしない例:
+    - 進捗報告ログ（読まなくても方向を間違えない）
+    - 独立した小さな決定（他の作業に影響しない）
+    - 一時的な調査メモ（役目を終えた情報）
+
+    Args:
+        entity_type: "decision" | "log" | "material"
+        entity_id: エンティティのID
+        pinned: True=pin, False=unpin
+    """
+    return pin_service.update_pin(entity_type, entity_id, pinned)
 
 
 @mcp.tool()
