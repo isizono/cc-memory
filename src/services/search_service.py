@@ -397,16 +397,8 @@ def _compute_nearby_tags(
 
     conn = get_connection()
     try:
-        # タグ文字列→tag_id解決
-        result_tag_ids: set[int] = set()
-        for tag_str in all_tag_strings:
-            ns, name = parse_tag(tag_str)
-            row = conn.execute(
-                "SELECT id FROM tags WHERE namespace = ? AND name = ?",
-                (ns, name),
-            ).fetchone()
-            if row:
-                result_tag_ids.add(row["id"])
+        # タグ文字列→tag_id解決（エイリアスも考慮）
+        result_tag_ids = set(_resolve_tag_ids_readonly(conn, list(all_tag_strings)))
 
         if not result_tag_ids:
             return []
