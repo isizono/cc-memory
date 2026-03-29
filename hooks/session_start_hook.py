@@ -15,14 +15,17 @@ _project_root = Path(__file__).resolve().parents[1]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from src.config import IN_PROGRESS_LIMIT, PENDING_LIMIT
 from src.db import get_connection, get_db_path
 from src.services.activity_service import (
     get_active_domains_with_conn,
     get_active_activities_by_tag_with_conn,
 )
 from src.services.habit_service import get_active_habit_contents_with_conn
+from src.services.tag_service import get_entity_tags_batch
 from scripts.snapshot import health_check, should_take_snapshot, take_snapshot
+
+# description先頭の切り出し文字数
+_DESCRIPTION_SNIPPET_LENGTH = 100
 
 
 
@@ -36,65 +39,140 @@ def _calc_elapsed_days(updated_at_str: str) -> int:
         return 0
 
 
+def _get_unresolved_deps(conn, activity_ids: list[int]) -> dict[int, list[dict]]:
+    """アクティビティIDリストに対し、未完了の依存先を一括取得する。
+
+    Returns:
+        {dependent_id: [{"id": int, "title": str, "status": str}, ...], ...}
+    """
+    if not activity_ids:
+        return {}
+    placeholders = ",".join("?" * len(activity_ids))
+    rows = conn.execute(
+        f"""SELECT ad.dependent_id, a.id, a.title, a.status
+            FROM activity_dependencies ad
+            JOIN activities a ON a.id = ad.dependency_id
+            WHERE ad.dependent_id IN ({placeholders})
+              AND a.status != 'completed'""",
+        tuple(activity_ids),
+    ).fetchall()
+    result: dict[int, list[dict]] = {}
+    for r in rows:
+        dep_id = r["dependent_id"]
+        if dep_id not in result:
+            result[dep_id] = []
+        result[dep_id].append({"id": r["id"], "title": r["title"], "status": r["status"]})
+    return result
+
+
+def _get_descriptions(conn, activity_ids: list[int]) -> dict[int, str]:
+    """アクティビティIDリストに対し、descriptionを一括取得する。
+
+    Returns:
+        {activity_id: description_snippet, ...}
+    """
+    if not activity_ids:
+        return {}
+    placeholders = ",".join("?" * len(activity_ids))
+    rows = conn.execute(
+        f"SELECT id, description FROM activities WHERE id IN ({placeholders})",
+        tuple(activity_ids),
+    ).fetchall()
+    result: dict[int, str] = {}
+    for r in rows:
+        desc = r["description"] or ""
+        result[r["id"]] = desc[:_DESCRIPTION_SNIPPET_LENGTH]
+    return result
+
+
+_SCORING_INSTRUCTIONS = """\
+# スコアリング指示
+上記アクティビティから優先度の高い上位5件を選び、番号付きで表示してください。
+判断基準:
+- depends_on未完了 → 大幅減点（折りたたみ推奨）
+- 締め切りが近い（descriptionから判断）→ 加点
+- 自分がブロッカーになっている → 加点
+- 鮮度が高い（最近更新） → やや加点（更新頻度が高いものは継続中の作業）
+"""
+
+
 def _build_activities_section(conn) -> str:
-    """アクティビティ一覧をdomain:タグごとに組み立てる。"""
+    """スコアリング用にアクティビティ一覧とメタデータを組み立てる。
+
+    heartbeat中は別セクション表示。非heartbeatは番号付きフラットリストで出力し、
+    AIスコアリング指示を末尾に追加する。
+    """
     domains = get_active_domains_with_conn(conn)
 
     if not domains:
         return ""
 
+    # 全アクティブアクティビティを収集（重複排除）
     seen_ids: set[int] = set()
-    domain_sections = []
+    heartbeat_activities: list[dict] = []
+    normal_activities: list[dict] = []
+
     for domain in domains:
         tag_id = domain["tag_id"]
-        name = domain["name"]
-
         activities = get_active_activities_by_tag_with_conn(conn, tag_id)
-        # 他domainで既出のアクティビティを除外（複数domain所属時の重複排除）
-        activities = [a for a in activities if a["id"] not in seen_ids]
-        if not activities:
-            continue
         for a in activities:
+            if a["id"] in seen_ids:
+                continue
             seen_ids.add(a["id"])
+            if a.get("is_heartbeat_active"):
+                heartbeat_activities.append(a)
+            else:
+                normal_activities.append(a)
 
-        heartbeat_activities = [a for a in activities if a.get("is_heartbeat_active")]
-        normal_activities = [a for a in activities if not a.get("is_heartbeat_active")]
-
-        in_progress = [a for a in normal_activities if a["status"] == "in_progress"]
-        pending = [a for a in normal_activities if a["status"] == "pending"]
-
-        shown_ip = in_progress[:IN_PROGRESS_LIMIT]
-        shown_pending = pending[:PENDING_LIMIT]
-        overflow = len(normal_activities) - len(shown_ip) - len(shown_pending)
-
-        lines = [f"## {name} (domain)"]
-
-        if heartbeat_activities:
-            lines.append("作業中（別セッション）:")
-            for a in heartbeat_activities:
-                days = _calc_elapsed_days(a["updated_at"])
-                lines.append(f"- [{a['id']}] {a['title']} ({days}d)")
-
-        for a in shown_ip:
-            days = _calc_elapsed_days(a["updated_at"])
-            lines.append(f"\u25cf [{a['id']}] {a['title']} ({days}d)")
-        for a in shown_pending:
-            days = _calc_elapsed_days(a["updated_at"])
-            lines.append(f"\u25cb [{a['id']}] {a['title']} ({days}d)")
-
-        if overflow > 0:
-            lines.append(f"  (+{overflow}件)")
-
-        domain_sections.append("\n".join(lines))
-
-    if not domain_sections:
+    if not heartbeat_activities and not normal_activities:
         return ""
 
+    # メタデータ一括取得
+    all_ids = [a["id"] for a in normal_activities]
+    hb_ids = [a["id"] for a in heartbeat_activities]
+    tags_map = get_entity_tags_batch(conn, "activity_tags", "activity_id", all_ids)
+    unresolved_deps = _get_unresolved_deps(conn, all_ids)
+    descriptions = _get_descriptions(conn, all_ids)
+
     parts = ["# アクティビティ一覧", ""]
-    parts.append(domain_sections[0])
-    for section in domain_sections[1:]:
+
+    # heartbeat中は別セクション
+    if heartbeat_activities:
+        parts.append("## 作業中（別セッション）")
+        for a in heartbeat_activities:
+            days = _calc_elapsed_days(a["updated_at"])
+            parts.append(f"- [{a['id']}] {a['title']} ({days}d)")
         parts.append("")
-        parts.append(section)
+
+    # 非heartbeat: 番号付きフラットリスト
+    if normal_activities:
+        parts.append("## スコアリング対象")
+        for idx, a in enumerate(normal_activities, 1):
+            aid = a["id"]
+            days = _calc_elapsed_days(a["updated_at"])
+            status_mark = "●" if a["status"] == "in_progress" else "○"
+            tags = tags_map.get(aid, [])
+            deps = unresolved_deps.get(aid, [])
+            desc_snippet = descriptions.get(aid, "")
+
+            line = f"{idx}. {status_mark} [{aid}] {a['title']}"
+            meta_parts = [f"updated: {days}d ago"]
+            if tags:
+                meta_parts.append(f"tags: {', '.join(tags)}")
+            if deps:
+                dep_titles = [f"{d['title']}({d['status']})" for d in deps]
+                meta_parts.append(f"blocked_by: {', '.join(dep_titles)}")
+            if desc_snippet:
+                meta_parts.append(f"desc: {desc_snippet}")
+
+            parts.append(line)
+            parts.append(f"   {' | '.join(meta_parts)}")
+
+        total = len(normal_activities)
+        parts.append(f"\n全{total}件")
+
+        parts.append("")
+        parts.append(_SCORING_INSTRUCTIONS)
 
     return "\n".join(parts) + "\n"
 

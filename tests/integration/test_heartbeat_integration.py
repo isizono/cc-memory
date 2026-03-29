@@ -201,7 +201,7 @@ class TestBuildActiveContextHeartbeat:
 
         result = _build_activities_section_wrapper()
 
-        assert "作業中（別セッション）:" in result
+        assert "## 作業中（別セッション）" in result
         assert "[作業] HB機能実装" in result
 
     def test_normal_activity_in_hot_section(self, temp_db):
@@ -215,7 +215,7 @@ class TestBuildActiveContextHeartbeat:
 
         assert "○" in result
         assert "[作業] 通常タスク" in result
-        assert "作業中（別セッション）:" not in result
+        assert "## 作業中（別セッション）" not in result
 
     def test_mixed_heartbeat_and_normal(self, temp_db):
         """heartbeat活性と非活性が混在する場合、両セクションに分離される"""
@@ -242,7 +242,7 @@ class TestBuildActiveContextHeartbeat:
 
         result = _build_activities_section_wrapper()
 
-        assert "作業中（別セッション）:" in result
+        assert "## 作業中（別セッション）" in result
         assert "○" in result
         assert "[作業] HB活性" in result
         assert "[作業] 通常" in result
@@ -267,5 +267,5 @@ class TestBuildActiveContextHeartbeat:
         result = _build_activities_section_wrapper()
 
         assert "○" in result
-        assert "作業中（別セッション）:" not in result
+        assert "## 作業中（別セッション）" not in result
         assert "[作業] 期限切れHB" in result

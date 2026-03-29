@@ -195,6 +195,16 @@ def check_in(activity_id: int) -> dict:
         # 2b. 関連アクティビティ概要
         related_activities = _get_activities_overview(conn, direct["activity"])
 
+        # 2c. depends_on情報取得
+        dep_rows = conn.execute(
+            """SELECT a.id, a.title, a.status
+               FROM activity_dependencies ad
+               JOIN activities a ON a.id = ad.dependency_id
+               WHERE ad.dependent_id = ?""",
+            (activity_id,),
+        ).fetchall()
+        dependencies = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in dep_rows]
+
         # 3. tag_notes収集
         tag_notes = collect_tag_notes_for_injection(conn, tags, always_inject_namespaces=["intent"]) or []
 
@@ -261,6 +271,9 @@ def check_in(activity_id: int) -> dict:
 
         if related_activities:
             result["related_activities"] = related_activities
+
+        if dependencies:
+            result["dependencies"] = dependencies
 
         result["tag_notes"] = tag_notes
         result["materials"] = materials

@@ -21,8 +21,8 @@ import src.services.embedding_service as emb
 from hooks.session_start_hook import (
     _build_activities_section,
     _calc_elapsed_days,
-    IN_PROGRESS_LIMIT,
-    PENDING_LIMIT,
+    _SCORING_INSTRUCTIONS,
+    _DESCRIPTION_SNIPPET_LENGTH,
 )
 
 
@@ -73,10 +73,9 @@ def _build_active_context_wrapper():
 # ========================================
 
 
-def test_constants():
-    """定数値が仕様通り"""
-    assert IN_PROGRESS_LIMIT == 3
-    assert PENDING_LIMIT == 2
+def test_description_snippet_length():
+    """description切り出し文字数が100"""
+    assert _DESCRIPTION_SNIPPET_LENGTH == 100
 
 
 # ========================================
@@ -272,13 +271,13 @@ def test_build_activities_section_empty_with_only_topics(temp_db):
 
 
 def test_build_activities_section_with_activities(temp_db):
-    """アクティビティがある場合、domainセクションが生成される"""
+    """アクティビティがある場合、スコアリング対象セクションが生成される"""
     add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
 
     result = _build_active_context_wrapper()
 
     assert "# アクティビティ一覧" in result
-    assert "## myapp (domain)" in result
+    assert "## スコアリング対象" in result
     assert "[作業] 実装する" in result
 
 
@@ -288,7 +287,7 @@ def test_build_activities_section_status_marker_pending(temp_db):
 
     result = _build_active_context_wrapper()
 
-    assert "\u25cb" in result
+    assert "○" in result
 
 
 def test_build_activities_section_status_marker_in_progress(temp_db):
@@ -298,17 +297,16 @@ def test_build_activities_section_status_marker_in_progress(temp_db):
 
     result = _build_active_context_wrapper()
 
-    assert "\u25cf" in result
+    assert "●" in result
 
 
 def test_build_activities_section_elapsed_days(temp_db):
-    """経過日数が(Nd)形式で表示される"""
+    """経過日数がメタデータ行に 'updated: Nd ago' 形式で表示される"""
     add_activity(title="[作業] 実装する", description="Desc", tags=["domain:myapp"], check_in=False)
 
     result = _build_active_context_wrapper()
 
-    # 作成直後なので(0d)が表示される
-    assert "(0d)" in result
+    assert "updated: 0d ago" in result
 
 
 def test_build_activities_section_no_topic_section(temp_db):
@@ -332,76 +330,52 @@ def test_build_activities_section_no_recent_tags_section(temp_db):
     assert "## 最近使われたタグ" not in result
 
 
-def test_build_activities_section_in_progress_limit(temp_db):
-    """in_progress枠は上位IN_PROGRESS_LIMIT件に制限される"""
-    for i in range(5):
+def test_build_activities_section_all_items_shown(temp_db):
+    """全アクティビティが番号付きフラットリストで表示される（件数制限なし）"""
+    for i in range(7):
         r = add_activity(
-            title=f"[作業] IP Activity {i}", description="Desc",
+            title=f"[作業] Activity {i}", description="Desc",
             tags=["domain:myapp"], check_in=False,
         )
-        update_activity(r["activity_id"], status="in_progress")
+        if i < 4:
+            update_activity(r["activity_id"], status="in_progress")
 
     result = _build_active_context_wrapper()
 
-    # IN_PROGRESS_LIMIT=3件分の●が表示される
-    assert result.count("\u25cf") == IN_PROGRESS_LIMIT
+    # 全7件が番号付きで表示される
+    assert "1. ●" in result
+    assert "全7件" in result
+    # 全アクティビティが含まれている
+    for i in range(7):
+        assert f"Activity {i}" in result
 
 
-def test_build_activities_section_pending_limit(temp_db):
-    """pending枠は上位PENDING_LIMIT件に制限される"""
-    for i in range(5):
-        add_activity(
-            title=f"[作業] Pending Activity {i}", description="Desc",
-            tags=["domain:myapp"], check_in=False,
-        )
+def test_build_activities_section_numbered_list(temp_db):
+    """アクティビティが連番で表示される"""
+    add_activity(title="First", description="Desc", tags=["domain:myapp"], check_in=False)
+    add_activity(title="Second", description="Desc", tags=["domain:myapp"], check_in=False)
 
     result = _build_active_context_wrapper()
 
-    # PENDING_LIMIT=2件分の○が表示される
-    assert result.count("\u25cb") == PENDING_LIMIT
+    assert "1. " in result
+    assert "2. " in result
 
 
-def test_build_activities_section_overflow_count(temp_db):
-    """制限を超えた分が(+N件)で表示される"""
-    # in_progress 4件 + pending 3件 = 合計7件
-    for i in range(4):
-        r = add_activity(
-            title=f"[作業] IP {i}", description="Desc",
-            tags=["domain:myapp"], check_in=False,
-        )
-        update_activity(r["activity_id"], status="in_progress")
+def test_build_activities_section_total_count(temp_db):
+    """全N件の合計が表示される"""
     for i in range(3):
         add_activity(
-            title=f"[作業] Pending {i}", description="Desc",
+            title=f"[作業] Activity {i}", description="Desc",
             tags=["domain:myapp"], check_in=False,
         )
 
     result = _build_active_context_wrapper()
 
-    # 表示: IP 3件 + Pending 2件 = 5件、overflow = 7 - 5 = 2件
-    assert "(+2件)" in result
-
-
-def test_build_activities_section_no_overflow_when_within_limits(temp_db):
-    """件数が制限内の場合は(+N件)が出ない"""
-    r = add_activity(
-        title="[作業] IP 1", description="Desc",
-        tags=["domain:myapp"], check_in=False,
-    )
-    update_activity(r["activity_id"], status="in_progress")
-    add_activity(
-        title="[作業] Pending 1", description="Desc",
-        tags=["domain:myapp"], check_in=False,
-    )
-
-    result = _build_active_context_wrapper()
-
-    assert "(+" not in result
+    assert "全3件" in result
 
 
 def test_build_activities_section_domain_with_zero_activities_skipped(temp_db):
     """アクティビティ0件のdomainセクションはスキップ"""
-    # domain:myappにはアクティビティあり、domain:emptyにはなし
     add_activity(title="Activity", description="Desc", tags=["domain:myapp"], check_in=False)
 
     # domain:emptyのタグだけ作成（アクティビティなし）
@@ -415,19 +389,21 @@ def test_build_activities_section_domain_with_zero_activities_skipped(temp_db):
 
     result = _build_active_context_wrapper()
 
-    assert "## myapp (domain)" in result
+    assert "Activity" in result
     assert "empty-domain" not in result
 
 
-def test_build_activities_section_multiple_domains(temp_db):
-    """複数domainが個別セクションとして表示される"""
+def test_build_activities_section_multiple_domains_flat(temp_db):
+    """複数domainのアクティビティがフラットリストに統合される"""
     add_activity(title="App Activity", description="Desc", tags=["domain:app"], check_in=False)
     add_activity(title="Lib Activity", description="Desc", tags=["domain:lib"], check_in=False)
 
     result = _build_active_context_wrapper()
 
-    assert "## app (domain)" in result
-    assert "## lib (domain)" in result
+    assert "App Activity" in result
+    assert "Lib Activity" in result
+    # ドメインセクションではなくフラットリスト
+    assert "## スコアリング対象" in result
 
 
 def test_build_activities_section_activity_id_in_bracket(temp_db):
@@ -461,15 +437,122 @@ def test_build_activities_section_completed_activities_excluded(temp_db):
     assert "Done Activity" not in ctx
 
 
-def test_build_activities_section_format(temp_db):
-    """出力フォーマットが仕様通り"""
+def test_build_activities_section_scoring_instructions(temp_db):
+    """スコアリング指示が末尾に含まれる"""
+    add_activity(title="[作業] Task", description="Desc", tags=["domain:myapp"], check_in=False)
+
+    result = _build_active_context_wrapper()
+
+    assert "# スコアリング指示" in result
+    assert "上位5件を選び" in result
+    assert "depends_on未完了" in result
+
+
+def test_build_activities_section_tags_in_metadata(temp_db):
+    """メタデータ行にタグ情報が含まれる"""
+    add_activity(
+        title="[作業] Task", description="Desc",
+        tags=["domain:myapp", "intent:implement"], check_in=False,
+    )
+
+    result = _build_active_context_wrapper()
+
+    assert "tags:" in result
+    assert "domain:myapp" in result
+
+
+def test_build_activities_section_description_snippet(temp_db):
+    """メタデータ行にdescriptionスニペットが含まれる"""
+    add_activity(
+        title="[作業] Task", description="締め切りは来週金曜日",
+        tags=["domain:myapp"], check_in=False,
+    )
+
+    result = _build_active_context_wrapper()
+
+    assert "desc: 締め切りは来週金曜日" in result
+
+
+def test_build_activities_section_description_snippet_truncated(temp_db):
+    """descriptionが長い場合、先頭100文字に切り詰められる"""
+    long_desc = "あ" * 200
+    add_activity(
+        title="[作業] Task", description=long_desc,
+        tags=["domain:myapp"], check_in=False,
+    )
+
+    result = _build_active_context_wrapper()
+
+    # 100文字に切り詰められている
+    assert f"desc: {'あ' * 100}" in result
+    assert "あ" * 101 not in result
+
+
+def test_build_activities_section_blocked_by_metadata(temp_db):
+    """未完了の依存先がblocked_byとしてメタデータに表示される"""
+    r1 = add_activity(title="Dependency Task", description="Desc", tags=["domain:myapp"], check_in=False)
+    r2 = add_activity(title="Blocked Task", description="Desc", tags=["domain:myapp"], check_in=False)
+
+    # r2 depends_on r1
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+            (r2["activity_id"], r1["activity_id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = _build_active_context_wrapper()
+
+    assert "blocked_by:" in result
+    assert "Dependency Task" in result
+
+
+def test_build_activities_section_no_blocked_by_when_dep_completed(temp_db):
+    """依存先がcompletedの場合、blocked_byは表示されない"""
+    r1 = add_activity(title="Completed Dep", description="Desc", tags=["domain:myapp"], check_in=False)
+    r2 = add_activity(title="Unblocked Task", description="Desc", tags=["domain:myapp"], check_in=False)
+    update_activity(r1["activity_id"], status="completed")
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+            (r2["activity_id"], r1["activity_id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = _build_active_context_wrapper()
+
+    assert "blocked_by:" not in result
+
+
+def test_build_activities_section_deduplicates_multi_domain(temp_db):
+    """複数domainに属するアクティビティは1回だけ表示される"""
     r = add_activity(
-        title="[議論] stop_hookのスキップ機能", description="Desc",
+        title="Multi Domain Task", description="Desc",
+        tags=["domain:app", "domain:lib"], check_in=False,
+    )
+    aid = r["activity_id"]
+
+    result = _build_active_context_wrapper()
+
+    assert result.count(f"[{aid}]") == 1
+
+
+def test_build_activities_section_format(temp_db):
+    """出力フォーマットが仕様通り: ヘッダ + スコアリング対象 + 番号付き行 + メタデータ行"""
+    r = add_activity(
+        title="[議論] stop_hookのスキップ機能", description="機能の設計",
         tags=["domain:cc-memory"], check_in=False,
     )
     update_activity(r["activity_id"], status="in_progress")
     add_activity(
-        title="[作業] アクティブコンテキスト改善", description="Desc",
+        title="[作業] アクティブコンテキスト改善", description="改善作業",
         tags=["domain:cc-memory"], check_in=False,
     )
 
@@ -478,12 +561,12 @@ def test_build_activities_section_format(temp_db):
     lines = result.strip().split("\n")
     assert lines[0] == "# アクティビティ一覧"
     assert lines[1] == ""
-    assert lines[2] == "## cc-memory (domain)"
-    # in_progressが先に来る
-    assert lines[3].startswith("\u25cf")
+    assert lines[2] == "## スコアリング対象"
+    # in_progressが先に来る（番号付き）
+    assert lines[3].startswith("1. ●")
     assert "[議論] stop_hookのスキップ機能" in lines[3]
-    assert lines[3].endswith("(0d)")
+    # メタデータ行
+    assert "updated:" in lines[4]
     # pendingが後に来る
-    assert lines[4].startswith("\u25cb")
-    assert "[作業] アクティブコンテキスト改善" in lines[4]
-    assert lines[4].endswith("(0d)")
+    assert lines[5].startswith("2. ○")
+    assert "[作業] アクティブコンテキスト改善" in lines[5]

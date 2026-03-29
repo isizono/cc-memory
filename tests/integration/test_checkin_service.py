@@ -501,3 +501,109 @@ class TestCheckInLogsCatalog:
         titles = {l["title"] for l in result["logs"]}
         assert "ログA" in titles
         assert "ログB" in titles
+
+
+class TestCheckInDependencies:
+    """check-in結果のdependenciesフィールドのテスト"""
+
+    def test_dependencies_present_when_depends_on_exists(self, temp_db):
+        """depends_on関係がある場合、dependenciesフィールドが結果に含まれる"""
+        dep = add_activity(title="依存先タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        main = add_activity(title="メインタスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+                (main["activity_id"], dep["activity_id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = check_in(main["activity_id"])
+
+        assert "error" not in result
+        assert "dependencies" in result
+        assert len(result["dependencies"]) == 1
+        assert result["dependencies"][0]["id"] == dep["activity_id"]
+        assert result["dependencies"][0]["title"] == "依存先タスク"
+        assert result["dependencies"][0]["status"] == "pending"
+
+    def test_dependencies_absent_when_no_depends_on(self, activity_id):
+        """depends_on関係がない場合、dependenciesフィールドは省略される"""
+        result = check_in(activity_id)
+
+        assert "error" not in result
+        assert "dependencies" not in result
+
+    def test_dependencies_multiple(self, temp_db):
+        """複数の依存先がある場合、全件がdependenciesに含まれる"""
+        dep1 = add_activity(title="依存先1", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        dep2 = add_activity(title="依存先2", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        main = add_activity(title="メインタスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+                (main["activity_id"], dep1["activity_id"]),
+            )
+            conn.execute(
+                "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+                (main["activity_id"], dep2["activity_id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = check_in(main["activity_id"])
+
+        assert "error" not in result
+        assert len(result["dependencies"]) == 2
+        dep_ids = {d["id"] for d in result["dependencies"]}
+        assert dep1["activity_id"] in dep_ids
+        assert dep2["activity_id"] in dep_ids
+
+    def test_dependencies_includes_completed(self, temp_db):
+        """completedの依存先もdependenciesに含まれる（状態情報として有用）"""
+        dep = add_activity(title="完了済み依存先", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        update_activity(dep["activity_id"], status="completed")
+        main = add_activity(title="メインタスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+                (main["activity_id"], dep["activity_id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = check_in(main["activity_id"])
+
+        assert "error" not in result
+        assert "dependencies" in result
+        assert result["dependencies"][0]["status"] == "completed"
+
+    def test_dependencies_status_reflects_current(self, temp_db):
+        """dependenciesの各要素のstatusがDB上の最新値を反映する"""
+        dep = add_activity(title="進行中タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        update_activity(dep["activity_id"], status="in_progress")
+        main = add_activity(title="メインタスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+                (main["activity_id"], dep["activity_id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = check_in(main["activity_id"])
+
+        assert "error" not in result
+        assert result["dependencies"][0]["status"] == "in_progress"

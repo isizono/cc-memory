@@ -518,7 +518,7 @@ def add_activity(
 
     Args:
         title: アクティビティのタイトル
-        description: アクティビティの詳細説明（必須）
+        description: アクティビティの詳細説明（必須）。スコアリングに活用されるため、以下の情報があれば記載を推奨: 締め切り、ブロッカー（自分が/外部）、影響度・緊急度
         tags: タグ配列（必須、1個以上）。domain:タグとintent:タグは必須。素タグも積極的に付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["domain:cc-memory", "intent:implement", "search", "ranking"]
         related: 関連エンティティ（optional）。[{"type": "topic"|"activity", "ids": [int, ...]}] 形式。作成と同時にリレーションを張る
         check_in: 作成後にcheck_inを実行するか（デフォルト: True）。Trueの場合、返り値にcheck_in_resultが含まれる
