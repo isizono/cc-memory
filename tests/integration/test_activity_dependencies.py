@@ -105,8 +105,8 @@ class TestActivityDependenciesTable:
         finally:
             conn.close()
 
-    def test_reverse_pair_allowed(self, temp_db):
-        """逆方向のペアは別のレコードとしてINSERTできる"""
+    def test_reverse_pair_allowed_at_db_level(self, temp_db):
+        """DBレベルでは逆方向ペアのINSERTは制約違反にならない（サービス層で循環を弾く）"""
         conn = get_connection()
         try:
             a1 = _create_activity(conn, "Activity A")
@@ -395,3 +395,148 @@ class TestGetMapWithDependencies:
         entity_ids = {(e["type"], e["id"]) for e in result["entities"]}
         assert ("activity", a2) in entity_ids
         assert ("activity", a3) in entity_ids
+
+
+class TestCyclicDependencyDetection:
+    """add_relation(relation_type="depends_on")での循環依存検出テスト"""
+
+    def test_direct_cycle_rejected(self, temp_db):
+        """直接循環 (A→B, B→A) がサービス層で弾かれる"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # A→B は成功
+        result = add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["added"] == 1
+
+        # B→A は循環になるため拒否
+        result = add_relation("activity", a2, [{"type": "activity", "ids": [a1]}], relation_type="depends_on")
+        assert "error" in result
+        assert result["error"]["code"] == "CIRCULAR_DEPENDENCY"
+
+    def test_transitive_cycle_rejected(self, temp_db):
+        """推移的循環 (A→B, B→C, C→A) がサービス層で弾かれる"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            a3 = _create_activity(conn, "Activity C")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # A→B 成功
+        result = add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+        assert "error" not in result
+
+        # B→C 成功
+        result = add_relation("activity", a2, [{"type": "activity", "ids": [a3]}], relation_type="depends_on")
+        assert "error" not in result
+
+        # C→A は推移的循環になるため拒否
+        result = add_relation("activity", a3, [{"type": "activity", "ids": [a1]}], relation_type="depends_on")
+        assert "error" in result
+        assert result["error"]["code"] == "CIRCULAR_DEPENDENCY"
+
+    def test_non_cyclic_chain_allowed(self, temp_db):
+        """非循環の依存チェーン (A→B, B→C) は通る"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            a3 = _create_activity(conn, "Activity C")
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["added"] == 1
+
+        result = add_relation("activity", a2, [{"type": "activity", "ids": [a3]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_self_reference_skipped(self, temp_db):
+        """自己参照 (A→A) はサービス層でスキップされる（CHECK制約に到達しない）"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = add_relation("activity", a1, [{"type": "activity", "ids": [a1]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["added"] == 0
+
+    def test_depends_on_only_for_activity(self, temp_db):
+        """depends_onはactivity以外のsource_typeでエラーになる"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            cursor = conn.execute(
+                "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+                ("Topic A", "Desc A"),
+            )
+            t1 = cursor.lastrowid
+            tag_ids = ensure_tag_ids(conn, [("domain", "test")])
+            link_tags(conn, "topic_tags", "topic_id", t1, tag_ids)
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = add_relation("topic", t1, [{"type": "topic", "ids": [t1]}], relation_type="depends_on")
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"
+
+    def test_cycle_rollback_preserves_prior_state(self, temp_db):
+        """循環検出時にトランザクションがロールバックされ、同一バッチ内の先行追加も取り消される"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            a3 = _create_activity(conn, "Activity C")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # A→B を先に追加
+        add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+
+        # B→C と B→A を同一バッチで追加（B→Aで循環検出）
+        result = add_relation(
+            "activity", a2,
+            [{"type": "activity", "ids": [a3, a1]}],
+            relation_type="depends_on",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "CIRCULAR_DEPENDENCY"
+
+        # B→Cも追加されていないことを確認（ロールバック）
+        conn = get_connection()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM activity_dependencies WHERE dependent_id = ? AND dependency_id = ?",
+                (a2, a3),
+            ).fetchone()["cnt"]
+            assert count == 0
+        finally:
+            conn.close()

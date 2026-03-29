@@ -711,6 +711,7 @@ def add_relation(
     source_type: str,
     source_id: int,
     targets: list[dict],
+    relation_type: str = "related",
 ) -> dict:
     """
     エンティティ間のリレーションを追加する。
@@ -720,17 +721,19 @@ def add_relation(
     - アクティビティとトピックを関連付け: add_relation("activity", 10, [{"type": "topic", "ids": [1]}])
     - 資材とアクティビティを関連付け: add_relation("material", 5, [{"type": "activity", "ids": [10]}])
     - 複数タイプを一度に: add_relation("topic", 1, [{"type": "topic", "ids": [2]}, {"type": "activity", "ids": [10, 11]}])
+    - 依存関係を追加: add_relation("activity", 1, [{"type": "activity", "ids": [2]}], relation_type="depends_on")
 
     Args:
         source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
         source_id: 起点エンティティのID
         targets: ターゲットリスト [{"type": "topic"|"activity"|"material", "ids": [int, ...]}, ...]
+        relation_type: リレーションタイプ（"related" or "depends_on"）。depends_onはactivity同士のみ有効。
 
     Returns:
         成功時: {"added": int}（実際に追加された件数。重複はカウントしない）
         失敗時: {"error": {"code": ..., "message": ...}}
     """
-    return relation_service.add_relation(source_type, source_id, targets)
+    return relation_service.add_relation(source_type, source_id, targets, relation_type)
 
 
 @mcp.tool()

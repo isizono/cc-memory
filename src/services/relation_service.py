@@ -10,6 +10,7 @@ from src.services.tag_service import (
 logger = logging.getLogger(__name__)
 
 VALID_ENTITY_TYPES = {"topic", "activity", "material"}
+VALID_RELATION_TYPES = {"related", "depends_on"}
 
 
 def _validate_entity_type(entity_type: str) -> dict | None:
@@ -131,6 +132,69 @@ def _get_delete_params(source_type: str, source_id: int, target_type: str, targe
         raise ValueError(f"Unexpected type combination: {source_type}/{target_type}")
 
 
+def _has_dependency_path(conn: sqlite3.Connection, from_id: int, to_id: int) -> bool:
+    """DFSでfrom_idからto_idへのdepends_on経路が存在するか判定する。
+
+    activity_dependenciesテーブルを辿り、from_id → ... → to_id の到達可能性をチェックする。
+    循環依存検出に使用: 新たに dependent→dependency を追加する前に、
+    dependency→dependent への既存経路があればサイクルになる。
+    """
+    visited: set[int] = set()
+    stack = [from_id]
+    while stack:
+        current = stack.pop()
+        if current == to_id:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        rows = conn.execute(
+            "SELECT dependency_id FROM activity_dependencies WHERE dependent_id = ?",
+            (current,),
+        ).fetchall()
+        for row in rows:
+            stack.append(row["dependency_id"])
+    return False
+
+
+def _add_depends_on_with_conn(conn: sqlite3.Connection, source_id: int, target_ids: list[int]) -> int:
+    """depends_onリレーションをactivity_dependenciesテーブルに追加する。
+
+    循環依存を検出した場合はValueErrorを送出する。
+
+    Args:
+        conn: DB接続
+        source_id: 依存元（dependent）のアクティビティID
+        target_ids: 依存先（dependency）のアクティビティIDリスト
+
+    Returns:
+        追加件数
+
+    Raises:
+        ValueError: 循環依存が検出された場合
+    """
+    added = 0
+    for target_id in target_ids:
+        # 自己参照はCHECK制約で弾かれるが、明示的にスキップ
+        if source_id == target_id:
+            continue
+
+        # 循環チェック: target_id → source_id への経路が既に存在すればサイクル
+        if _has_dependency_path(conn, target_id, source_id):
+            raise ValueError(
+                f"Circular dependency detected: adding {source_id}→{target_id} "
+                f"would create a cycle"
+            )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
+            (source_id, target_id),
+        )
+        if conn.execute("SELECT changes()").fetchone()[0] > 0:
+            added += 1
+    return added
+
+
 def _add_relation_with_conn(conn: sqlite3.Connection, source_type: str, source_id: int, targets: list[dict]) -> int:
     """conn共有版: リレーションを追加する。追加件数を返す。"""
     added = 0
@@ -171,18 +235,28 @@ def _remove_relation_with_conn(conn: sqlite3.Connection, source_type: str, sourc
     return removed
 
 
-def add_relation(source_type: str, source_id: int, targets: list[dict]) -> dict:
+def add_relation(source_type: str, source_id: int, targets: list[dict], relation_type: str = "related") -> dict:
     """リレーションを追加する。
 
     Args:
-        source_type: 起点エンティティのタイプ（"topic" or "activity"）
+        source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
         source_id: 起点エンティティのID
         targets: ターゲットリスト [{"type": "topic", "ids": [1, 2]}, ...]
+        relation_type: リレーションタイプ（"related" or "depends_on"）。
+            "depends_on" はactivity同士のみ有効で、循環依存を検出した場合はエラーを返す。
 
     Returns:
         成功時: {"added": int}
         失敗時: {"error": {"code": ..., "message": ...}}
     """
+    if relation_type not in VALID_RELATION_TYPES:
+        return {
+            "error": {
+                "code": "INVALID_RELATION_TYPE",
+                "message": f"Invalid relation_type: '{relation_type}'. Must be one of {sorted(VALID_RELATION_TYPES)}",
+            }
+        }
+
     err = _validate_entity_type(source_type)
     if err:
         return err
@@ -190,11 +264,38 @@ def add_relation(source_type: str, source_id: int, targets: list[dict]) -> dict:
     if err:
         return err
 
+    # depends_onはactivity→activityのみ
+    if relation_type == "depends_on":
+        if source_type != "activity":
+            return {
+                "error": {
+                    "code": "INVALID_RELATION_TYPE",
+                    "message": "depends_on relation is only valid for activity→activity",
+                }
+            }
+        for target in targets:
+            if target["type"] != "activity":
+                return {
+                    "error": {
+                        "code": "INVALID_RELATION_TYPE",
+                        "message": "depends_on relation is only valid for activity→activity",
+                    }
+                }
+
     conn = get_connection()
     try:
-        added = _add_relation_with_conn(conn, source_type, source_id, targets)
+        if relation_type == "depends_on":
+            added = 0
+            for target in targets:
+                added += _add_depends_on_with_conn(conn, source_id, target["ids"])
+        else:
+            added = _add_relation_with_conn(conn, source_type, source_id, targets)
         conn.commit()
         return {"added": added}
+    except ValueError as e:
+        conn.rollback()
+        logger.warning(f"add_relation rejected: {e}")
+        return {"error": {"code": "CIRCULAR_DEPENDENCY", "message": str(e)}}
     except sqlite3.IntegrityError as e:
         conn.rollback()
         logger.error(f"add_relation failed: {e}")
