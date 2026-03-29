@@ -217,6 +217,27 @@ def _add_relation_with_conn(conn: sqlite3.Connection, source_type: str, source_i
     return added
 
 
+def _remove_depends_on_with_conn(conn: sqlite3.Connection, source_id: int, target_ids: list[int]) -> int:
+    """depends_onリレーションをactivity_dependenciesテーブルから削除する。
+
+    Args:
+        conn: DB接続
+        source_id: 依存元（dependent）のアクティビティID
+        target_ids: 依存先（dependency）のアクティビティIDリスト
+
+    Returns:
+        削除件数
+    """
+    removed = 0
+    for target_id in target_ids:
+        conn.execute(
+            "DELETE FROM activity_dependencies WHERE dependent_id = ? AND dependency_id = ?",
+            (source_id, target_id),
+        )
+        removed += conn.execute("SELECT changes()").fetchone()[0]
+    return removed
+
+
 def _remove_relation_with_conn(conn: sqlite3.Connection, source_type: str, source_id: int, targets: list[dict]) -> int:
     """conn共有版: リレーションを削除する。削除件数を返す。"""
     removed = 0
@@ -308,18 +329,28 @@ def add_relation(source_type: str, source_id: int, targets: list[dict], relation
         conn.close()
 
 
-def remove_relation(source_type: str, source_id: int, targets: list[dict]) -> dict:
+def remove_relation(source_type: str, source_id: int, targets: list[dict], relation_type: str = "related") -> dict:
     """リレーションを削除する。
 
     Args:
-        source_type: 起点エンティティのタイプ（"topic" or "activity"）
+        source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
         source_id: 起点エンティティのID
         targets: ターゲットリスト [{"type": "topic", "ids": [1, 2]}, ...]
+        relation_type: リレーションタイプ（"related" or "depends_on"）。
+            "depends_on" はactivity同士のみ有効。
 
     Returns:
         成功時: {"removed": int}
         失敗時: {"error": {"code": ..., "message": ...}}
     """
+    if relation_type not in VALID_RELATION_TYPES:
+        return {
+            "error": {
+                "code": "INVALID_RELATION_TYPE",
+                "message": f"Invalid relation_type: '{relation_type}'. Must be one of {sorted(VALID_RELATION_TYPES)}",
+            }
+        }
+
     err = _validate_entity_type(source_type)
     if err:
         return err
@@ -327,9 +358,32 @@ def remove_relation(source_type: str, source_id: int, targets: list[dict]) -> di
     if err:
         return err
 
+    # depends_onはactivity→activityのみ
+    if relation_type == "depends_on":
+        if source_type != "activity":
+            return {
+                "error": {
+                    "code": "INVALID_RELATION_TYPE",
+                    "message": "depends_on relation is only valid for activity→activity",
+                }
+            }
+        for target in targets:
+            if target["type"] != "activity":
+                return {
+                    "error": {
+                        "code": "INVALID_RELATION_TYPE",
+                        "message": "depends_on relation is only valid for activity→activity",
+                    }
+                }
+
     conn = get_connection()
     try:
-        removed = _remove_relation_with_conn(conn, source_type, source_id, targets)
+        if relation_type == "depends_on":
+            removed = 0
+            for target in targets:
+                removed += _remove_depends_on_with_conn(conn, source_id, target["ids"])
+        else:
+            removed = _remove_relation_with_conn(conn, source_type, source_id, targets)
         conn.commit()
         return {"removed": removed}
     except Exception as e:

@@ -517,3 +517,229 @@ class TestCyclicDependencyDetection:
             assert count == 0
         finally:
             conn.close()
+
+    def test_depends_on_idempotent(self, temp_db):
+        """同一のdepends_on関係を再追加してもエラーにならずadded=0が返る"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            conn.commit()
+        finally:
+            conn.close()
+
+        result1 = add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+        assert result1["added"] == 1
+
+        result2 = add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+        assert "error" not in result2
+        assert result2["added"] == 0
+
+    def test_depends_on_target_not_activity_rejected(self, temp_db):
+        """depends_onのtarget_typeがactivity以外の場合エラーになる"""
+        from src.services.relation_service import add_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            cursor = conn.execute(
+                "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+                ("Topic A", "Desc A"),
+            )
+            t1 = cursor.lastrowid
+            tag_ids = ensure_tag_ids(conn, [("domain", "test")])
+            link_tags(conn, "topic_tags", "topic_id", t1, tag_ids)
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = add_relation("activity", a1, [{"type": "topic", "ids": [t1]}], relation_type="depends_on")
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"
+
+
+class TestRemoveDependsOn:
+    """remove_relation(relation_type="depends_on")のテスト"""
+
+    def test_remove_depends_on_success(self, temp_db):
+        """depends_on関係を削除できる"""
+        from src.services.relation_service import add_relation, remove_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            conn.commit()
+        finally:
+            conn.close()
+
+        add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+
+        result = remove_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["removed"] == 1
+
+        # DBから消えていることを確認
+        conn = get_connection()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM activity_dependencies WHERE dependent_id = ? AND dependency_id = ?",
+                (a1, a2),
+            ).fetchone()["cnt"]
+            assert count == 0
+        finally:
+            conn.close()
+
+    def test_remove_nonexistent_depends_on(self, temp_db):
+        """存在しないdepends_on関係の削除はエラーにならずremoved=0が返る"""
+        from src.services.relation_service import remove_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = remove_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["removed"] == 0
+
+    def test_remove_depends_on_non_activity_source_rejected(self, temp_db):
+        """depends_on削除でsource_typeがactivity以外の場合エラーになる"""
+        from src.services.relation_service import remove_relation
+
+        conn = get_connection()
+        try:
+            cursor = conn.execute(
+                "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+                ("Topic A", "Desc A"),
+            )
+            t1 = cursor.lastrowid
+            tag_ids = ensure_tag_ids(conn, [("domain", "test")])
+            link_tags(conn, "topic_tags", "topic_id", t1, tag_ids)
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = remove_relation("topic", t1, [{"type": "topic", "ids": [t1]}], relation_type="depends_on")
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"
+
+    def test_remove_depends_on_non_activity_target_rejected(self, temp_db):
+        """depends_on削除でtarget_typeがactivity以外の場合エラーになる"""
+        from src.services.relation_service import remove_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            cursor = conn.execute(
+                "INSERT INTO discussion_topics (title, description) VALUES (?, ?)",
+                ("Topic A", "Desc A"),
+            )
+            t1 = cursor.lastrowid
+            tag_ids = ensure_tag_ids(conn, [("domain", "test")])
+            link_tags(conn, "topic_tags", "topic_id", t1, tag_ids)
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = remove_relation("activity", a1, [{"type": "topic", "ids": [t1]}], relation_type="depends_on")
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"
+
+    def test_remove_depends_on_allows_previously_cyclic_addition(self, temp_db):
+        """depends_on削除後、以前は循環になった依存関係を追加できるようになる"""
+        from src.services.relation_service import add_relation, remove_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # A→B追加
+        add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+
+        # B→Aは循環で拒否
+        result = add_relation("activity", a2, [{"type": "activity", "ids": [a1]}], relation_type="depends_on")
+        assert "error" in result
+
+        # A→Bを削除
+        remove_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+
+        # B→Aが追加できるようになる
+        result = add_relation("activity", a2, [{"type": "activity", "ids": [a1]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_remove_depends_on_multiple_targets(self, temp_db):
+        """depends_on関係の複数ターゲット一括削除ができる"""
+        from src.services.relation_service import add_relation, remove_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            a3 = _create_activity(conn, "Activity C")
+            conn.commit()
+        finally:
+            conn.close()
+
+        add_relation("activity", a1, [{"type": "activity", "ids": [a2, a3]}], relation_type="depends_on")
+
+        result = remove_relation("activity", a1, [{"type": "activity", "ids": [a2, a3]}], relation_type="depends_on")
+        assert "error" not in result
+        assert result["removed"] == 2
+
+    def test_remove_relation_default_type_is_related(self, temp_db):
+        """relation_typeを省略するとrelated（デフォルト）として動作し、depends_on行は削除されない"""
+        from src.services.relation_service import add_relation, remove_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # depends_on関係を追加
+        add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
+
+        # relation_type省略（デフォルトrelated）で削除→activity_relationsテーブルには行がないのでremoved=0
+        result = remove_relation("activity", a1, [{"type": "activity", "ids": [a2]}])
+        assert "error" not in result
+        assert result["removed"] == 0
+
+        # depends_on関係はそのまま残っている
+        conn = get_connection()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM activity_dependencies WHERE dependent_id = ? AND dependency_id = ?",
+                (a1, a2),
+            ).fetchone()["cnt"]
+            assert count == 1
+        finally:
+            conn.close()
+
+    def test_remove_relation_invalid_relation_type(self, temp_db):
+        """不正なrelation_typeを指定するとエラーになる"""
+        from src.services.relation_service import remove_relation
+
+        conn = get_connection()
+        try:
+            a1 = _create_activity(conn, "Activity A")
+            a2 = _create_activity(conn, "Activity B")
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = remove_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="invalid_type")
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"

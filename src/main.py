@@ -750,20 +750,26 @@ def remove_relation(
     source_type: str,
     source_id: int,
     targets: list[dict],
+    relation_type: str = "related",
 ) -> dict:
     """
     エンティティ間のリレーションを削除する。
+
+    典型的な使い方:
+    - 関連リレーション削除: remove_relation("topic", 1, [{"type": "topic", "ids": [2]}])
+    - 依存関係削除: remove_relation("activity", 1, [{"type": "activity", "ids": [2]}], relation_type="depends_on")
 
     Args:
         source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
         source_id: 起点エンティティのID
         targets: ターゲットリスト [{"type": "topic"|"activity"|"material", "ids": [int, ...]}, ...]
+        relation_type: リレーションタイプ（"related" or "depends_on"）。depends_onはactivity同士のみ有効。
 
     Returns:
         成功時: {"removed": int}（実際に削除された件数）
         失敗時: {"error": {"code": ..., "message": ...}}
     """
-    return relation_service.remove_relation(source_type, source_id, targets)
+    return relation_service.remove_relation(source_type, source_id, targets, relation_type)
 
 
 @mcp.tool()
