@@ -329,8 +329,8 @@ class TestPropagateToErrors:
 class TestPropagateToAbsent:
     """propagate_to未指定時のテスト"""
 
-    def test_no_propagate_to_conventional_behavior(self, topic):
-        """propagate_toなし → 従来通りの挙動（propagationフィールドなし）"""
+    def test_no_propagate_to_decision_only(self, topic):
+        """propagate_toなし → decisionのみ保存され、propagationフィールドは含まれない"""
         tid = topic["topic_id"]
         result = add_decisions([
             {

@@ -13,6 +13,8 @@ from src.services.tag_service import (
 )
 from src.services.habit_service import _add_habit_with_conn
 
+PROPAGATE_TYPES = {"habit", "tag_note"}
+
 
 def add_decisions(items: list[dict]) -> dict:
     """
@@ -87,6 +89,8 @@ def add_decisions(items: list[dict]) -> dict:
                     try:
                         p_type = propagate_to.get("type")
                         p_content = propagate_to.get("content", "")
+                        if p_type not in PROPAGATE_TYPES:
+                            raise ValueError(f"Invalid propagate_to.type: {p_type}")
                         if p_type == "habit":
                             p_id = _add_habit_with_conn(conn, p_content)
                             propagation_result = {"status": "ok", "type": "habit", "id": p_id}
@@ -96,8 +100,6 @@ def add_decisions(items: list[dict]) -> dict:
                                 raise ValueError("propagate_to.tag is required when type is 'tag_note'")
                             p_id = _append_tag_notes_with_conn(conn, p_tag, p_content)
                             propagation_result = {"status": "ok", "type": "tag_note", "id": p_id}
-                        else:
-                            raise ValueError(f"Invalid propagate_to.type: {p_type}")
                         conn.execute(f"RELEASE SAVEPOINT propagate_{i}")
                     except Exception as e:
                         conn.execute(f"ROLLBACK TO SAVEPOINT propagate_{i}")
