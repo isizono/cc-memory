@@ -18,6 +18,17 @@ def get_active_habit_contents_with_conn(conn) -> list[str]:
     return [r["content"] for r in rows]
 
 
+def _add_habit_with_conn(conn, content: str) -> int:
+    """振る舞いをINSERTしてhabit_idを返す（conn共有版）。バリデーションエラー時はValueError。"""
+    if not content or not content.strip():
+        raise ValueError("content must not be empty")
+    cursor = conn.execute(
+        "INSERT INTO habits (content) VALUES (?)",
+        (content,),
+    )
+    return cursor.lastrowid
+
+
 def add_habit(content: str) -> dict:
     """振る舞いを追加する。
 

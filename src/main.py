@@ -235,6 +235,10 @@ def add_decisions(items: list[dict]) -> dict:
         - decision (str, 必須): 決定内容
         - reason (str, 必須): 決定の理由
         - tags (list[str], optional): 追加タグ。省略時はtopicのタグを継承。内容を表すタグを積極的に追加すること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)。例: ["intent:design", "naming-convention", "backward-compat"]
+        - propagate_to (dict, optional): 決定事項を注入先に伝搬する。
+            - type: "habit" | "tag_note"
+            - content: 伝搬先に書き込む文（decisionテキストとは別にエージェントが書き分ける）
+            - tag: タグ文字列（type="tag_note"の場合のみ必須）
 
     Returns: {created: [...], errors: [{index, error}]}
     """

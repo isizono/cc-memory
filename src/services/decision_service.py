@@ -9,7 +9,11 @@ from src.services.tag_service import (
     link_tags,
     get_effective_tags_batch,
     get_effective_tags_batch_by_ids,
+    _append_tag_notes_with_conn,
 )
+from src.services.habit_service import _add_habit_with_conn
+
+PROPAGATE_TYPES = {"habit", "tag_note"}
 
 
 def add_decisions(items: list[dict]) -> dict:
@@ -77,13 +81,41 @@ def add_decisions(items: list[dict]) -> dict:
                     tag_ids = ensure_tag_ids(conn, parsed_tags)
                     link_tags(conn, "decision_tags", "decision_id", decision_id, tag_ids)
 
+                # propagate_to 処理
+                propagate_to = item.get("propagate_to")
+                propagation_result = None
+                if propagate_to:
+                    conn.execute(f"SAVEPOINT propagate_{i}")
+                    try:
+                        p_type = propagate_to.get("type")
+                        p_content = propagate_to.get("content", "")
+                        if p_type not in PROPAGATE_TYPES:
+                            raise ValueError(f"Invalid propagate_to.type: {p_type}")
+                        if p_type == "habit":
+                            p_id = _add_habit_with_conn(conn, p_content)
+                            propagation_result = {"status": "ok", "type": "habit", "id": p_id}
+                        elif p_type == "tag_note":
+                            p_tag = propagate_to.get("tag")
+                            if not p_tag:
+                                raise ValueError("propagate_to.tag is required when type is 'tag_note'")
+                            p_id = _append_tag_notes_with_conn(conn, p_tag, p_content)
+                            propagation_result = {"status": "ok", "type": "tag_note", "id": p_id}
+                        conn.execute(f"RELEASE SAVEPOINT propagate_{i}")
+                    except Exception as e:
+                        conn.execute(f"ROLLBACK TO SAVEPOINT propagate_{i}")
+                        conn.execute(f"RELEASE SAVEPOINT propagate_{i}")
+                        propagation_result = {"status": "error", "type": propagate_to.get("type", "unknown"), "message": str(e)}
+
                 conn.execute(f"RELEASE SAVEPOINT item_{i}")
-                created.append({
+                created_item = {
                     "decision_id": decision_id,
                     "topic_id": topic_id,
                     "decision": decision,
                     "reason": reason,
-                })
+                }
+                if propagation_result:
+                    created_item["propagation"] = propagation_result
+                created.append(created_item)
 
             except Exception as e:
                 conn.execute(f"ROLLBACK TO SAVEPOINT item_{i}")

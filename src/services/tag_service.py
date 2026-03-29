@@ -1085,3 +1085,24 @@ def collect_tag_notes_for_injection(
         results.append({"tag": tag_str, "notes": row["notes"]})
 
     return results if results else None
+
+
+def _append_tag_notes_with_conn(conn, tag_str: str, content: str) -> int:
+    """タグのnotesにcontentを追記しtag_idを返す。タグ不在時はValueError。"""
+    if not content or not content.strip():
+        raise ValueError("content must not be empty")
+    parsed = validate_and_parse_tags([tag_str])
+    if isinstance(parsed, dict):
+        raise ValueError(parsed["error"]["message"])
+    namespace, name = parsed[0]
+    row = conn.execute(
+        "SELECT id, notes FROM tags WHERE namespace = ? AND name = ?",
+        (namespace, name),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Tag '{tag_str}' not found")
+    tag_id = row["id"]
+    existing = row["notes"]
+    new_notes = f"{existing}\n\n{content}" if existing else content
+    conn.execute("UPDATE tags SET notes = ? WHERE id = ?", (new_notes, tag_id))
+    return tag_id
