@@ -1,6 +1,6 @@
 """hook共通: 状態ファイル管理クラス HookState
 
-hookが利用する状態ファイル（prev_topic, block_count, transcript_offset, current_turn,
+hookが利用する状態ファイル（block_count, transcript_offset, current_turn,
 checked_in_activity）とイベントファイル（events_{session_id}.jsonl）の読み書きを一元管理する。
 標準ライブラリのみに依存。
 """
@@ -38,17 +38,6 @@ class HookState:
 
     def _delete(self, path: Path) -> None:
         path.unlink(missing_ok=True)
-
-    # --- prev_topic ---
-
-    def get_prev_topic(self) -> str | None:
-        """state/prev_topic_{session_id_safe} を読む。
-        ファイルなし -> None"""
-        return self._read_str(self._path("prev_topic"))
-
-    def set_prev_topic(self, topic_name: str) -> None:
-        """state/prev_topic_{session_id_safe} に書き込む"""
-        self._write(self._path("prev_topic"), topic_name)
 
     # --- block_count ---
 

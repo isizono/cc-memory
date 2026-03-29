@@ -30,28 +30,17 @@ def _make_hook_output(message: str) -> dict:
     }
 
 
-_ACTIVITY_NUDGE_MESSAGE = (
+_FOLLOW_UP_NUDGE_MESSAGE = (
     "<system-reminder>"
-    "You just recorded a decision. Consider whether it implies follow-up work "
-    "(design discussion, implementation, investigation) that should be tracked "
-    "as a new activity. If so, create one with add_activity. "
-    "Ignore if not applicable."
+    "決定事項を記録しました。関連するエンティティ（topic・logs・activity）の"
+    "作成や更新も忘れずに行ってください。該当しなければ無視してください。"
     "</system-reminder>"
 )
 
 _RECORD_NUDGE_MESSAGE = (
     "<system-reminder>"
-    "Self-check before continuing: "
-    "(1) Does your current topic still match the conversation? "
-    "If the discussion has shifted, create a new topic with add_topic. "
-    "(2) Have you and the user reached any agreements that should be recorded? "
-    "Examples: design choices, naming conventions, scope boundaries, "
-    "implementation approaches, or trade-off resolutions. "
-    "If yes, record them now with add_decisions before proceeding. "
-    "(3) Has there been substantive discussion worth preserving? "
-    "Use add_logs to capture the flow of conversation — "
-    "arguments considered, options explored, and reasoning behind choices. "
-    "Decisions record conclusions; logs preserve the path that led there."
+    "記録が遅れています。議論の途中でもいいので add_logs / add_decisions / add_topic で記録してください。"
+    "2ターン以内に記録がなければblockが走ります。"
     "</system-reminder>"
 )
 
@@ -92,8 +81,8 @@ def main() -> None:
             e["consumed"] = True
             _rewrite_events(state, events)
 
-            if e.get("type") == "activity":
-                print(json.dumps(_make_hook_output(_ACTIVITY_NUDGE_MESSAGE), ensure_ascii=False))
+            if e.get("type") == "follow_up":
+                print(json.dumps(_make_hook_output(_FOLLOW_UP_NUDGE_MESSAGE), ensure_ascii=False))
                 return
             elif e.get("type") == "record":
                 print(json.dumps(_make_hook_output(_RECORD_NUDGE_MESSAGE), ensure_ascii=False))

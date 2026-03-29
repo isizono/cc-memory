@@ -81,7 +81,7 @@ class TestRecordNudge:
 
         ctx = output["hookSpecificOutput"]["additionalContext"]
         assert "<system-reminder>" in ctx
-        assert "Self-check before continuing" in ctx
+        assert "記録が遅れています" in ctx
         assert "add_decisions" in ctx
 
     def test_nudge_consumed_after_injection(self, state_dir):
@@ -98,12 +98,12 @@ class TestRecordNudge:
         assert json.loads(result.stdout) == {}
 
 
-class TestActivityNudge:
-    """activity nudgeイベント → system-reminder注入"""
+class TestFollowUpNudge:
+    """follow_up nudgeイベント → system-reminder注入"""
 
-    def test_activity_nudge_injection(self, state_dir):
+    def test_follow_up_nudge_injection(self, state_dir):
         _write_events(
-            [{"e": "nudge", "type": "activity", "turn": 3}],
+            [{"e": "nudge", "type": "follow_up", "turn": 3}],
             state_dir,
         )
 
@@ -113,15 +113,15 @@ class TestActivityNudge:
         output = json.loads(result.stdout)
         assert "hookSpecificOutput" in output
         ctx = output["hookSpecificOutput"]["additionalContext"]
-        assert "decision" in ctx
-        assert "activity" in ctx.lower()
+        assert "決定事項" in ctx
+        assert "topic" in ctx
 
-    def test_activity_nudge_takes_priority(self, state_dir):
-        """activity nudgeが最新なら、record nudgeより優先"""
+    def test_follow_up_nudge_takes_priority(self, state_dir):
+        """follow_up nudgeが最新なら、record nudgeより優先"""
         _write_events(
             [
                 {"e": "nudge", "type": "record", "turn": 2},
-                {"e": "nudge", "type": "activity", "turn": 3},
+                {"e": "nudge", "type": "follow_up", "turn": 3},
             ],
             state_dir,
         )
@@ -129,14 +129,14 @@ class TestActivityNudge:
         result = _run_hook({"session_id": _SESSION_ID}, state_dir)
         output = json.loads(result.stdout)
         ctx = output["hookSpecificOutput"]["additionalContext"]
-        # activity nudgeが注入される（最新のnudgeが先に消費される）
-        assert "activity" in ctx.lower()
+        # follow_up nudgeが注入される（最新のnudgeが先に消費される）
+        assert "決定事項" in ctx
 
         # record nudgeはまだ残っている
         result2 = _run_hook({"session_id": _SESSION_ID}, state_dir)
         output2 = json.loads(result2.stdout)
         ctx2 = output2["hookSpecificOutput"]["additionalContext"]
-        assert "Self-check before continuing" in ctx2
+        assert "記録が遅れています" in ctx2
 
 
 class TestEmptySessionId:

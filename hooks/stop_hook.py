@@ -6,10 +6,9 @@
 3. transcript差分読み → イベント抽出 → events.jsonl追記
 4. events.jsonl全読み
 5. Skill Span判定 → Span中なら即approve（安全弁: MAX_SKILL_SPAN_TURNS）
-6. メタタグ判定（最新e:metaイベント、初期ターン猶予あり）
-7. check-in判定（e:toolでcheck_in/add_activityが1件でもあるか、猶予あり）
-8. トピック変更 → 記録チェック（prev_topic比較 + 初回遷移許容 + e:toolで直近N turn）
-9. nudge判定 + 状態更新 → approve
+6. check-in判定（e:toolでcheck_in/add_activityが1件でもあるか、猶予あり）
+7. record escalation（4ターン連続記録なし → block）
+8. nudge判定 + 状態更新 → approve
 """
 import json
 import os
@@ -29,9 +28,6 @@ from hooks.hook_transcript import (
     _RECORDING_TOOLS,
     extract_events,
     extract_last_activity_id,
-    extract_text_from_entry,
-    get_last_assistant_entry,
-    parse_meta_tag,
     read_transcript_from_offset,
 )
 
@@ -39,7 +35,7 @@ _BLOCK_LIMIT = 1
 _CHECKIN_DEFER_TURNS = 2
 _MAX_SKILL_SPAN_TURNS = 20
 _NUDGE_INTERVAL = 2
-_RECENT_TURNS_WINDOW = 3
+_ESCALATION_BLOCK_TURNS = 4
 
 
 def _output(decision: str, reason: str = "") -> None:
@@ -87,23 +83,6 @@ def main() -> None:
 
         new_events, current_turn = extract_events(new_entries, current_turn)
 
-        # stdinのlast_assistant_messageからメタタグを補完（レースコンディション対策）
-        last_msg = data.get("last_assistant_message", "")
-        if last_msg:
-            meta = parse_meta_tag(last_msg)
-            if meta:
-                # 同一turnで同じtopicのmetaイベントがなければ追加
-                has_same_meta = any(
-                    e["e"] == "meta" and e["turn"] == current_turn and e["topic"] == meta["topic_name"]
-                    for e in new_events
-                )
-                if not has_same_meta:
-                    new_events.append({
-                        "e": "meta",
-                        "topic": meta["topic_name"],
-                        "turn": current_turn,
-                    })
-
         state.append_events(new_events)
         state.set_transcript_offset(new_offset)
         state.set_current_turn(current_turn)
@@ -119,35 +98,7 @@ def main() -> None:
             _safe_post_approve(state, all_events, transcript_path)
             return
 
-        # 6. メタタグ判定
-        latest_meta = _get_latest_meta(all_events)
-        if latest_meta is None:
-            if current_turn <= 1:
-                state.reset_block_count()
-                _output("approve", "1ターン目のためメタタグチェックを猶予します。")
-                _safe_post_approve(state, all_events, transcript_path)
-                return
-            # フォールバック: last_assistant_messageが無い場合transcriptから取得
-            # NOTE: get_last_assistant_entryは全行逆順走査（Phase 3で廃止予定）
-            if not last_msg:
-                last_entry = get_last_assistant_entry(transcript_path)
-                if last_entry is not None:
-                    text = extract_text_from_entry(last_entry)
-                    meta_fb = parse_meta_tag(text)
-                    if meta_fb:
-                        latest_meta = meta_fb["topic_name"]
-            if latest_meta is None:
-                state.increment_block_count()
-                _output(
-                    "block",
-                    "応答の最後にメタタグを出力してください。フォーマット: "
-                    "<!-- [meta] topic: xxx -->",
-                )
-                return
-
-        current_topic_name = latest_meta
-
-        # 7. check-in判定
+        # 6. check-in判定
         has_checkin = any(
             e["e"] == "tool" and e.get("name") in _CHECKIN_TOOLS
             for e in all_events
@@ -165,35 +116,20 @@ def main() -> None:
             )
             return
 
-        # 8. トピック変更チェック
-        prev_topic = state.get_prev_topic()
-        if prev_topic is not None and prev_topic != current_topic_name:
-            # 初回遷移判定: 過去turnのmetaイベントに異なるtopicが2つ以上あるか
-            # current_turnのmetaは「今まさに遷移した」ものなので除外
-            prev_meta_topics = {
-                e["topic"] for e in all_events
-                if e["e"] == "meta" and e.get("turn", 0) < current_turn
-            }
-            is_first_transition = len(prev_meta_topics) <= 1
-            if not is_first_transition:
-                # 直近N turnに記録ツール呼び出しがあるか
-                recent_turn_threshold = current_turn - _RECENT_TURNS_WINDOW
-                has_recent_record = any(
-                    e["e"] == "tool"
-                    and e.get("name") in _RECORDING_TOOLS
-                    and e.get("turn", 0) >= recent_turn_threshold
-                    for e in all_events
+        # 7. record escalation (4ターン連続記録なし → block)
+        # nudgeと同じ_NUDGE_INTERVAL境界でのみ判定（偶数ターン専用）
+        if current_turn > 0 and current_turn % _NUDGE_INTERVAL == 0:
+            turns_since = _turns_since_last_recording(all_events, current_turn)
+            if turns_since >= _ESCALATION_BLOCK_TURNS:
+                state.increment_block_count()
+                _output(
+                    "block",
+                    "記録が漏れています。このターンのレスポンス内で、直近の議論を "
+                    "add_logs / add_decisions / add_topic で記録してください。",
                 )
-                if not has_recent_record:
-                    state.increment_block_count()
-                    _output(
-                        "block",
-                        "トピックが変わりました。移動前に記録（add_decisions / add_logs / add_topic）を"
-                        "行ってください。",
-                    )
-                    return
+                return
 
-        # 9. nudge判定 + 状態更新 + approve
+        # 8. nudge判定 + 状態更新 + approve
         state.reset_block_count()
         _output("approve")
         _safe_post_approve(
@@ -229,12 +165,14 @@ def _is_in_skill_span(events: list[dict], current_turn: int) -> bool:
     return last_skill_turn >= current_turn
 
 
-def _get_latest_meta(events: list[dict]) -> str | None:
-    """events内の最新metaイベントからtopic名を取得する。"""
-    for e in reversed(events):
-        if e["e"] == "meta":
-            return e.get("topic")
-    return None
+def _turns_since_last_recording(events: list[dict], current_turn: int) -> int:
+    """最後に記録ツールが呼ばれたturnからの経過ターン数を返す。"""
+    # 記録ゼロの場合はセッション開始(turn 0)から経過したとみなす
+    last_recording_turn = 0
+    for e in events:
+        if e["e"] == "tool" and e.get("name") in _RECORDING_TOOLS and e.get("turn", 0) > last_recording_turn:
+            last_recording_turn = e.get("turn", 0)
+    return current_turn - last_recording_turn
 
 
 def _update_checked_in_activity(
@@ -259,27 +197,31 @@ def _safe_post_approve(
     *,
     run_nudges: bool = False,
 ) -> None:
-    """approve出力後の状態更新。例外はstderrログのみ（double-output防止）。"""
+    """approve出力後の状態更新。例外はstderrログのみ（double-output防止）。
+
+    各処理は独立したtryブロックで囲み、一方の失敗が他方を阻害しないようにする。
+    """
     try:
         _update_state_on_approve(state, events, transcript_path)
-        if run_nudges:
-            _handle_nudges(state, events, current_turn)
     except Exception as e:
         print(
-            f"stop_hook.py post-approve error: {e}\n{traceback.format_exc()}",
+            f"stop_hook.py post-approve error (state): {e}\n{traceback.format_exc()}",
             file=sys.stderr,
         )
+    if run_nudges:
+        try:
+            _handle_nudges(state, events, current_turn)
+        except Exception as e:
+            print(
+                f"stop_hook.py post-approve error (nudge): {e}\n{traceback.format_exc()}",
+                file=sys.stderr,
+            )
 
 
 def _update_state_on_approve(
     state: HookState, events: list[dict], transcript_path: str
 ) -> None:
-    """approve時の状態更新（prev_topic, heartbeat）"""
-    # prev_topic更新
-    latest_meta = _get_latest_meta(events)
-    if latest_meta:
-        state.set_prev_topic(latest_meta)
-
+    """approve時の状態更新（heartbeat）"""
     # heartbeat更新
     activity_id = state.get_checked_in_activity()
     if activity_id is not None:
@@ -310,19 +252,20 @@ def _handle_nudges(state: HookState, events: list[dict], current_turn: int) -> N
                 "turn": current_turn,
             })
 
-    # activity nudge: 直近turnにadd_decisionあり & add_activity/check_inなし
+    # follow_up nudge: 直近turnにadd_decisionsあり & 他の記録系/check-in系ツールなし
     recent_events = [e for e in events if e.get("turn", 0) == current_turn]
     has_decision = any(
         e["e"] == "tool" and e.get("name") == "add_decisions" for e in recent_events
     )
     if has_decision:
-        has_activity = any(
-            e["e"] == "tool" and e.get("name") in _CHECKIN_TOOLS for e in recent_events
+        companion_tools = (_RECORDING_TOOLS | _CHECKIN_TOOLS) - {"add_decisions"}
+        has_companion = any(
+            e["e"] == "tool" and e.get("name") in companion_tools for e in recent_events
         )
-        if not has_activity:
+        if not has_companion:
             nudge_events.append({
                 "e": "nudge",
-                "type": "activity",
+                "type": "follow_up",
                 "turn": current_turn,
             })
 

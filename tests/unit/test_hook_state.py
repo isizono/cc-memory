@@ -16,20 +16,6 @@ def hook_state(tmp_path, monkeypatch):
     return HookState("test-session-123")
 
 
-class TestPrevTopic:
-    def test_get_returns_none_when_no_file(self, hook_state):
-        assert hook_state.get_prev_topic() is None
-
-    def test_set_then_get(self, hook_state):
-        hook_state.set_prev_topic("test-topic")
-        assert hook_state.get_prev_topic() == "test-topic"
-
-    def test_empty_file_returns_none(self, hook_state):
-        path = hook_state._path("prev_topic")
-        path.write_text("")
-        assert hook_state.get_prev_topic() is None
-
-
 class TestBlockCount:
     def test_get_returns_zero_when_no_file(self, hook_state):
         assert hook_state.get_block_count() == 0
@@ -130,7 +116,6 @@ class TestClearSession:
         state = HookState("sess-abc")
 
         # 全種類の状態ファイルを作成
-        state.set_prev_topic("topic-10")
         state.increment_block_count()
         state.set_transcript_offset(100)
         state.set_current_turn(3)
@@ -141,7 +126,6 @@ class TestClearSession:
         HookState.clear_session("sess-abc")
 
         # 全ファイルが消えている
-        assert state.get_prev_topic() is None
         assert state.get_block_count() == 0
         assert state.get_transcript_offset() == 0
         assert state.get_current_turn() == 0
@@ -160,27 +144,30 @@ class TestClearSession:
 
 class TestSessionIdSlash:
     def test_slash_replaced_with_underscore(self, tmp_path, monkeypatch):
+        """session_idに含まれる '/' がファイル名では '_' に置換される"""
         monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
         state = HookState("user/session/123")
-        state.set_prev_topic("topic-99")
+        state.set_current_turn(5)
 
         # ファイル名に '/' が含まれず '_' に置換されている
-        expected_file = tmp_path / "prev_topic_user_session_123"
+        expected_file = tmp_path / "current_turn_user_session_123"
         assert expected_file.exists()
-        assert expected_file.read_text().strip() == "topic-99"
+        assert expected_file.read_text().strip() == "5"
 
 
 class TestMainCli:
     def test_clear_via_cli(self, tmp_path, monkeypatch):
+        """CLIのclearコマンドで全状態ファイルが削除される"""
         monkeypatch.setattr(HookState, "BASE_DIR", tmp_path)
 
         # 状態ファイルを作成
         state = HookState("cli-test-sess")
-        state.set_prev_topic("topic-1")
         state.set_current_turn(3)
+        state.increment_block_count()
 
         # ファイルが存在する
-        assert state.get_prev_topic() == "topic-1"
+        assert state.get_current_turn() == 3
+        assert state.get_block_count() == 1
 
         # CLIで clear を実行（HOOK_STATE_DIR環境変数でBASE_DIRをオーバーライド）
         project_root = Path(__file__).resolve().parents[2]
@@ -196,5 +183,5 @@ class TestMainCli:
         assert result.returncode == 0
 
         # CLIで実際にファイルが削除されたことを確認
-        assert state.get_prev_topic() is None
         assert state.get_current_turn() == 0
+        assert state.get_block_count() == 0

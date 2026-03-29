@@ -96,9 +96,8 @@ def is_user_message(entry: dict) -> bool:
 def extract_events(entries: list[dict], current_turn: int) -> tuple[list[dict], int]:
     """transcriptエントリ群からイベントを抽出する。
 
-    3型イベントを抽出:
+    2型イベントを抽出:
     - tool: cc-memoryツール呼び出し（assistantのtool_useブロック）
-    - meta: メタタグ検出（assistantのtextブロック）
     - skill: スキル開始検出（User Messageの<command-name>タグ）
 
     Args:
@@ -127,19 +126,12 @@ def extract_events(entries: list[dict], current_turn: int) -> tuple[list[dict], 
                 })
             continue
 
-        # assistantエントリからtool/metaイベントを抽出
+        # assistantエントリからtoolイベントを抽出
         if entry_type == "assistant":
             message = entry.get("message", {})
             content = message.get("content", [])
 
             if isinstance(content, str):
-                meta = parse_meta_tag(content)
-                if meta:
-                    events.append({
-                        "e": "meta",
-                        "topic": meta["topic_name"],
-                        "turn": current_turn,
-                    })
                 continue
 
             for block in content:
@@ -166,100 +158,12 @@ def extract_events(entries: list[dict], current_turn: int) -> tuple[list[dict], 
                                     pass
                         events.append(event)
 
-                elif block_type == "text":
-                    text = block.get("text", "")
-                    meta = parse_meta_tag(text)
-                    if meta:
-                        events.append({
-                            "e": "meta",
-                            "topic": meta["topic_name"],
-                            "turn": current_turn,
-                        })
-
     return events, current_turn
 
 
 # ===================================================================
 # 共通ユーティリティ（イベント駆動でも使用）
 # ===================================================================
-
-
-def parse_meta_tag(text: str) -> dict | None:
-    """テキストからメタタグをパースする。
-
-    フォーマット:
-    <!-- [meta] topic: xxx -->
-
-    Returns:
-        {"found": True, "topic_name": ...}
-        or None
-    """
-    pattern = r'<!--\s*\[meta\]\s*topic:\s*(.+?)\s*-->'
-    match = re.search(pattern, text)
-
-    if match:
-        return {
-            "found": True,
-            "topic_name": match.group(1).strip(),
-        }
-
-    return None
-
-
-def get_last_assistant_entry(transcript_path: str) -> dict | None:
-    """transcriptから最後のassistantエントリ（textブロック含む）を取得する。
-    全行を読み、逆順でtextブロックを含む最初のassistantエントリを返す。"""
-    path = Path(transcript_path).expanduser()
-    if not path.exists():
-        return None
-
-    try:
-        with open(path) as f:
-            lines = f.readlines()
-    except Exception:
-        return None
-
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-            if entry.get("type") == "assistant" and _has_text_block(entry):
-                return entry
-        except json.JSONDecodeError:
-            continue
-
-    return None
-
-
-def extract_text_from_entry(entry: dict) -> str:
-    """エントリからテキスト内容を抽出する。"""
-    message = entry.get("message", {})
-    content = message.get("content", [])
-
-    if isinstance(content, str):
-        return content
-
-    texts = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
-            texts.append(block.get("text", ""))
-        elif isinstance(block, str):
-            texts.append(block)
-
-    return "\n".join(texts)
-
-
-def _has_text_block(entry: dict) -> bool:
-    """エントリにtextブロックが含まれるかチェック。"""
-    content = entry.get("message", {}).get("content", [])
-    if isinstance(content, str):
-        return bool(content.strip())
-    return any(
-        isinstance(block, dict) and block.get("type") == "text"
-        for block in content
-    )
 
 
 def _extract_user_content_text(entry: dict) -> str:
