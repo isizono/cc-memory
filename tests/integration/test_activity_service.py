@@ -619,3 +619,46 @@ class TestSnoozedStatus:
 
         assert "error" not in result
         assert result["status"] == "completed"
+
+
+class TestShelvedStatus:
+    """shelvedステータスの統合テスト"""
+
+    def test_set_status_to_shelved(self, activity_with_db):
+        """アクティビティをshelvedに変更できる"""
+        activity = activity_with_db["activity"]
+        result = update_activity(activity["activity_id"], status="shelved")
+
+        assert "error" not in result
+        assert result["status"] == "shelved"
+
+    def test_shelved_excluded_from_active(self, temp_db):
+        """shelvedアクティビティはstatus='active'に含まれない"""
+        a = add_activity(title="Shelved", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        update_activity(a["activity_id"], status="shelved")
+
+        result = get_activities(status="active")
+
+        assert "error" not in result
+        assert result["total_count"] == 0
+
+    def test_shelved_returned_with_status_filter(self, temp_db):
+        """get_activities(status='shelved')でshelvedアクティビティが返る"""
+        a = add_activity(title="Shelved", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        update_activity(a["activity_id"], status="shelved")
+
+        result = get_activities(status="shelved")
+
+        assert "error" not in result
+        assert result["total_count"] == 1
+        assert result["activities"][0]["title"] == "Shelved"
+
+    def test_field_update_does_not_wake_shelved(self, temp_db):
+        """shelved中にtitle更新してもshelvedのまま（snoozedとの差分）"""
+        a = add_activity(title="On Shelf", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        update_activity(a["activity_id"], status="shelved")
+
+        result = update_activity(a["activity_id"], title="Still On Shelf")
+
+        assert "error" not in result
+        assert result["status"] == "shelved"

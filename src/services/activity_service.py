@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 ACTIVITY_DESC_MAX_LEN = 200
 from src.config import HEARTBEAT_TIMEOUT_MINUTES, SNOOZE_DURATION_DAYS
 # DB格納可能なステータス値
-REAL_STATUSES = {"pending", "in_progress", "completed", "snoozed"}
+REAL_STATUSES = {"pending", "in_progress", "completed", "snoozed", "shelved"}
 # "active"エイリアスが展開されるステータス
 ACTIVE_STATUSES = ("in_progress", "pending")
 # get_activities用（エイリアス含む）
@@ -133,8 +133,8 @@ def get_activities(
 
     Args:
         tags: タグ配列（optional。指定時はAND条件でフィルタ、未指定時は全件）
-        status: フィルタするステータス（active/pending/in_progress/completed/snoozed、デフォルト: active）
-                "active"はpending+in_progressの両方を返すエイリアス（snoozedは含まない）
+        status: フィルタするステータス（active/pending/in_progress/completed/snoozed/shelved、デフォルト: active）
+                "active"はpending+in_progressの両方を返すエイリアス（snoozed/shelvedは含まない）
         limit: 取得件数上限（デフォルト: 5）
         since: ISO日付文字列（例: "2026-03-10"）。この日付以降に更新されたアクティビティのみ返す
         until: ISO日付文字列。この日付以前に更新されたアクティビティのみ返す
