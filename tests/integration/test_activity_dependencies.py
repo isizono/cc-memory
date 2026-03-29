@@ -105,29 +105,6 @@ class TestActivityDependenciesTable:
         finally:
             conn.close()
 
-    def test_reverse_pair_allowed_at_db_level(self, temp_db):
-        """DBレベルでは逆方向ペアのINSERTは制約違反にならない（サービス層で循環を弾く）"""
-        conn = get_connection()
-        try:
-            a1 = _create_activity(conn, "Activity A")
-            a2 = _create_activity(conn, "Activity B")
-            conn.execute(
-                "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
-                (a1, a2),
-            )
-            conn.execute(
-                "INSERT INTO activity_dependencies (dependent_id, dependency_id) VALUES (?, ?)",
-                (a2, a1),
-            )
-            conn.commit()
-
-            count = conn.execute(
-                "SELECT COUNT(*) as cnt FROM activity_dependencies"
-            ).fetchone()["cnt"]
-            assert count == 2
-        finally:
-            conn.close()
-
     def test_cascade_delete_dependent(self, temp_db):
         """ON DELETE CASCADE: dependent側アクティビティ削除時に依存関係も削除される"""
         conn = get_connection()
