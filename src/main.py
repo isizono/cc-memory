@@ -324,7 +324,7 @@ def get_decisions(
 def search(
     keyword: str | list[str],
     tags: Optional[list[str]] = None,
-    type_filter: Optional[str] = None,
+    entity_type: Optional[str] = None,
     limit: int = 10,
     offset: int = 0,
     keyword_mode: str = "and",
@@ -346,7 +346,7 @@ def search(
     Args:
         keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
-        type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
+        entity_type: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
         offset: スキップ件数（デフォルト0）。ページネーション用
         keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
@@ -358,7 +358,7 @@ def search(
         tagsはエンティティに紐づくタグ文字列のリスト。
         include_details=Trueの場合、上位10件にdetailsが追加される。
     """
-    result = search_service.search(keyword, tags, type_filter, limit, offset, keyword_mode, include_details)
+    result = search_service.search(keyword, tags, entity_type, limit, offset, keyword_mode, include_details)
     if "error" not in result and tags:
         _maybe_inject_tag_notes(result, tags)
     return result
@@ -610,7 +610,7 @@ def add_material(
     資材を追加する。独立エンティティとしてタグ付きで保存される。
 
     資材はセッション中の成果物・ドキュメントをDB保存する仕組み。
-    search(type_filter="material")で検索でき、全文はget_materialで取得する2段階リード設計。
+    search(entity_type="material")で検索でき、全文はget_materialで取得する2段階リード設計。
     決定事項と違って「双方の合意」が不要。成果物が出た時点でユーザーに確認せず呼ぶ。
 
     典型的な使い方:

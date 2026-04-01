@@ -551,7 +551,7 @@ def _build_tag_filter_cte(tag_ids: list[int]) -> tuple[str, list]:
 def _fts_search(
     keywords: list[str],
     tag_ids: Optional[list[int]],
-    type_filter: Optional[str],
+    entity_type: Optional[str],
     limit: int,
     keyword_mode: str = "and",
     original_keyword_count: Optional[int] = None,
@@ -561,7 +561,7 @@ def _fts_search(
     Args:
         keywords: 検索キーワードリスト（QE拡張分を含む場合がある）
         tag_ids: タグフィルタ用のtag_idリスト
-        type_filter: 検索対象の絞り込み
+        entity_type: 検索対象の絞り込み
         limit: 取得件数上限
         keyword_mode: キーワード結合モード（"and" / "or"）
         original_keyword_count: 元のキーワード数。指定時、先頭N個をAND結合し
@@ -603,7 +603,7 @@ def _fts_search(
         ORDER BY bm25(search_index_fts, 5.0, 1.0)
         LIMIT ?
         """
-        params = (*cte_params, escaped_keyword, type_filter, type_filter, limit)
+        params = (*cte_params, escaped_keyword, entity_type, entity_type, limit)
     else:
         query = """
         SELECT
@@ -617,7 +617,7 @@ def _fts_search(
         ORDER BY bm25(search_index_fts, 5.0, 1.0)
         LIMIT ?
         """
-        params = (escaped_keyword, type_filter, type_filter, limit)
+        params = (escaped_keyword, entity_type, entity_type, limit)
 
     rows = execute_query(query, params)
     results = []
@@ -634,7 +634,7 @@ def _fts_search(
 def _vector_search(
     keywords: list[str],
     tag_ids: Optional[list[int]],
-    type_filter: Optional[str],
+    entity_type: Optional[str],
     limit: int,
     keyword_mode: str = "and",
 ) -> Optional[list[dict]]:
@@ -678,7 +678,7 @@ def _vector_search(
                           AND tf.source_id = search_index.source_id
                       )
                     """
-                    params = (*cte_params, *rowids, type_filter, type_filter)
+                    params = (*cte_params, *rowids, entity_type, entity_type)
                 else:
                     query = f"""
                     SELECT id, source_type, source_id, title
@@ -686,7 +686,7 @@ def _vector_search(
                     WHERE id IN ({rowid_placeholders})
                       AND (? IS NULL OR source_type = ?)
                     """
-                    params = (*rowids, type_filter, type_filter)
+                    params = (*rowids, entity_type, entity_type)
 
                 filter_rows = execute_query(query, params)
                 for row in filter_rows:
@@ -747,7 +747,7 @@ def _vector_search(
                       AND tf.source_id = search_index.source_id
                   )
                 """
-                params = (*cte_params, *rowids, type_filter, type_filter)
+                params = (*cte_params, *rowids, entity_type, entity_type)
             else:
                 query = f"""
                 SELECT id, source_type, source_id, title
@@ -755,7 +755,7 @@ def _vector_search(
                 WHERE id IN ({rowid_placeholders})
                   AND (? IS NULL OR source_type = ?)
                 """
-                params = (*rowids, type_filter, type_filter)
+                params = (*rowids, entity_type, entity_type)
 
             filter_rows = execute_query(query, params)
 
@@ -851,7 +851,7 @@ def find_similar_topics(
 def _tag_like_search(
     keywords: list[str],
     tag_ids: Optional[list[int]],
-    type_filter: Optional[str],
+    entity_type: Optional[str],
     limit: int,
     keyword_mode: str = "and",
 ) -> list[dict]:
@@ -957,8 +957,8 @@ def _tag_like_search(
     ORDER BY si.id DESC
     LIMIT ?
     """
-    # パラメータ: type_filter × 2 + matched_tag_ids × 7 + limit
-    query_params = [type_filter, type_filter]
+    # パラメータ: entity_type × 2 + matched_tag_ids × 7 + limit
+    query_params = [entity_type, entity_type]
     for _ in range(7):
         query_params.extend(matched_tag_ids)
     query_params.append(limit)
@@ -1094,7 +1094,7 @@ def _rrf_merge(
 def search(
     keyword: str | list[str],
     tags: Optional[list[str]] = None,
-    type_filter: Optional[str] = None,
+    entity_type: Optional[str] = None,
     limit: int = 10,
     offset: int = 0,
     keyword_mode: str = "and",
@@ -1115,7 +1115,7 @@ def search(
     Args:
         keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
-        type_filter: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
+        entity_type: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
         offset: スキップ件数（デフォルト0）。ページネーション用
         keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
@@ -1161,11 +1161,11 @@ def search(
                 }
             }
 
-    if type_filter is not None and type_filter not in SEARCHABLE_TYPES:
+    if entity_type is not None and entity_type not in SEARCHABLE_TYPES:
         return {
             "error": {
-                "code": "INVALID_TYPE_FILTER",
-                "message": f"Invalid type_filter: {type_filter}. Must be one of {sorted(SEARCHABLE_TYPES)}"
+                "code": "INVALID_ENTITY_TYPE",
+                "message": f"Invalid entity_type: {entity_type}. Must be one of {sorted(SEARCHABLE_TYPES)}"
             }
         }
 
@@ -1210,22 +1210,22 @@ def search(
         if keyword_mode == "or":
             # OR時: 3文字以上のキーワードが1つでもあればFTSを使う
             if any(len(kw) >= 3 for kw in fts_keywords):
-                fts_results = _fts_search(fts_keywords, tag_ids, type_filter, fetch_limit, keyword_mode, None)
+                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, None)
                 methods_used.append("fts5")
         else:
             # AND時（現行通り）: 全キーワードが3文字以上の場合のみ
             # QE拡張分はOR結合で追加されるため、元のキーワードの文字数チェックを使用
             if min_len >= 3:
-                fts_results = _fts_search(fts_keywords, tag_ids, type_filter, fetch_limit, keyword_mode, original_kw_count)
+                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, original_kw_count)
                 methods_used.append("fts5")
 
         # ベクトル検索（元のキーワードのまま、拡張なし）
-        vec_results = _vector_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+        vec_results = _vector_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode)
         if vec_results is not None:
             methods_used.append("vector")
 
         # タグLIKE検索（キーワード長の制限なし）
-        tag_like_results = _tag_like_search(keywords, tag_ids, type_filter, fetch_limit, keyword_mode)
+        tag_like_results = _tag_like_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode)
         if tag_like_results:
             methods_used.append("tag_like")
 

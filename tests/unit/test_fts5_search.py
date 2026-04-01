@@ -77,11 +77,11 @@ def test_search_bm25_ranking(temp_db):
     assert len(result["results"]) >= 1
 
 
-def test_search_type_filter(temp_db):
-    """type_filterで種別を絞り込み"""
+def test_search_entity_type(temp_db):
+    """entity_typeで種別を絞り込み"""
     topic = add_topic(title="フィルタテスト用トピック", description="テスト", tags=DEFAULT_TAGS)
     add_decision(topic_id=topic["topic_id"], decision="フィルタテスト決定事項", reason="テスト")
-    result = search_service.search(keyword="フィルタテスト", type_filter="topic")
+    result = search_service.search(keyword="フィルタテスト", entity_type="topic")
     assert "error" not in result
     for item in result["results"]:
         assert item["type"] == "topic"
@@ -211,11 +211,11 @@ def test_search_trigger_sync_activity(temp_db):
     assert "activity" in types
 
 
-def test_search_invalid_type_filter(temp_db):
-    """不正なtype_filterでINVALID_TYPE_FILTERエラー"""
-    result = search_service.search(keyword="テスト", type_filter="invalid")
+def test_search_invalid_entity_type(temp_db):
+    """不正なentity_typeでINVALID_ENTITY_TYPEエラー"""
+    result = search_service.search(keyword="テスト", entity_type="invalid")
     assert "error" in result
-    assert result["error"]["code"] == "INVALID_TYPE_FILTER"
+    assert result["error"]["code"] == "INVALID_ENTITY_TYPE"
 
 
 def test_search_cross_type(temp_db):
@@ -347,11 +347,11 @@ def test_search_trigger_sync_log(temp_db):
     assert "log" in types
 
 
-def test_search_type_filter_log(temp_db):
-    """type_filter=logでログのみ取得"""
+def test_search_entity_type_log(temp_db):
+    """entity_type=logでログのみ取得"""
     topic = add_topic(title="ログフィルタテスト用トピック", description="テスト", tags=DEFAULT_TAGS)
     add_log_entry(topic_id=topic["topic_id"], title="ログフィルタ対象テスト", content="ログ内容")
-    result = search_service.search(keyword="ログフィルタ対象テスト", type_filter="log")
+    result = search_service.search(keyword="ログフィルタ対象テスト", entity_type="log")
     assert "error" not in result
     for item in result["results"]:
         assert item["type"] == "log"
@@ -632,11 +632,11 @@ def test_search_keyword_or_string_keyword(temp_db):
     assert len(result["results"]) >= 1
 
 
-def test_search_keyword_or_with_type_filter(temp_db):
-    """OR検索: type_filterとの組み合わせ"""
+def test_search_keyword_or_with_entity_type(temp_db):
+    """OR検索: entity_typeとの組み合わせ"""
     topic = add_topic(title="ORフィルタテスト用トピック", description="テスト", tags=DEFAULT_TAGS)
     add_decision(topic_id=topic["topic_id"], decision="ORフィルタテスト用決定", reason="テスト")
-    result = search_service.search(keyword=["ORフィルタテスト用トピック", "ORフィルタテスト用決定"], keyword_mode="or", type_filter="topic")
+    result = search_service.search(keyword=["ORフィルタテスト用トピック", "ORフィルタテスト用決定"], keyword_mode="or", entity_type="topic")
     assert "error" not in result
     for item in result["results"]:
         assert item["type"] == "topic"
@@ -865,10 +865,10 @@ def test_search_trigger_sync_material(temp_db):
     assert "material" in types
 
 
-def test_search_type_filter_material(temp_db):
-    """type_filter=materialでmaterialのみ取得"""
+def test_search_entity_type_material(temp_db):
+    """entity_type=materialでmaterialのみ取得"""
     add_material(title="素材フィルタ対象テスト", content="素材の内容", tags=DEFAULT_TAGS)
-    result = search_service.search(keyword="素材フィルタ対象テスト", type_filter="material")
+    result = search_service.search(keyword="素材フィルタ対象テスト", entity_type="material")
     assert "error" not in result
     for item in result["results"]:
         assert item["type"] == "material"
@@ -903,7 +903,7 @@ def test_search_material_by_content(temp_db):
 def test_search_snippet_material_title_priority(temp_db):
     """materialのsnippetはtitle優先表示（"title: content..." 形式）"""
     add_material(title="設計書", content="ここに設計の内容が入ります", tags=DEFAULT_TAGS)
-    result = search_service.search(keyword="設計書", type_filter="material")
+    result = search_service.search(keyword="設計書", entity_type="material")
     assert "error" not in result
     assert len(result["results"]) >= 1
     item = next(r for r in result["results"] if r["type"] == "material")
@@ -916,7 +916,7 @@ def test_search_snippet_material_max_length(temp_db):
     """materialのsnippetはSNIPPET_MAX_LEN以下に収まる"""
     long_content = "あ" * 300
     add_material(title="長コンテンツテスト素材", content=long_content, tags=DEFAULT_TAGS)
-    result = search_service.search(keyword="長コンテンツテスト素材", type_filter="material")
+    result = search_service.search(keyword="長コンテンツテスト素材", entity_type="material")
     assert "error" not in result
     assert len(result["results"]) >= 1
     item = next(r for r in result["results"] if r["type"] == "material")

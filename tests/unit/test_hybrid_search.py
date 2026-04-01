@@ -313,8 +313,8 @@ def test_hybrid_search_cross_type_with_tags(temp_db, mock_embedding_model):
     assert "activity" in types_found
 
 
-def test_hybrid_search_type_filter(temp_db, mock_embedding_model):
-    """ハイブリッド検索: type_filterが効く"""
+def test_hybrid_search_entity_type(temp_db, mock_embedding_model):
+    """ハイブリッド検索: entity_typeが効く"""
     topic = add_topic(
         title="フィルターハイブリッドテスト用",
         description="テスト用",
@@ -328,7 +328,7 @@ def test_hybrid_search_type_filter(temp_db, mock_embedding_model):
 
     result = search_service.search(
         keyword="フィルターハイブリッドテスト",
-        type_filter="topic",
+        entity_type="topic",
     )
 
     assert "error" not in result
@@ -996,8 +996,8 @@ def test_search_tag_like_methods_used(temp_db, mock_embedding_model):
     assert "tag_like" in result["search_methods_used"]
 
 
-def test_search_tag_like_with_type_filter(temp_db, disable_embedding):
-    """タグLIKE検索: type_filterとの組み合わせ"""
+def test_search_tag_like_with_entity_type(temp_db, disable_embedding):
+    """タグLIKE検索: entity_typeとの組み合わせ"""
     topic = add_topic(
         title="タグLIKEフィルタテスト用トピック",
         description="テスト",
@@ -1012,7 +1012,7 @@ def test_search_tag_like_with_type_filter(temp_db, disable_embedding):
 
     result = search_service.search(
         keyword="unique-tag-filter-test",
-        type_filter="topic",
+        entity_type="topic",
     )
 
     assert "error" not in result
@@ -1416,7 +1416,7 @@ def test_include_details_true_topic(temp_db, mock_embedding_model):
 
     result = search_service.search(
         keyword="トピック詳細テスト用",
-        type_filter="topic",
+        entity_type="topic",
         include_details=True,
     )
 
@@ -1446,7 +1446,7 @@ def test_include_details_true_topic_decisions_limit(temp_db, mock_embedding_mode
 
     result = search_service.search(
         keyword="決定件数制限テスト用",
-        type_filter="topic",
+        entity_type="topic",
         include_details=True,
     )
 
@@ -1467,7 +1467,7 @@ def test_include_details_true_topic_description_truncated(temp_db, mock_embeddin
 
     result = search_service.search(
         keyword="説明文長さ制限テスト用",
-        type_filter="topic",
+        entity_type="topic",
         include_details=True,
     )
 
@@ -1488,7 +1488,7 @@ def test_include_details_true_activity(temp_db, mock_embedding_model):
 
     result = search_service.search(
         keyword="アクティビティ詳細テスト用",
-        type_filter="activity",
+        entity_type="activity",
         include_details=True,
     )
 
@@ -1515,7 +1515,7 @@ def test_include_details_true_decision(temp_db, mock_embedding_model):
 
     result = search_service.search(
         keyword="決定詳細テスト用",
-        type_filter="decision",
+        entity_type="decision",
         include_details=True,
     )
 
@@ -1542,7 +1542,7 @@ def test_include_details_true_log(temp_db, mock_embedding_model):
 
     result = search_service.search(
         keyword="ログ詳細テスト用",
-        type_filter="log",
+        entity_type="log",
         include_details=True,
     )
 
@@ -1569,7 +1569,7 @@ def test_include_details_true_log_content_truncated(temp_db, mock_embedding_mode
 
     result = search_service.search(
         keyword="ログ長さ制限テスト用",
-        type_filter="log",
+        entity_type="log",
         include_details=True,
     )
 
@@ -1589,7 +1589,7 @@ def test_include_details_true_material_no_details(temp_db, mock_embedding_model)
 
     result = search_service.search(
         keyword="マテリアル詳細テスト用",
-        type_filter="material",
+        entity_type="material",
         include_details=True,
     )
 
@@ -1612,7 +1612,7 @@ def test_include_details_top_n_limit(temp_db, mock_embedding_model):
 
     result = search_service.search(
         keyword="上位制限テスト用",
-        type_filter="topic",
+        entity_type="topic",
         limit=DETAILS_MAX_RESULTS + 5,
         include_details=True,
     )
