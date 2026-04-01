@@ -565,6 +565,7 @@ def _fts_search(
         keywords: 検索キーワードリスト（QE拡張分を含む場合がある）
         tag_ids: タグフィルタ用のtag_idリスト
         entity_type: 検索対象の絞り込み
+        entity_type: 検索対象の絞り込み
         limit: 取得件数上限
         keyword_mode: キーワード結合モード（"and" / "or"）
         original_keyword_count: 元のキーワード数。指定時、先頭N個をAND結合し
@@ -1168,6 +1169,7 @@ def search(
     Args:
         keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
+        entity_type: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
         entity_type: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
         offset: スキップ件数（デフォルト0）。ページネーション用

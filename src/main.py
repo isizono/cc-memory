@@ -931,7 +931,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    from src.db import init_database
+    from src.db import verify_sqlite_vec, init_database
+    verify_sqlite_vec()
     init_database()
 
     if args.transport == "http":

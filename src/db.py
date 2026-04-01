@@ -35,6 +35,59 @@ def get_db_path() -> str:
     return str(db_dir / "discussion.db")
 
 
+def verify_sqlite_vec() -> None:
+    """sqlite-vec拡張が利用可能か起動時にチェックする。
+
+    失敗時はわかりやすいエラーメッセージを出力してSystemExitを送出する。
+    サーバー起動前（init_database前）に呼ぶこと。
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        # Step 1: enable_load_extensionの有無チェック（パターンA: pyenv問題）
+        if not hasattr(conn, "enable_load_extension"):
+            logger.error(
+                "sqlite-vec startup check failed: "
+                "sqlite3.Connection.enable_load_extension() is not available.\n"
+                "Your Python was built without --enable-loadable-sqlite-extensions.\n"
+                "Fix: use Homebrew Python or rebuild with the flag.\n"
+                "  brew install python@3.12\n"
+                "  UV_PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 uv sync"
+            )
+            raise SystemExit(1)
+
+        try:
+            conn.enable_load_extension(True)
+        except AttributeError:
+            logger.error(
+                "sqlite-vec startup check failed: "
+                "enable_load_extension() exists but is not callable.\n"
+                "Your Python was built without --enable-loadable-sqlite-extensions.\n"
+                "Fix: use Homebrew Python or rebuild with the flag.\n"
+                "  brew install python@3.12\n"
+                "  UV_PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 uv sync"
+            )
+            raise SystemExit(1)
+
+        # Step 2: sqlite_vec.load()の成否チェック（パターンB: ネイティブ拡張非互換）
+        try:
+            sqlite_vec.load(conn)
+        except Exception as e:
+            logger.error(
+                "sqlite-vec startup check failed: "
+                f"native extension could not be loaded: {e}\n"
+                "The sqlite-vec binary is incompatible with your environment.\n"
+                "Fix: reinstall sqlite-vec or use a compatible Python build.\n"
+                "  UV_PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 uv sync"
+            )
+            raise SystemExit(1)
+        finally:
+            conn.enable_load_extension(False)
+    finally:
+        conn.close()
+
+    logger.info("sqlite-vec startup check passed")
+
+
 def get_connection() -> sqlite3.Connection:
     """データベース接続を取得する"""
     db_path = get_db_path()
