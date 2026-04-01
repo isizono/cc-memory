@@ -1219,11 +1219,15 @@ def search(
                 }
             }
 
-    # 空文字→None正規化（entity_type, domain）
+    # 空文字→None正規化（entity_type, domain, date_after, date_before）
     if entity_type is not None and entity_type == "":
         entity_type = None
     if domain is not None and domain == "":
         domain = None
+    if date_after is not None and date_after == "":
+        date_after = None
+    if date_before is not None and date_before == "":
+        date_before = None
 
     if entity_type is not None and entity_type not in SEARCHABLE_TYPES:
         return {
@@ -1233,22 +1237,27 @@ def search(
             }
         }
 
-    # 日付バリデーション
+    # 日付バリデーション（形式チェック + 値の妥当性チェック）
     date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$")
-    if date_after is not None and not date_pattern.match(date_after):
-        return {
-            "error": {
-                "code": "INVALID_PARAMETER",
-                "message": f"date_after must be ISO date format (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS), got '{date_after}'",
-            }
-        }
-    if date_before is not None and not date_pattern.match(date_before):
-        return {
-            "error": {
-                "code": "INVALID_PARAMETER",
-                "message": f"date_before must be ISO date format (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS), got '{date_before}'",
-            }
-        }
+    for param_name, param_value in [("date_after", date_after), ("date_before", date_before)]:
+        if param_value is not None:
+            if not date_pattern.match(param_value):
+                return {
+                    "error": {
+                        "code": "INVALID_PARAMETER",
+                        "message": f"{param_name} must be ISO date format (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS), got '{param_value}'",
+                    }
+                }
+            try:
+                fmt = "%Y-%m-%d %H:%M:%S" if len(param_value) > 10 else "%Y-%m-%d"
+                datetime.strptime(param_value, fmt)
+            except ValueError:
+                return {
+                    "error": {
+                        "code": "INVALID_PARAMETER",
+                        "message": f"{param_name} contains invalid date value: '{param_value}'",
+                    }
+                }
 
     # date_before: 日付のみ指定時に" 23:59:59"を付与して当日を含む
     if date_before is not None and len(date_before) == 10:

@@ -312,3 +312,42 @@ def test_empty_domain_treated_as_none(temp_db):
     result = search_service.search(keyword="空ドメインテスト対象", domain="")
     assert "error" not in result
     assert len(result["results"]) >= 1
+
+
+# ========================================
+# 11. 不正な日付値（形式は正しいが存在しない日付）
+# ========================================
+
+
+def test_invalid_date_value_returns_error(temp_db):
+    """形式は正しいが存在しない日付（13月や32日）を指定するとINVALID_PARAMETERエラーを返す"""
+    result = search_service.search(keyword="テスト検索", date_after="2023-13-45")
+    assert "error" in result
+    assert result["error"]["code"] == "INVALID_PARAMETER"
+
+    result2 = search_service.search(keyword="テスト検索", date_before="2023-01-01 25:99:99")
+    assert "error" in result2
+    assert result2["error"]["code"] == "INVALID_PARAMETER"
+
+
+# ========================================
+# 12. date_after/date_before空文字
+# ========================================
+
+
+def test_empty_date_after_treated_as_none(temp_db):
+    """date_after=""を指定した場合、None扱いとなりフィルタされずエラーにもならない"""
+    add_topic(title="空日付テスト対象トピック", description="空日付テスト", tags=DEFAULT_TAGS)
+
+    result = search_service.search(keyword="空日付テスト対象", date_after="")
+    assert "error" not in result
+    assert len(result["results"]) >= 1
+
+
+def test_empty_date_before_treated_as_none(temp_db):
+    """date_before=""を指定した場合、None扱いとなりフィルタされずエラーにもならない"""
+    add_topic(title="空日付前テスト対象トピック", description="空日付前テスト", tags=DEFAULT_TAGS)
+
+    result = search_service.search(keyword="空日付前テスト対象", date_before="")
+    assert "error" not in result
+    assert len(result["results"]) >= 1

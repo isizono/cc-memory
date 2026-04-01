@@ -16,7 +16,7 @@
 -- Step 1: カラム追加
 -- ================================================
 
-ALTER TABLE search_index ADD COLUMN created_at TEXT;
+ALTER TABLE search_index ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
 
 -- ================================================
 -- Step 2: バックフィル（5種エンティティ）
