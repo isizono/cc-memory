@@ -1,5 +1,6 @@
 """FTS5 + ベクトル ハイブリッド検索サービス"""
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -555,6 +556,8 @@ def _fts_search(
     limit: int,
     keyword_mode: str = "and",
     original_keyword_count: Optional[int] = None,
+    date_after: Optional[str] = None,
+    date_before: Optional[str] = None,
 ) -> list[dict]:
     """FTS5検索。結果はBM25ランク順のリスト。
 
@@ -562,10 +565,13 @@ def _fts_search(
         keywords: 検索キーワードリスト（QE拡張分を含む場合がある）
         tag_ids: タグフィルタ用のtag_idリスト
         entity_type: 検索対象の絞り込み
+        entity_type: 検索対象の絞り込み
         limit: 取得件数上限
         keyword_mode: キーワード結合モード（"and" / "or"）
         original_keyword_count: 元のキーワード数。指定時、先頭N個をAND結合し
             残りをOR追加する（Query Expansion用）。未指定時は従来通り。
+        date_after: 日付フィルタ（以降）
+        date_before: 日付フィルタ（以前）
     """
     # OR時: 3文字以上のキーワードだけでFTS5クエリを組む（2文字はフィルタ除外）
     if keyword_mode == "or":
@@ -587,6 +593,17 @@ def _fts_search(
             escaped_parts = [_escape_fts5_query(kw) for kw in keywords]
             escaped_keyword = " AND ".join(escaped_parts)
 
+    # 日付フィルタの動的WHERE句構築
+    date_clauses = []
+    date_params: list = []
+    if date_after:
+        date_clauses.append("AND si.created_at >= ?")
+        date_params.append(date_after)
+    if date_before:
+        date_clauses.append("AND si.created_at <= ?")
+        date_params.append(date_before)
+    date_sql = "\n          ".join(date_clauses)
+
     if tag_ids:
         cte_sql, cte_params = _build_tag_filter_cte(tag_ids)
         query = f"""
@@ -600,12 +617,13 @@ def _fts_search(
         JOIN tag_filtered tf ON tf.source_type = si.source_type AND tf.source_id = si.source_id
         WHERE search_index_fts MATCH ?
           AND (? IS NULL OR si.source_type = ?)
+          {date_sql}
         ORDER BY bm25(search_index_fts, 5.0, 1.0)
         LIMIT ?
         """
-        params = (*cte_params, escaped_keyword, entity_type, entity_type, limit)
+        params = (*cte_params, escaped_keyword, entity_type, entity_type, *date_params, limit)
     else:
-        query = """
+        query = f"""
         SELECT
           si.source_type AS type,
           si.source_id AS id,
@@ -614,10 +632,11 @@ def _fts_search(
         JOIN search_index si ON si.id = search_index_fts.rowid
         WHERE search_index_fts MATCH ?
           AND (? IS NULL OR si.source_type = ?)
+          {date_sql}
         ORDER BY bm25(search_index_fts, 5.0, 1.0)
         LIMIT ?
         """
-        params = (escaped_keyword, entity_type, entity_type, limit)
+        params = (escaped_keyword, entity_type, entity_type, *date_params, limit)
 
     rows = execute_query(query, params)
     results = []
@@ -637,9 +656,22 @@ def _vector_search(
     entity_type: Optional[str],
     limit: int,
     keyword_mode: str = "and",
+    date_after: Optional[str] = None,
+    date_before: Optional[str] = None,
 ) -> Optional[list[dict]]:
     """ベクトル検索。ベクトル検索無効時はNoneを返す。"""
     try:
+        # 日付フィルタの動的WHERE句構築
+        date_clauses = []
+        date_params_list: list = []
+        if date_after:
+            date_clauses.append("AND created_at >= ?")
+            date_params_list.append(date_after)
+        if date_before:
+            date_clauses.append("AND created_at <= ?")
+            date_params_list.append(date_before)
+        date_sql = "\n                      ".join(date_clauses)
+
         if keyword_mode == "or" and len(keywords) > 1:
             # OR時: 各キーワードで個別にベクトル検索し、結果をマージ
             merged: dict[tuple, dict] = {}  # key: (type, id)
@@ -677,16 +709,18 @@ def _vector_search(
                         WHERE tf.source_type = search_index.source_type
                           AND tf.source_id = search_index.source_id
                       )
+                      {date_sql}
                     """
-                    params = (*cte_params, *rowids, entity_type, entity_type)
+                    params = (*cte_params, *rowids, entity_type, entity_type, *date_params_list)
                 else:
                     query = f"""
                     SELECT id, source_type, source_id, title
                     FROM search_index
                     WHERE id IN ({rowid_placeholders})
                       AND (? IS NULL OR source_type = ?)
+                      {date_sql}
                     """
-                    params = (*rowids, entity_type, entity_type)
+                    params = (*rowids, entity_type, entity_type, *date_params_list)
 
                 filter_rows = execute_query(query, params)
                 for row in filter_rows:
@@ -746,16 +780,18 @@ def _vector_search(
                     WHERE tf.source_type = search_index.source_type
                       AND tf.source_id = search_index.source_id
                   )
+                  {date_sql}
                 """
-                params = (*cte_params, *rowids, entity_type, entity_type)
+                params = (*cte_params, *rowids, entity_type, entity_type, *date_params_list)
             else:
                 query = f"""
                 SELECT id, source_type, source_id, title
                 FROM search_index
                 WHERE id IN ({rowid_placeholders})
                   AND (? IS NULL OR source_type = ?)
+                  {date_sql}
                 """
-                params = (*rowids, entity_type, entity_type)
+                params = (*rowids, entity_type, entity_type, *date_params_list)
 
             filter_rows = execute_query(query, params)
 
@@ -854,6 +890,8 @@ def _tag_like_search(
     entity_type: Optional[str],
     limit: int,
     keyword_mode: str = "and",
+    date_after: Optional[str] = None,
+    date_before: Optional[str] = None,
 ) -> list[dict]:
     """タグ名のLIKE検索。キーワードにマッチするタグを持つエンティティを返す。
 
@@ -909,12 +947,24 @@ def _tag_like_search(
     # マッチしたタグを持つエンティティをsearch_index経由で取得
     tag_placeholders = ",".join("?" * len(matched_tag_ids))
 
+    # 日付フィルタの動的WHERE句構築
+    date_clauses = []
+    date_params_tl: list = []
+    if date_after:
+        date_clauses.append("AND si.created_at >= ?")
+        date_params_tl.append(date_after)
+    if date_before:
+        date_clauses.append("AND si.created_at <= ?")
+        date_params_tl.append(date_before)
+    date_sql = "\n      ".join(date_clauses)
+
     # 各中間テーブルからエンティティを収集（UNION ALL）
     query = f"""
     SELECT DISTINCT si.source_type AS type, si.source_id AS id, si.title
     FROM search_index si
     WHERE
       (? IS NULL OR si.source_type = ?)
+      {date_sql}
       AND (
         EXISTS (
             SELECT 1 FROM topic_tags tt
@@ -957,8 +1007,9 @@ def _tag_like_search(
     ORDER BY si.id DESC
     LIMIT ?
     """
-    # パラメータ: entity_type × 2 + matched_tag_ids × 7 + limit
+    # パラメータ: entity_type × 2 + date_params + matched_tag_ids × 7 + limit
     query_params = [entity_type, entity_type]
+    query_params.extend(date_params_tl)
     for _ in range(7):
         query_params.extend(matched_tag_ids)
     query_params.append(limit)
@@ -1099,6 +1150,9 @@ def search(
     offset: int = 0,
     keyword_mode: str = "and",
     include_details: bool = False,
+    domain: Optional[str] = None,
+    date_after: Optional[str] = None,
+    date_before: Optional[str] = None,
 ) -> dict:
     """
     キーワードで横断検索する。
@@ -1116,10 +1170,14 @@ def search(
         keyword: 検索キーワード（2文字以上）。配列で複数指定時はAND検索
         tags: タグフィルタ（AND条件。未指定=全件検索）
         entity_type: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
+        entity_type: 検索対象の絞り込み（'topic', 'decision', 'activity', 'log', 'material'。未指定で全種類）
         limit: 取得件数上限（デフォルト10件、最大50件）
         offset: スキップ件数（デフォルト0）。ページネーション用
         keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
         include_details: Trueのとき上位DETAILS_MAX_RESULTS件にdetailsを自動添付する（デフォルトFalse）
+        domain: ドメインフィルタ。内部でtags=["domain:{domain}"]にマージされる
+        date_after: 日付フィルタ（以降）。YYYY-MM-DD or YYYY-MM-DD HH:MM:SS形式
+        date_before: 日付フィルタ（以前）。YYYY-MM-DD or YYYY-MM-DD HH:MM:SS形式
 
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
@@ -1161,6 +1219,16 @@ def search(
                 }
             }
 
+    # 空文字→None正規化（entity_type, domain, date_after, date_before）
+    if entity_type is not None and entity_type == "":
+        entity_type = None
+    if domain is not None and domain == "":
+        domain = None
+    if date_after is not None and date_after == "":
+        date_after = None
+    if date_before is not None and date_before == "":
+        date_before = None
+
     if entity_type is not None and entity_type not in SEARCHABLE_TYPES:
         return {
             "error": {
@@ -1168,6 +1236,40 @@ def search(
                 "message": f"Invalid entity_type: {entity_type}. Must be one of {sorted(SEARCHABLE_TYPES)}"
             }
         }
+
+    # 日付バリデーション（形式チェック + 値の妥当性チェック）
+    date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$")
+    for param_name, param_value in [("date_after", date_after), ("date_before", date_before)]:
+        if param_value is not None:
+            if not date_pattern.match(param_value):
+                return {
+                    "error": {
+                        "code": "INVALID_PARAMETER",
+                        "message": f"{param_name} must be ISO date format (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS), got '{param_value}'",
+                    }
+                }
+            try:
+                fmt = "%Y-%m-%d %H:%M:%S" if len(param_value) > 10 else "%Y-%m-%d"
+                datetime.strptime(param_value, fmt)
+            except ValueError:
+                return {
+                    "error": {
+                        "code": "INVALID_PARAMETER",
+                        "message": f"{param_name} contains invalid date value: '{param_value}'",
+                    }
+                }
+
+    # date_before: 日付のみ指定時に" 23:59:59"を付与して当日を含む
+    if date_before is not None and len(date_before) == 10:
+        date_before = date_before + " 23:59:59"
+
+    # domain → tagsマージ（D#1695: 重複除去）
+    if domain:
+        domain_tag = f"domain:{domain}"
+        if tags is None:
+            tags = [domain_tag]
+        elif domain_tag not in tags:
+            tags.append(domain_tag)
 
     limit = max(1, min(limit, 50))
     offset = max(0, offset)
@@ -1210,22 +1312,22 @@ def search(
         if keyword_mode == "or":
             # OR時: 3文字以上のキーワードが1つでもあればFTSを使う
             if any(len(kw) >= 3 for kw in fts_keywords):
-                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, None)
+                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, None, date_after, date_before)
                 methods_used.append("fts5")
         else:
             # AND時（現行通り）: 全キーワードが3文字以上の場合のみ
             # QE拡張分はOR結合で追加されるため、元のキーワードの文字数チェックを使用
             if min_len >= 3:
-                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, original_kw_count)
+                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, original_kw_count, date_after, date_before)
                 methods_used.append("fts5")
 
         # ベクトル検索（元のキーワードのまま、拡張なし）
-        vec_results = _vector_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode)
+        vec_results = _vector_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode, date_after, date_before)
         if vec_results is not None:
             methods_used.append("vector")
 
         # タグLIKE検索（キーワード長の制限なし）
-        tag_like_results = _tag_like_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode)
+        tag_like_results = _tag_like_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode, date_after, date_before)
         if tag_like_results:
             methods_used.append("tag_like")
 

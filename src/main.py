@@ -329,6 +329,9 @@ def search(
     offset: int = 0,
     keyword_mode: str = "and",
     include_details: bool = False,
+    domain: Optional[str] = None,
+    date_after: Optional[str] = None,
+    date_before: Optional[str] = None,
 ) -> dict:
     """
     キーワードで横断検索する。
@@ -351,6 +354,9 @@ def search(
         offset: スキップ件数（デフォルト0）。ページネーション用
         keyword_mode: キーワード結合モード（"and" または "or"。デフォルト "and"）
         include_details: Trueのとき上位10件にdetailsを自動添付する（デフォルトFalse）
+        domain: ドメインフィルタ。内部でtags=["domain:{domain}"]にマージされる
+        date_after: 日付フィルタ（以降）。YYYY-MM-DD or YYYY-MM-DD HH:MM:SS形式
+        date_before: 日付フィルタ（以前）。YYYY-MM-DD or YYYY-MM-DD HH:MM:SS形式
 
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
@@ -358,7 +364,7 @@ def search(
         tagsはエンティティに紐づくタグ文字列のリスト。
         include_details=Trueの場合、上位10件にdetailsが追加される。
     """
-    result = search_service.search(keyword, tags, entity_type, limit, offset, keyword_mode, include_details)
+    result = search_service.search(keyword, tags, entity_type, limit, offset, keyword_mode, include_details, domain, date_after, date_before)
     if "error" not in result and tags:
         _maybe_inject_tag_notes(result, tags)
     return result
