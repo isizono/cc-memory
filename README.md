@@ -104,7 +104,7 @@ brew install cloudflared
 2. 以下を設定:
    - **Application name**: `cc-memory`（任意）
    - **Homepage URL**: CF Tunnelの公開URL（例: `https://cc-memory.example.com`）
-   - **Authorization callback URL**: `<公開URL>/github/callback`
+   - **Authorization callback URL**: `<公開URL>/auth/callback`
 3. Client IDとClient Secretを控える
 
 ### 3. 環境変数の設定

@@ -47,7 +47,7 @@ class RestrictedGitHubProvider(GitHubProvider):
         access_token = await super().verify_token(token)
         if access_token is None:
             return None
-        login = getattr(access_token, "login", None)
+        login = access_token.claims.get("login")
         if login is None or login.lower() not in self._allowed_users:
             logger.warning("Rejected user: %s (not in allowed_users)", login)
             return None

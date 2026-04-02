@@ -62,7 +62,7 @@ class TestRestrictedGitHubProvider:
     async def test_allows_permitted_user(self):
         """許可リスト内のユーザーはアクセスできる"""
         mock_token = AsyncMock()
-        mock_token.login = "alice"
+        mock_token.claims = {"login": "alice"}
 
         with patch.object(
             GitHubProvider_base(), "verify_token", return_value=mock_token
@@ -71,13 +71,13 @@ class TestRestrictedGitHubProvider:
             provider.verify_token = _wrap_verify(mock_verify, provider)
             result = await provider.verify_token("dummy-token")
             assert result is not None
-            assert result.login == "alice"
+            assert result.claims["login"] == "alice"
 
     @pytest.mark.asyncio
     async def test_rejects_unpermitted_user(self):
         """許可リスト外のユーザーはNoneが返る"""
         mock_token = AsyncMock()
-        mock_token.login = "mallory"
+        mock_token.claims = {"login": "mallory"}
 
         with patch.object(
             GitHubProvider_base(), "verify_token", return_value=mock_token
@@ -91,7 +91,7 @@ class TestRestrictedGitHubProvider:
     async def test_case_insensitive_matching(self):
         """ユーザー名の比較は大文字小文字を区別しない"""
         mock_token = AsyncMock()
-        mock_token.login = "Alice"
+        mock_token.claims = {"login": "Alice"}
 
         with patch.object(
             GitHubProvider_base(), "verify_token", return_value=mock_token
@@ -114,8 +114,9 @@ class TestRestrictedGitHubProvider:
 
     @pytest.mark.asyncio
     async def test_returns_none_when_login_missing(self):
-        """loginフィールドがないトークンはNoneを返す"""
-        mock_token = AsyncMock(spec=[])  # loginを持たないオブジェクト
+        """claimsにloginキーがないトークンはNoneを返す"""
+        mock_token = AsyncMock()
+        mock_token.claims = {}
 
         with patch.object(
             GitHubProvider_base(), "verify_token", return_value=mock_token
@@ -156,7 +157,7 @@ def _wrap_verify(mock_verify, provider):
         access_token = await mock_verify(token)
         if access_token is None:
             return None
-        login = getattr(access_token, "login", None)
+        login = access_token.claims.get("login")
         if login is None or login.lower() not in provider._allowed_users:
             return None
         return access_token
