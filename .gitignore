@@ -55,3 +55,6 @@ htmlcov/
 
 # Work files
 work/
+
+# Local instructions
+CLAUDE.local.md
