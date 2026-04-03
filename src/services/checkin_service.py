@@ -111,22 +111,37 @@ def _get_logs_catalog_from_topics(
     if not topic_ids:
         return None, []
     placeholders = ",".join("?" * len(topic_ids))
-    rows = conn.execute(
+    params = tuple(topic_ids)
+
+    # 最新1件: content付き
+    latest_row = conn.execute(
         f"""
         SELECT id, title, content
         FROM discussion_logs
         WHERE topic_id IN ({placeholders}) AND pinned = 0
         ORDER BY id DESC
+        LIMIT 1
         """,
-        tuple(topic_ids),
-    ).fetchall()
+        params,
+    ).fetchone()
 
-    if not rows:
+    if not latest_row:
         return None, []
 
-    latest = rows[0]
-    latest_log = {"id": latest["id"], "title": latest["title"], "content": latest["content"]}
-    catalog = [{"id": row["id"], "title": row["title"]} for row in rows[1:]]
+    latest_log = {"id": latest_row["id"], "title": latest_row["title"], "content": latest_row["content"]}
+
+    # 残り: id + titleのみ
+    catalog_rows = conn.execute(
+        f"""
+        SELECT id, title
+        FROM discussion_logs
+        WHERE topic_id IN ({placeholders}) AND pinned = 0 AND id != ?
+        ORDER BY id DESC
+        """,
+        params + (latest_row["id"],),
+    ).fetchall()
+
+    catalog = [{"id": row["id"], "title": row["title"]} for row in catalog_rows]
     return latest_log, catalog
 
 
