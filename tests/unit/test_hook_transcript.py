@@ -301,3 +301,61 @@ class TestExtractEventsIsMeta:
         skill_events = [e for e in events if e["e"] == "skill"]
         assert len(skill_events) == 1
         assert skill_events[0]["turn"] == 1
+
+
+# --- リモートMCPプレフィックス対応テスト ---
+
+_REMOTE_PREFIX = "mcp__claude_ai_cc-memory__"
+_LOCAL_PREFIX = "mcp__plugin_claude-code-memory_cc-memory__"
+
+
+class TestRemoteMcpPrefix:
+    """リモートMCP経由（mcp__claude_ai_cc-memory__*）でもツール検出できることを検証"""
+
+    def test_has_recent_recording_remote(self):
+        entries = [_make_assistant_entry(tool_calls=[f"{_REMOTE_PREFIX}add_decisions"])]
+        assert has_recent_recording(entries) is True
+
+    def test_has_recent_recording_local(self):
+        entries = [_make_assistant_entry(tool_calls=[f"{_LOCAL_PREFIX}add_decisions"])]
+        assert has_recent_recording(entries) is True
+
+    def test_has_context_retrieval_remote(self):
+        entries = [_make_assistant_entry(tool_calls=[f"{_REMOTE_PREFIX}search"])]
+        assert has_context_retrieval_calls(entries) is True
+
+    def test_extract_events_remote_check_in(self):
+        """リモートプレフィックスのcheck_inがイベントとして抽出される"""
+        entries = [
+            {"type": "user", "message": {"content": "hi"}},
+            _make_assistant_entry(
+                tool_calls=[f"{_REMOTE_PREFIX}check_in"],
+                tool_inputs=[{"activity_id": 609}],
+            ),
+        ]
+        events, _ = extract_events(entries, 0)
+        tool_events = [e for e in events if e["e"] == "tool"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["name"] == "check_in"
+        assert tool_events[0]["activity_id"] == 609
+
+    def test_extract_events_remote_add_logs(self):
+        """リモートプレフィックスのadd_logsがイベントとして抽出される"""
+        entries = [
+            {"type": "user", "message": {"content": "hi"}},
+            _make_assistant_entry(tool_calls=[f"{_REMOTE_PREFIX}add_logs"]),
+        ]
+        events, _ = extract_events(entries, 0)
+        tool_events = [e for e in events if e["e"] == "tool"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["name"] == "add_logs"
+
+    def test_non_cc_memory_tool_ignored(self):
+        """cc-memoryでないツールはイベントに含まれない"""
+        entries = [
+            {"type": "user", "message": {"content": "hi"}},
+            _make_assistant_entry(tool_calls=["mcp__some_other_tool__search"]),
+        ]
+        events, _ = extract_events(entries, 0)
+        tool_events = [e for e in events if e["e"] == "tool"]
+        assert len(tool_events) == 0

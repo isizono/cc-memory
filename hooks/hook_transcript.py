@@ -7,9 +7,22 @@ import json
 import re
 from pathlib import Path
 
-# --- cc-memory MCPツールのプレフィックス ---
+# --- cc-memory MCPツール判定用マーカー ---
+# ローカルプラグイン: mcp__plugin_claude-code-memory_cc-memory__*
+# リモートMCP:       mcp__claude_ai_cc-memory__*
+# 接続経路に依存せず "cc-memory__" の有無で判定する
 
-_CC_MEMORY_PREFIX = "mcp__plugin_claude-code-memory_cc-memory__"
+_CC_MEMORY_MARKER = "cc-memory__"
+
+
+def _is_cc_memory_tool(name: str) -> bool:
+    """ツール名がcc-memoryのツールかどうかを判定する。"""
+    return _CC_MEMORY_MARKER in name
+
+
+def _extract_short_name(name: str) -> str:
+    """ツール名からshort_name（check_in, add_logs等）を取り出す。"""
+    return name.split(_CC_MEMORY_MARKER, 1)[1]
 
 # --- 記録ツール ---
 
@@ -141,8 +154,8 @@ def extract_events(entries: list[dict], current_turn: int) -> tuple[list[dict], 
 
                 if block_type == "tool_use":
                     name = block.get("name", "")
-                    if name.startswith(_CC_MEMORY_PREFIX):
-                        short_name = name[len(_CC_MEMORY_PREFIX):]
+                    if _is_cc_memory_tool(name):
+                        short_name = _extract_short_name(name)
                         event: dict = {
                             "e": "tool",
                             "name": short_name,
@@ -185,34 +198,20 @@ def _extract_user_content_text(entry: dict) -> str:
 # ===================================================================
 
 
-_RECORDING_TOOLS_FULL = [
-    f"{_CC_MEMORY_PREFIX}add_decisions",
-    f"{_CC_MEMORY_PREFIX}add_topic",
-    f"{_CC_MEMORY_PREFIX}add_logs",
-]
+_RECORDING_SHORT_NAMES = {"add_decisions", "add_topic", "add_logs"}
 
-_ADD_DECISION_TOOL = f"{_CC_MEMORY_PREFIX}add_decisions"
+_ADD_DECISION_SHORT = "add_decisions"
 
-_ACTIVITY_CHECKIN_TOOLS_FULL = [
-    f"{_CC_MEMORY_PREFIX}check_in",
-    f"{_CC_MEMORY_PREFIX}add_activity",
-]
+_CHECKIN_SHORT_NAMES = {"check_in", "add_activity"}
 
-_CHECKIN_TOOL = f"{_CC_MEMORY_PREFIX}check_in"
-_ADD_ACTIVITY_TOOL = f"{_CC_MEMORY_PREFIX}add_activity"
-
-_CONTEXT_RETRIEVAL_TOOLS_FULL = [
-    f"{_CC_MEMORY_PREFIX}search",
-    f"{_CC_MEMORY_PREFIX}get_topics",
-    f"{_CC_MEMORY_PREFIX}get_decisions",
-    f"{_CC_MEMORY_PREFIX}get_logs",
-    f"{_CC_MEMORY_PREFIX}get_activities",
-    f"{_CC_MEMORY_PREFIX}get_by_ids",
-]
+_CONTEXT_RETRIEVAL_SHORT_NAMES = {
+    "search", "get_topics", "get_decisions",
+    "get_logs", "get_activities", "get_by_ids",
+}
 
 
-def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
-    """entriesに指定ツールの呼び出しがあるかチェック。"""
+def _has_tool_calls(entries: list[dict], short_names: set[str]) -> bool:
+    """entriesに指定short_nameのcc-memoryツール呼び出しがあるかチェック。"""
     for entry in entries:
         message = entry.get("message", {})
         content = message.get("content", [])
@@ -225,7 +224,8 @@ def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
                 continue
             if block.get("type") != "tool_use":
                 continue
-            if block.get("name", "") in tool_names:
+            name = block.get("name", "")
+            if _is_cc_memory_tool(name) and _extract_short_name(name) in short_names:
                 return True
 
     return False
@@ -233,12 +233,12 @@ def _has_tool_calls(entries: list[dict], tool_names: list[str]) -> bool:
 
 def has_recent_recording(entries: list[dict]) -> bool:
     """entriesにadd_decisions/add_topic/add_logsのツール呼び出しがあるかチェック。"""
-    return _has_tool_calls(entries, _RECORDING_TOOLS_FULL)
+    return _has_tool_calls(entries, _RECORDING_SHORT_NAMES)
 
 
 def has_activity_checkin_calls(entries: list[dict]) -> bool:
     """entriesにcheck_in/add_activityのツール呼び出しがあるかチェック。"""
-    return _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS_FULL)
+    return _has_tool_calls(entries, _CHECKIN_SHORT_NAMES)
 
 
 def extract_checkin_activity_id(entries: list[dict]) -> int | None:
@@ -255,7 +255,8 @@ def extract_checkin_activity_id(entries: list[dict]) -> int | None:
                 continue
             if block.get("type") != "tool_use":
                 continue
-            if block.get("name") == _CHECKIN_TOOL:
+            name = block.get("name", "")
+            if _is_cc_memory_tool(name) and _extract_short_name(name) == "check_in":
                 tool_input = block.get("input", {})
                 aid = tool_input.get("activity_id")
                 if aid is not None:
@@ -301,14 +302,17 @@ def extract_last_activity_id(transcript_path: str) -> int | None:
 
                     if block_type == "tool_use":
                         name = block.get("name", "")
-                        if name == _CHECKIN_TOOL:
+                        if not _is_cc_memory_tool(name):
+                            continue
+                        short = _extract_short_name(name)
+                        if short == "check_in":
                             aid = block.get("input", {}).get("activity_id")
                             if aid is not None:
                                 try:
                                     last_activity_id = int(aid)
                                 except (ValueError, TypeError):
                                     pass
-                        elif name == _ADD_ACTIVITY_TOOL:
+                        elif short == "add_activity":
                             use_id = block.get("id")
                             if use_id:
                                 add_activity_use_ids.add(use_id)
@@ -355,15 +359,15 @@ def _try_parse_activity_id(text: str) -> int | None:
 
 def has_context_retrieval_calls(entries: list[dict]) -> bool:
     """entriesにget系APIの呼び出しがあるかチェック。"""
-    return _has_tool_calls(entries, _CONTEXT_RETRIEVAL_TOOLS_FULL)
+    return _has_tool_calls(entries, _CONTEXT_RETRIEVAL_SHORT_NAMES)
 
 
 def has_decision_without_activity(entries: list[dict]) -> bool:
     """entriesにadd_decisionがあり、かつcheck_in/add_activityがない場合True。"""
-    has_decision = _has_tool_calls(entries, [_ADD_DECISION_TOOL])
+    has_decision = _has_tool_calls(entries, {_ADD_DECISION_SHORT})
     if not has_decision:
         return False
-    has_activity = _has_tool_calls(entries, _ACTIVITY_CHECKIN_TOOLS_FULL)
+    has_activity = _has_tool_calls(entries, _CHECKIN_SHORT_NAMES)
     return not has_activity
 
 
