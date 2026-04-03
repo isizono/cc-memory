@@ -14,7 +14,7 @@ from src.db import init_database, get_connection
 from src.services.search_service import (
     _rrf_merge, _apply_recency_boost, _attach_details, _compute_adaptive_weights,
     find_similar_topics, _expand_query_with_tags,
-    RRF_K, RRF_W_FTS, RRF_W_VEC, RRF_W_TAG, RECENCY_DECAY_RATE,
+    RRF_K, RRF_W_FTS, RRF_W_VEC, RRF_W_TAG, RECENCY_DECAY_RATE, RECENCY_DECAY_FLOOR,
     QE_DISTANCE_THRESHOLD, QE_MAX_EXPANSIONS, QE_EXCLUDE_NAMESPACES,
     ADAPTIVE_RRF_ENABLED, ADAPTIVE_RRF_THRESHOLDS,
     DETAILS_MAX_RESULTS, DETAILS_DESCRIPTION_MAX,
@@ -486,7 +486,7 @@ def test_recency_boost_decay_formula(temp_db):
 
     # created_atを固定日時に設定し、nowも固定して厳密に検証
     created_at = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-    now = datetime(2025, 7, 2, 0, 0, 0, tzinfo=timezone.utc)  # 182日後
+    now = datetime(2025, 4, 1, 0, 0, 0, tzinfo=timezone.utc)  # 90日後
     conn = get_connection()
     conn.execute(
         "UPDATE discussion_topics SET created_at = ? WHERE id = ?",
@@ -502,9 +502,39 @@ def test_recency_boost_decay_formula(temp_db):
 
     _apply_recency_boost(results, now=now)
 
-    # 指数減衰: factor = exp(-182 * 0.0119) ≈ 0.115
-    expected_factor = math.exp(-182 * RECENCY_DECAY_RATE)
+    # 指数減衰: factor = exp(-90 * 0.0119) ≈ 0.343（floorより上）
+    expected_factor = math.exp(-90 * RECENCY_DECAY_RATE)
     assert results[0]["score"] == pytest.approx(base_score * expected_factor)
+
+
+def test_recency_boost_floor(temp_db):
+    """recency boost: 非常に古いアイテムでもFLOOR値を下回らない"""
+    t = add_topic(
+        title="floor検証用",
+        description="テスト用",
+        tags=DEFAULT_TAGS,
+    )
+
+    # 730日前（約2年前）に設定
+    created_at = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2025, 12, 31, 0, 0, 0, tzinfo=timezone.utc)  # 730日後
+    conn = get_connection()
+    conn.execute(
+        "UPDATE discussion_topics SET created_at = ? WHERE id = ?",
+        (created_at.strftime("%Y-%m-%d %H:%M:%S"), t["topic_id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    base_score = 1.0
+    results = [
+        {"type": "topic", "id": t["topic_id"], "title": "floor検証用", "score": base_score},
+    ]
+
+    _apply_recency_boost(results, now=now)
+
+    # exp(-730 * 0.0119) ≈ 0.000165 だが、floorで0.15になる
+    assert results[0]["score"] == pytest.approx(base_score * RECENCY_DECAY_FLOOR)
 
 
 def test_recency_boost_empty_list():

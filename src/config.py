@@ -16,6 +16,8 @@ PENDING_LIMIT: int = int(os.environ.get("CCM_PENDING_LIMIT", "2"))
 # --- Search ---
 # Recency boost の減衰率（指数減衰 e^(-kt)）。30日で約0.70倍、半減期約58日
 RECENCY_DECAY_RATE: float = float(os.environ.get("CCM_RECENCY_DECAY_RATE", "0.0119"))
+# Recency boost の下限。約160日以降はこの値で一定になる
+RECENCY_DECAY_FLOOR: float = float(os.environ.get("CCM_RECENCY_DECAY_FLOOR", "0.15"))
 
 # --- Snapshot ---
 SNAPSHOT_INTERVAL_HOURS: int = int(os.environ.get("CCM_SNAPSHOT_INTERVAL", "12"))

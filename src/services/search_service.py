@@ -67,7 +67,7 @@ assert all(
     for i in range(len(ADAPTIVE_RRF_THRESHOLDS) - 1)
 ), "ADAPTIVE_RRF_THRESHOLDS must be sorted in ascending order of threshold"
 
-from src.config import RECENCY_DECAY_RATE
+from src.config import RECENCY_DECAY_FLOOR, RECENCY_DECAY_RATE
 
 # Query Expansion パラメータ
 QE_DISTANCE_THRESHOLD = 0.3   # コサイン距離。これ未満のタグを拡張候補とする
@@ -1031,7 +1031,7 @@ def _tag_like_search(
 def _apply_recency_boost(results: list[dict], now: datetime | None = None) -> None:
     """RRFスコアにrecency boost（指数減衰）を適用する（in-place）。
 
-    recency_factor = exp(-age_days * RECENCY_DECAY_RATE)
+    recency_factor = max(exp(-age_days * RECENCY_DECAY_RATE), RECENCY_DECAY_FLOOR)
     をスコアに乗算し、スコア降順で再ソートする。
     """
     if not results:
@@ -1061,7 +1061,7 @@ def _apply_recency_boost(results: list[dict], now: datetime | None = None) -> No
             if created_str:
                 created = datetime.fromisoformat(created_str).replace(tzinfo=timezone.utc)
                 age_days = max(0, (now - created).days)
-                recency_factor = math.exp(-age_days * RECENCY_DECAY_RATE)
+                recency_factor = max(math.exp(-age_days * RECENCY_DECAY_RATE), RECENCY_DECAY_FLOOR)
                 item["score"] *= recency_factor
 
     # スコア降順で再ソート
