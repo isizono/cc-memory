@@ -29,12 +29,23 @@ class ServerDisconnected(Exception):
     pass
 
 
-# サーバー接続設定（HTTP_HOST, HTTP_PORTはmain.pyと共有）
-from src.http_config import HTTP_HOST, HTTP_PORT
+# サーバー接続設定
+# CC_MEMORY_URL が設定されていればそのURLを使い、未設定ならローカルHTTPサーバーに接続する。
+# リモートURL指定時はサーバー自動起動・セッション管理をスキップする。
+_REMOTE_URL = os.environ.get("CC_MEMORY_URL")
 
-MCP_ENDPOINT = f"http://{HTTP_HOST}:{HTTP_PORT}/mcp"
-SESSION_REGISTER_URL = f"http://{HTTP_HOST}:{HTTP_PORT}/session/register"
-SESSION_UNREGISTER_URL = f"http://{HTTP_HOST}:{HTTP_PORT}/session/unregister"
+if _REMOTE_URL:
+    _base = _REMOTE_URL.rstrip("/")
+    MCP_ENDPOINT = f"{_base}/mcp"
+    _IS_LOCAL = False
+else:
+    from src.http_config import HTTP_HOST, HTTP_PORT
+    _base = f"http://{HTTP_HOST}:{HTTP_PORT}"
+    MCP_ENDPOINT = f"{_base}/mcp"
+    _IS_LOCAL = True
+
+SESSION_REGISTER_URL = f"{_base}/session/register"
+SESSION_UNREGISTER_URL = f"{_base}/session/unregister"
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 
@@ -279,18 +290,21 @@ def main() -> None:
         stream=sys.stderr,
     )
 
-    # クリーンアップ登録（ループの外で1回だけ）
-    atexit.register(_cleanup)
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # atexitが発火する
+    if _IS_LOCAL:
+        # ローカル接続: セッション管理あり
+        atexit.register(_cleanup)
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # atexitが発火する
+    else:
+        logger.info("Remote mode: connecting to %s", MCP_ENDPOINT)
 
     for attempt in range(MAX_RETRIES + 1):
-        # 1. HTTPサーバーの起動確認
-        if not _ensure_server_running():
+        # 1. HTTPサーバーの起動確認（ローカルのみ）
+        if _IS_LOCAL and not _ensure_server_running():
             logger.error("Failed to ensure HTTP server is running")
             sys.exit(1)
 
-        # 2. セッション登録
-        if not _register_session():
+        # 2. セッション登録（ローカルのみ）
+        if _IS_LOCAL and not _register_session():
             logger.error("Failed to register session")
             sys.exit(1)
 
@@ -313,7 +327,8 @@ def main() -> None:
             )
             time.sleep(backoff)
 
-    _cleanup()
+    if _IS_LOCAL:
+        _cleanup()
 
 
 if __name__ == "__main__":
