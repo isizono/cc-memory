@@ -703,7 +703,7 @@ def check_in(
         activity_id: アクティビティID
 
     Returns:
-        check-in結果（coverage, activity, related_topics, related_activities, tag_notes, materials, recent_decisions, logs, catalog, summary）
+        check-in結果（coverage, activity, related_topics, related_activities, pinned, tag_notes, materials, recent_decisions, latest_log, logs, catalog, summary）
     """
     return _check_in(activity_id)
 

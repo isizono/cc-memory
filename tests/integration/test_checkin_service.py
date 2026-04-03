@@ -430,8 +430,8 @@ class TestCheckInCoverage:
         assert "error" not in result
         assert result["coverage"]["materials"] == "2/2"
 
-    def test_coverage_logs_always_zero_numerator(self, temp_db):
-        """logsの分子は常に0（本文を含めないため）"""
+    def test_coverage_logs_includes_latest(self, temp_db):
+        """logsの分子に最新ログ1件が加算される"""
         topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
         for i in range(3):
             add_log(topic_id=topic["topic_id"], title=f"ログ{i}", content=f"内容{i}")
@@ -441,7 +441,7 @@ class TestCheckInCoverage:
         result = check_in(a["activity_id"])
 
         assert "error" not in result
-        assert result["coverage"]["logs"] == "0/3"
+        assert result["coverage"]["logs"] == "1/3"
 
     def test_coverage_zero_related_topics(self, activity_id):
         """関連topic 0件の場合、coverage "0/0"が返る（Edge case）"""
@@ -464,14 +464,15 @@ class TestCheckInLogsCatalog:
         assert "logs" in result
 
     def test_logs_empty_without_relations(self, activity_id):
-        """リレーションなしの場合、logsは空リスト"""
+        """リレーションなしの場合、latest_logはNone、logsは空リスト"""
         result = check_in(activity_id)
 
         assert "error" not in result
+        assert result["latest_log"] is None
         assert result["logs"] == []
 
-    def test_logs_catalog_id_and_title_only(self, temp_db):
-        """logsカタログはid + titleのみ（contentなし）"""
+    def test_latest_log_has_content(self, temp_db):
+        """最新ログ1件がcontent付きでlatest_logに返る"""
         topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
         add_log(topic_id=topic["topic_id"], title="初回議論", content="詳細な内容")
         a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
@@ -480,14 +481,30 @@ class TestCheckInLogsCatalog:
         result = check_in(a["activity_id"])
 
         assert "error" not in result
+        assert result["latest_log"] is not None
+        assert result["latest_log"]["title"] == "初回議論"
+        assert result["latest_log"]["content"] == "詳細な内容"
+        assert result["logs"] == []
+
+    def test_logs_catalog_excludes_latest(self, temp_db):
+        """最新1件以外のlogsはid+titleのカタログとして返る"""
+        topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
+        add_log(topic_id=topic["topic_id"], title="古いログ", content="古い内容")
+        add_log(topic_id=topic["topic_id"], title="新しいログ", content="新しい内容")
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [topic["topic_id"]]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        assert result["latest_log"]["title"] == "新しいログ"
+        assert result["latest_log"]["content"] == "新しい内容"
         assert len(result["logs"]) == 1
-        assert "id" in result["logs"][0]
-        assert "title" in result["logs"][0]
+        assert result["logs"][0]["title"] == "古いログ"
         assert "content" not in result["logs"][0]
-        assert result["logs"][0]["title"] == "初回議論"
 
     def test_logs_catalog_multiple_topics(self, temp_db):
-        """複数topicのlogsがカタログに集約される"""
+        """複数topicのlogsが集約される（最新1件がlatest_log、残りがカタログ）"""
         t1 = add_topic(title="トピック1", description="Desc", tags=DEFAULT_TAGS)
         t2 = add_topic(title="トピック2", description="Desc", tags=DEFAULT_TAGS)
         add_log(topic_id=t1["topic_id"], title="ログA", content="内容A")
@@ -498,10 +515,11 @@ class TestCheckInLogsCatalog:
         result = check_in(a["activity_id"])
 
         assert "error" not in result
-        assert len(result["logs"]) == 2
-        titles = {l["title"] for l in result["logs"]}
-        assert "ログA" in titles
-        assert "ログB" in titles
+        assert result["latest_log"] is not None
+        assert len(result["logs"]) == 1
+        all_titles = {result["latest_log"]["title"]} | {l["title"] for l in result["logs"]}
+        assert "ログA" in all_titles
+        assert "ログB" in all_titles
 
 
 class TestCheckInDependencies:
@@ -677,7 +695,7 @@ class TestCheckInPinned:
         assert result["pinned"]["logs"][0]["content"] == "## 経緯\n重要な方向転換"
 
     def test_pinned_log_excluded_from_logs_catalog(self, temp_db):
-        """pinされたlogはlogsカタログから除外される"""
+        """pinされたlogはlogsカタログとlatest_logから除外される"""
         topic = add_topic(title="トピック", description="Desc", tags=DEFAULT_TAGS)
         log1 = add_log(topic_id=topic["topic_id"], title="pinログ", content="内容1")
         add_log(topic_id=topic["topic_id"], title="通常ログ", content="内容2")
@@ -688,9 +706,9 @@ class TestCheckInPinned:
         result = check_in(a["activity_id"])
 
         assert "error" not in result
-        # logsカタログにはpinされていないものだけ
-        assert len(result["logs"]) == 1
-        assert result["logs"][0]["title"] == "通常ログ"
+        # 非pinの1件がlatest_logに入り、logsカタログは空
+        assert result["latest_log"]["title"] == "通常ログ"
+        assert result["logs"] == []
 
     def test_pinned_material_in_pinned_field(self, temp_db):
         """pinされたmaterialがpinned.materialsにcontent付きで返る"""
@@ -751,8 +769,8 @@ class TestCheckInPinned:
         result = check_in(a["activity_id"])
 
         assert "error" not in result
-        # pinned 1件 / 全体 2件（pinned=contentあり=分子に加算）
-        assert result["coverage"]["logs"] == "1/2"
+        # pinned 1件 + latest_log 1件 / 全体 2件
+        assert result["coverage"]["logs"] == "2/2"
 
     def test_coverage_includes_pinned_materials(self, temp_db):
         """coverageのmaterials分子にpinned件数が加算される"""

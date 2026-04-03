@@ -97,22 +97,52 @@ def _count_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int])
     return row[0] if row else 0
 
 
-def _get_logs_catalog_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -> list[dict]:
-    """複数トピックの非pinnedのlogsカタログ（id + titleのみ）を横断取得し、新しい順にフラット化する。"""
+def _get_logs_catalog_from_topics(
+    conn: sqlite3.Connection, topic_ids: list[int]
+) -> tuple[dict | None, list[dict]]:
+    """複数トピックの非pinnedのlogsを横断取得し、新しい順にフラット化する。
+
+    最新1件はcontent付き、残りはid + titleのカタログとして返す。
+
+    Returns:
+        (latest_log, catalog): latest_logは最新1件(content付き)またはNone、
+        catalogは残りのid+titleリスト
+    """
     if not topic_ids:
-        return []
+        return None, []
     placeholders = ",".join("?" * len(topic_ids))
-    rows = conn.execute(
+    params = tuple(topic_ids)
+
+    # 最新1件: content付き
+    latest_row = conn.execute(
         f"""
-        SELECT id, title
+        SELECT id, title, content
         FROM discussion_logs
         WHERE topic_id IN ({placeholders}) AND pinned = 0
         ORDER BY id DESC
+        LIMIT 1
         """,
-        tuple(topic_ids),
+        params,
+    ).fetchone()
+
+    if not latest_row:
+        return None, []
+
+    latest_log = {"id": latest_row["id"], "title": latest_row["title"], "content": latest_row["content"]}
+
+    # 残り: id + titleのみ
+    catalog_rows = conn.execute(
+        f"""
+        SELECT id, title
+        FROM discussion_logs
+        WHERE topic_id IN ({placeholders}) AND pinned = 0 AND id != ?
+        ORDER BY id DESC
+        """,
+        params + (latest_row["id"],),
     ).fetchall()
 
-    return [{"id": row["id"], "title": row["title"]} for row in rows]
+    catalog = [{"id": row["id"], "title": row["title"]} for row in catalog_rows]
+    return latest_log, catalog
 
 
 def _get_pinned_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -> list[dict]:
@@ -270,22 +300,23 @@ def check_in(activity_id: int) -> dict:
         # 6. recent_decisions取得（関連topic横断、フラット15件、pinnedを除外）
         recent_decisions = _get_decisions_from_topics(conn, direct["topic"])
 
-        # 7. logsカタログ取得（id + titleのみ、関連topic横断、pinnedを除外）
-        logs_catalog = _get_logs_catalog_from_topics(conn, direct["topic"])
+        # 7. logs取得（最新1件はcontent付き、残りはカタログ、pinnedを除外）
+        latest_log, logs_catalog = _get_logs_catalog_from_topics(conn, direct["topic"])
 
-        # 8. coverage算出（pinned件数を分子に加算）
+        # 8. coverage算出（pinned件数・最新ログを分子に加算）
         total_decisions = _count_decisions_from_topics(conn, direct["topic"])
         total_materials_row = conn.execute(
             "SELECT COUNT(*) FROM activity_material_relations WHERE activity_id = ?",
             (activity_id,),
         ).fetchone()
         total_materials = total_materials_row[0] if total_materials_row else 0
-        total_logs = len(logs_catalog) + len(pinned_logs)
+        total_logs = (1 if latest_log else 0) + len(logs_catalog) + len(pinned_logs)
+        loaded_logs = len(pinned_logs) + (1 if latest_log else 0)
 
         coverage = {
             "decisions": f"{len(pinned_decisions) + len(recent_decisions)}/{total_decisions}",
             "materials": f"{len(pinned_materials) + len(materials)}/{total_materials}",
-            "logs": f"{len(pinned_logs)}/{total_logs}",
+            "logs": f"{loaded_logs}/{total_logs}",
         }
 
         # 9. 2次カタログ取得（depth 1-2）
@@ -341,6 +372,7 @@ def check_in(activity_id: int) -> dict:
         result["tag_notes"] = tag_notes
         result["materials"] = materials
         result["recent_decisions"] = recent_decisions
+        result["latest_log"] = latest_log
         result["logs"] = logs_catalog
         if catalog:
             result["catalog"] = catalog
