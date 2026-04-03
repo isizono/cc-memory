@@ -3,6 +3,7 @@
 _rrf_merge単体テスト + _apply_recency_boost単体テスト + タグ対応の統合テスト。
 """
 import hashlib
+import math
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -501,8 +502,8 @@ def test_recency_boost_decay_formula(temp_db):
 
     _apply_recency_boost(results, now=now)
 
-    # 182日 × 0.0014 = 0.2548, factor = 1/(1+0.2548) ≈ 0.797
-    expected_factor = 1.0 / (1.0 + 182 * RECENCY_DECAY_RATE)
+    # 指数減衰: factor = exp(-182 * 0.0119) ≈ 0.115
+    expected_factor = math.exp(-182 * RECENCY_DECAY_RATE)
     assert results[0]["score"] == pytest.approx(base_score * expected_factor)
 
 
@@ -533,8 +534,8 @@ def test_recency_boost_reorders_by_score(temp_db):
 
     _apply_recency_boost(results)
 
-    # 730日前: factor = 1/(1+730*0.0014) = 1/2.022 ≈ 0.495
-    # t1: 0.012 * 0.495 ≈ 0.00594
+    # 730日前: factor = exp(-730*0.0119) ≈ 0.000165
+    # t1: 0.012 * 0.000165 ≈ 0.000002
     # t2 (今日): 0.010 * ~1.0 = 0.010
     # t2が上位に来るはず
     assert results[0]["id"] == t2["topic_id"]
