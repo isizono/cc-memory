@@ -1,5 +1,5 @@
 ---
-name: activity-finish (af)
+name: activity-finish
 description: 【必須】アクティビティを完了にする。「/af」「/activity-finish」「アクティビティ終わり」「この作業完了」「クローズして」など、現在のアクティビティを終了・完了させる意図で発動する。このスキルを経由せずにupdate_activity(status="completed")を直接呼んではいけない。
 ---
 

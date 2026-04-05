@@ -1,5 +1,5 @@
 ---
-name: activity-start (as)
+name: activity-start
 description: 【必須】新しいアクティビティを開始する。「/as」「/activity-start」「新しい作業始める」「アクティビティ作って」「これやる」など、新規アクティビティの作成・開始の意図で発動する。このスキルを経由せずにadd_activityを直接呼んではいけない。
 ---
 
