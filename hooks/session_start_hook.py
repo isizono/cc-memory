@@ -15,6 +15,7 @@ _project_root = Path(__file__).resolve().parents[1]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+from src import config
 from src.db import get_connection, get_db_path
 from src.services.activity_service import (
     get_active_domains_with_conn,
@@ -190,6 +191,13 @@ def _build_habits_section(conn) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _build_sync_policy_section(conn) -> str:
+    """sync_policyが設定されていれば注入する。未設定時はコンテキスト消費ゼロ。"""
+    if not config.SYNC_POLICY:
+        return ""
+    return f"# sync_policy\n{config.SYNC_POLICY}\n"
+
+
 def _build_snapshot_section(conn) -> str:
     """スナップショット取得＋ヘルスチェック。異常検知時のみ警告を返す。
 
@@ -253,6 +261,7 @@ def _build_session_context() -> str:
             _build_snapshot_section,
             _build_activities_section,
             _build_habits_section,
+            _build_sync_policy_section,
         ]
         for builder in builders:
             try:

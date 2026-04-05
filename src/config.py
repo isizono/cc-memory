@@ -28,3 +28,4 @@ SNAPSHOT_ANOMALY_THRESHOLD: int = int(os.environ.get("CCM_SNAPSHOT_ANOMALY_THRES
 SYNC_DISABLE_RETROSPECTIVE: bool = os.environ.get(
     "CCM_SYNC_DISABLE_RETROSPECTIVE", "false"
 ).lower() in ("true", "1")
+SYNC_POLICY: str | None = os.environ.get("CCM_SYNC_POLICY") or None
