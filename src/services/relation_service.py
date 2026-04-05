@@ -9,7 +9,7 @@ from src.services.tag_service import (
 
 logger = logging.getLogger(__name__)
 
-VALID_ENTITY_TYPES = {"topic", "activity", "material"}
+VALID_ENTITY_TYPES = {"topic", "activity", "material", "decision", "log"}
 VALID_RELATION_TYPES = {"related", "depends_on"}
 
 
@@ -63,73 +63,25 @@ def _validate_targets(source_type: str, targets: list[dict]) -> dict | None:
     return None
 
 
-def _get_insert_params(source_type: str, source_id: int, target_type: str, target_id: int):
-    """source/targetの組み合わせから、適切なテーブルとINSERTパラメータを返す。
+def _normalize_pair(source_type: str, source_id: int, target_type: str, target_id: int):
+    """source/targetペアを正規化する（source_type < target_type、同一typeならsource_id < target_id）。
 
     Returns:
-        (table_name, columns, values) or None（自己参照の場合）
+        (source_type, source_id, target_type, target_id) or None（自己参照の場合）
     """
-    # 自己参照チェック
     if source_type == target_type and source_id == target_id:
         return None
 
-    if source_type == "topic" and target_type == "topic":
-        # 正規化: id_1 < id_2
-        id_1, id_2 = min(source_id, target_id), max(source_id, target_id)
-        return ("topic_relations", "(topic_id_1, topic_id_2)", (id_1, id_2))
-    elif source_type == "topic" and target_type == "activity":
-        return ("topic_activity_relations", "(topic_id, activity_id)", (source_id, target_id))
-    elif source_type == "activity" and target_type == "topic":
-        return ("topic_activity_relations", "(topic_id, activity_id)", (target_id, source_id))
-    elif source_type == "activity" and target_type == "activity":
-        # 正規化: id_1 < id_2
-        id_1, id_2 = min(source_id, target_id), max(source_id, target_id)
-        return ("activity_relations", "(activity_id_1, activity_id_2)", (id_1, id_2))
-    elif source_type == "topic" and target_type == "material":
-        return ("topic_material_relations", "(topic_id, material_id)", (source_id, target_id))
-    elif source_type == "material" and target_type == "topic":
-        return ("topic_material_relations", "(topic_id, material_id)", (target_id, source_id))
-    elif source_type == "activity" and target_type == "material":
-        return ("activity_material_relations", "(activity_id, material_id)", (source_id, target_id))
-    elif source_type == "material" and target_type == "activity":
-        return ("activity_material_relations", "(activity_id, material_id)", (target_id, source_id))
+    if source_type < target_type:
+        return (source_type, source_id, target_type, target_id)
+    elif source_type > target_type:
+        return (target_type, target_id, source_type, source_id)
     else:
-        raise ValueError(f"Unexpected type combination: {source_type}/{target_type}")
-
-
-def _get_delete_params(source_type: str, source_id: int, target_type: str, target_id: int):
-    """source/targetの組み合わせから、適切なテーブルとDELETE条件を返す。
-
-    Returns:
-        (table_name, where_clause, values) or None（自己参照の場合）
-
-    Raises:
-        ValueError: 不正なtype組み合わせ（バリデーション済みなら到達しない）
-    """
-    # 自己参照チェック（_get_insert_paramsと対称）
-    if source_type == target_type and source_id == target_id:
-        return None
-
-    if source_type == "topic" and target_type == "topic":
-        id_1, id_2 = min(source_id, target_id), max(source_id, target_id)
-        return ("topic_relations", "topic_id_1 = ? AND topic_id_2 = ?", (id_1, id_2))
-    elif source_type == "topic" and target_type == "activity":
-        return ("topic_activity_relations", "topic_id = ? AND activity_id = ?", (source_id, target_id))
-    elif source_type == "activity" and target_type == "topic":
-        return ("topic_activity_relations", "topic_id = ? AND activity_id = ?", (target_id, source_id))
-    elif source_type == "activity" and target_type == "activity":
-        id_1, id_2 = min(source_id, target_id), max(source_id, target_id)
-        return ("activity_relations", "activity_id_1 = ? AND activity_id_2 = ?", (id_1, id_2))
-    elif source_type == "topic" and target_type == "material":
-        return ("topic_material_relations", "topic_id = ? AND material_id = ?", (source_id, target_id))
-    elif source_type == "material" and target_type == "topic":
-        return ("topic_material_relations", "topic_id = ? AND material_id = ?", (target_id, source_id))
-    elif source_type == "activity" and target_type == "material":
-        return ("activity_material_relations", "activity_id = ? AND material_id = ?", (source_id, target_id))
-    elif source_type == "material" and target_type == "activity":
-        return ("activity_material_relations", "activity_id = ? AND material_id = ?", (target_id, source_id))
-    else:
-        raise ValueError(f"Unexpected type combination: {source_type}/{target_type}")
+        # 同一type: id順で正規化
+        if source_id < target_id:
+            return (source_type, source_id, target_type, target_id)
+        else:
+            return (source_type, target_id, target_type, source_id)
 
 
 def _has_dependency_path(conn: sqlite3.Connection, from_id: int, to_id: int) -> bool:
@@ -201,15 +153,14 @@ def _add_relation_with_conn(conn: sqlite3.Connection, source_type: str, source_i
     for target in targets:
         target_type = target["type"]
         for target_id in target["ids"]:
-            params = _get_insert_params(source_type, source_id, target_type, target_id)
-            if params is None:
+            normalized = _normalize_pair(source_type, source_id, target_type, target_id)
+            if normalized is None:
                 # 自己参照はスキップ
                 continue
-            table, columns, values = params
-            placeholders = ", ".join("?" for _ in values)
+            n_stype, n_sid, n_ttype, n_tid = normalized
             conn.execute(
-                f"INSERT OR IGNORE INTO {table} {columns} VALUES ({placeholders})",
-                values,
+                "INSERT OR IGNORE INTO relations (source_type, source_id, target_type, target_id) VALUES (?, ?, ?, ?)",
+                (n_stype, n_sid, n_ttype, n_tid),
             )
             # INSERT OR IGNOREの場合、重複時はchanges()=0
             if conn.execute("SELECT changes()").fetchone()[0] > 0:
@@ -247,13 +198,13 @@ def _remove_relation_with_conn(conn: sqlite3.Connection, source_type: str, sourc
     for target in targets:
         target_type = target["type"]
         for target_id in target["ids"]:
-            params = _get_delete_params(source_type, source_id, target_type, target_id)
-            if params is None:
+            normalized = _normalize_pair(source_type, source_id, target_type, target_id)
+            if normalized is None:
                 continue
-            table, where_clause, values = params
+            n_stype, n_sid, n_ttype, n_tid = normalized
             conn.execute(
-                f"DELETE FROM {table} WHERE {where_clause}",
-                values,
+                "DELETE FROM relations WHERE source_type = ? AND source_id = ? AND target_type = ? AND target_id = ?",
+                (n_stype, n_sid, n_ttype, n_tid),
             )
             removed += conn.execute("SELECT changes()").fetchone()[0]
     return removed

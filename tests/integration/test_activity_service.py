@@ -149,12 +149,12 @@ class TestAddActivity:
         assert "error" not in result
         assert result["activity_id"] > 0
 
-        # topic_activity_relationsにリレーションが保存されていることを確認
+        # relationsテーブルに正規化されて格納されていることを確認
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT * FROM topic_activity_relations WHERE topic_id = ? AND activity_id = ?",
-                (topic_id, result["activity_id"]),
+                "SELECT * FROM relations WHERE source_type = 'activity' AND source_id = ? AND target_type = 'topic' AND target_id = ?",
+                (result["activity_id"], topic_id),
             ).fetchone()
             assert row is not None
         finally:
@@ -174,7 +174,7 @@ class TestAddActivity:
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_activity_relations WHERE activity_id = ?",
+                "SELECT COUNT(*) as cnt FROM relations WHERE source_type = 'activity' AND source_id = ?",
                 (result["activity_id"],),
             ).fetchone()
             assert row["cnt"] == 0

@@ -167,7 +167,7 @@ class TestRelationsViewRelationType:
             conn.close()
 
     def test_existing_relations_have_related_type(self, temp_db):
-        """既存のリレーション（topic_relationsなど）はrelation_type='related'"""
+        """既存のリレーション（relationsテーブル）はrelation_type='related'"""
         from src.services.relation_service import add_relation
 
         conn = get_connection()
@@ -270,7 +270,7 @@ class TestRelationsViewRelationType:
         finally:
             conn.close()
 
-        # activity_relationsを使うrelated関係
+        # relationsテーブルを使うrelated関係
         add_relation("activity", a1, [{"type": "activity", "ids": [a2]}])
 
         # activity_dependenciesを使うdepends_on関係
@@ -712,7 +712,7 @@ class TestRemoveDependsOn:
         # depends_on関係を追加
         add_relation("activity", a1, [{"type": "activity", "ids": [a2]}], relation_type="depends_on")
 
-        # relation_type省略（デフォルトrelated）で削除→activity_relationsテーブルには行がないのでremoved=0
+        # relation_type省略（デフォルトrelated）で削除→relationsテーブルには行がないのでremoved=0
         result = remove_relation("activity", a1, [{"type": "activity", "ids": [a2]}])
         assert "error" not in result
         assert result["removed"] == 0

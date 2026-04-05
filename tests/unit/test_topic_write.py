@@ -537,13 +537,13 @@ def test_add_topic_with_related_topic(temp_db):
     assert "error" not in t2
     assert t2["topic_id"] > 0
 
-    # topic_relationsにリレーションが保存されていることを確認
+    # relationsテーブルに正規化されて格納されていることを確認
     conn = get_connection()
     try:
         id_1 = min(t1["topic_id"], t2["topic_id"])
         id_2 = max(t1["topic_id"], t2["topic_id"])
         row = conn.execute(
-            "SELECT * FROM topic_relations WHERE topic_id_1 = ? AND topic_id_2 = ?",
+            "SELECT * FROM relations WHERE source_type = 'topic' AND source_id = ? AND target_type = 'topic' AND target_id = ?",
             (id_1, id_2),
         ).fetchone()
         assert row is not None
@@ -573,12 +573,12 @@ def test_add_topic_with_related_activity(temp_db):
     assert "error" not in t
     assert t["topic_id"] > 0
 
-    # topic_activity_relationsにリレーションが保存されていることを確認
+    # relationsテーブルに正規化されて格納されていることを確認
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT * FROM topic_activity_relations WHERE topic_id = ? AND activity_id = ?",
-            (t["topic_id"], activity["activity_id"]),
+            "SELECT * FROM relations WHERE source_type = 'activity' AND source_id = ? AND target_type = 'topic' AND target_id = ?",
+            (activity["activity_id"], t["topic_id"]),
         ).fetchone()
         assert row is not None
     finally:
@@ -658,14 +658,8 @@ def test_add_topic_without_related(temp_db):
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM topic_relations WHERE topic_id_1 = ? OR topic_id_2 = ?",
+            "SELECT COUNT(*) as cnt FROM relations WHERE (source_type = 'topic' AND source_id = ?) OR (target_type = 'topic' AND target_id = ?)",
             (t["topic_id"], t["topic_id"]),
-        ).fetchone()
-        assert row["cnt"] == 0
-
-        row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM topic_activity_relations WHERE topic_id = ?",
-            (t["topic_id"],),
         ).fetchone()
         assert row["cnt"] == 0
     finally:

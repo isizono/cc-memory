@@ -131,8 +131,8 @@ def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
     rows = conn.execute(
         """SELECT m.id, m.title, m.content, m.created_at
            FROM materials m
-           JOIN activity_material_relations amr ON amr.material_id = m.id
-           WHERE amr.activity_id = ?
+           JOIN relations r ON r.source_type = 'activity' AND r.source_id = ?
+                           AND r.target_type = 'material' AND r.target_id = m.id
            ORDER BY m.created_at ASC""",
         (activity_id,),
     ).fetchall()

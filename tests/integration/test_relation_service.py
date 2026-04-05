@@ -113,12 +113,12 @@ class TestAddRelation:
         assert "error" not in result
         assert result["added"] == 1
 
-        # topic_activity_relationsに正しく格納されていることを確認
+        # relationsテーブルに正規化されて格納されていることを確認
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT * FROM topic_activity_relations WHERE topic_id = ? AND activity_id = ?",
-                (e["t1"], e["a1"]),
+                "SELECT * FROM relations WHERE source_type = 'activity' AND source_id = ? AND target_type = 'topic' AND target_id = ?",
+                (e["a1"], e["t1"]),
             ).fetchone()
             assert row is not None
         finally:
@@ -185,32 +185,13 @@ class TestAddRelation:
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
 
-    def test_add_relation_nonexistent_id_returns_error(self, sample_entities):
-        """存在しないIDへのリレーション追加はFK違反でエラー"""
+    def test_add_relation_nonexistent_id_succeeds(self, sample_entities):
+        """存在しないIDへのリレーション追加はrelationsテーブルでは成功する（FK制約なし）"""
         e = sample_entities
         result = add_relation("topic", e["t1"], [{"type": "topic", "ids": [99999]}])
 
-        assert "error" in result
-        assert result["error"]["code"] == "CONSTRAINT_VIOLATION"
-
-    def test_add_relation_partial_fk_violation_rolls_back(self, sample_entities):
-        """複数targets指定時にFK違反が起きると全体がロールバックされる"""
-        e = sample_entities
-        result = add_relation("topic", e["t1"], [
-            {"type": "topic", "ids": [e["t2"], 99999]},
-        ])
-
-        assert "error" in result
-
-        # t2へのリレーションもロールバックされている
-        conn = get_connection()
-        try:
-            row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_relations"
-            ).fetchone()
-            assert row["cnt"] == 0
-        finally:
-            conn.close()
+        assert "error" not in result
+        assert result["added"] == 1
 
     def test_add_relation_normalizes_order(self, sample_entities):
         """topic_id_1 < topic_id_2に正規化される"""
@@ -223,7 +204,7 @@ class TestAddRelation:
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT * FROM topic_relations WHERE topic_id_1 = ? AND topic_id_2 = ?",
+                "SELECT * FROM relations WHERE source_type = 'topic' AND source_id = ? AND target_type = 'topic' AND target_id = ?",
                 (min(e["t1"], e["t2"]), max(e["t1"], e["t2"])),
             ).fetchone()
             assert row is not None
@@ -468,8 +449,8 @@ class TestGetMap:
 class TestCascadeDelete:
     """ON DELETE CASCADEの動作テスト"""
 
-    def test_cascade_delete_topic_cleans_topic_relations(self, sample_entities):
-        """トピック削除時にtopic_relationsが消える"""
+    def test_cascade_delete_topic_cleans_relations(self, sample_entities):
+        """トピック削除時にrelationsテーブルの関連行が消える"""
         e = sample_entities
         add_relation("topic", e["t1"], [{"type": "topic", "ids": [e["t2"]]}])
 
@@ -479,15 +460,15 @@ class TestCascadeDelete:
             conn.commit()
 
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_relations WHERE topic_id_1 = ? OR topic_id_2 = ?",
+                "SELECT COUNT(*) as cnt FROM relations WHERE (source_type = 'topic' AND source_id = ?) OR (target_type = 'topic' AND target_id = ?)",
                 (e["t1"], e["t1"]),
             ).fetchone()
             assert row["cnt"] == 0
         finally:
             conn.close()
 
-    def test_cascade_delete_topic_cleans_topic_activity_relations(self, sample_entities):
-        """トピック削除時にtopic_activity_relationsが消える"""
+    def test_cascade_delete_topic_cleans_activity_topic_relations(self, sample_entities):
+        """トピック削除時にactivity-topicリレーションが消える"""
         e = sample_entities
         add_relation("topic", e["t1"], [{"type": "activity", "ids": [e["a1"]]}])
 
@@ -497,15 +478,15 @@ class TestCascadeDelete:
             conn.commit()
 
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_activity_relations WHERE topic_id = ?",
+                "SELECT COUNT(*) as cnt FROM relations WHERE target_type = 'topic' AND target_id = ?",
                 (e["t1"],),
             ).fetchone()
             assert row["cnt"] == 0
         finally:
             conn.close()
 
-    def test_cascade_delete_activity_cleans_topic_activity_relations(self, sample_entities):
-        """アクティビティ削除時にtopic_activity_relationsが消える"""
+    def test_cascade_delete_activity_cleans_activity_topic_relations(self, sample_entities):
+        """アクティビティ削除時にactivity-topicリレーションが消える"""
         e = sample_entities
         add_relation("topic", e["t1"], [{"type": "activity", "ids": [e["a1"]]}])
 
@@ -515,7 +496,7 @@ class TestCascadeDelete:
             conn.commit()
 
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_activity_relations WHERE activity_id = ?",
+                "SELECT COUNT(*) as cnt FROM relations WHERE source_type = 'activity' AND source_id = ?",
                 (e["a1"],),
             ).fetchone()
             assert row["cnt"] == 0
@@ -523,7 +504,7 @@ class TestCascadeDelete:
             conn.close()
 
     def test_cascade_delete_activity_cleans_activity_relations(self, sample_entities):
-        """アクティビティ削除時にactivity_relationsが消える"""
+        """アクティビティ削除時にactivity-activityリレーションが消える"""
         e = sample_entities
         add_relation("activity", e["a1"], [{"type": "activity", "ids": [e["a2"]]}])
 
@@ -533,7 +514,7 @@ class TestCascadeDelete:
             conn.commit()
 
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM activity_relations WHERE activity_id_1 = ? OR activity_id_2 = ?",
+                "SELECT COUNT(*) as cnt FROM relations WHERE (source_type = 'activity' AND source_id = ?) OR (target_type = 'activity' AND target_id = ?)",
                 (e["a1"], e["a1"]),
             ).fetchone()
             assert row["cnt"] == 0
@@ -541,7 +522,7 @@ class TestCascadeDelete:
             conn.close()
 
     def test_cascade_delete_material_cleans_topic_material_relations(self, sample_entities):
-        """資材削除時にtopic_material_relationsが消える"""
+        """資材削除時にmaterial-topicリレーションが消える"""
         e = sample_entities
         add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
 
@@ -551,7 +532,7 @@ class TestCascadeDelete:
             conn.commit()
 
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_material_relations WHERE material_id = ?",
+                "SELECT COUNT(*) as cnt FROM relations WHERE source_type = 'material' AND source_id = ?",
                 (e["m1"],),
             ).fetchone()
             assert row["cnt"] == 0
@@ -559,7 +540,7 @@ class TestCascadeDelete:
             conn.close()
 
     def test_cascade_delete_material_cleans_activity_material_relations(self, sample_entities):
-        """資材削除時にactivity_material_relationsが消える"""
+        """資材削除時にactivity-materialリレーションが消える"""
         e = sample_entities
         add_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
 
@@ -569,8 +550,8 @@ class TestCascadeDelete:
             conn.commit()
 
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM activity_material_relations WHERE material_id = ?",
-                (e["m1"],),
+                "SELECT COUNT(*) as cnt FROM relations WHERE (source_type = 'material' AND source_id = ?) OR (target_type = 'material' AND target_id = ?)",
+                (e["m1"], e["m1"]),
             ).fetchone()
             assert row["cnt"] == 0
         finally:
@@ -596,12 +577,12 @@ class TestMaterialRelations:
         assert "error" not in result
         assert result["added"] == 1
 
-        # topic_material_relationsに正しく格納されていることを確認
+        # relationsテーブルに正規化されて格納されていることを確認
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT * FROM topic_material_relations WHERE topic_id = ? AND material_id = ?",
-                (e["t1"], e["m1"]),
+                "SELECT * FROM relations WHERE source_type = 'material' AND source_id = ? AND target_type = 'topic' AND target_id = ?",
+                (e["m1"], e["t1"]),
             ).fetchone()
             assert row is not None
         finally:
@@ -623,11 +604,11 @@ class TestMaterialRelations:
         assert "error" not in result
         assert result["added"] == 1
 
-        # activity_material_relationsに正しく格納されていることを確認
+        # relationsテーブルに正規化されて格納されていることを確認
         conn = get_connection()
         try:
             row = conn.execute(
-                "SELECT * FROM activity_material_relations WHERE activity_id = ? AND material_id = ?",
+                "SELECT * FROM relations WHERE source_type = 'activity' AND source_id = ? AND target_type = 'material' AND target_id = ?",
                 (e["a1"], e["m1"]),
             ).fetchone()
             assert row is not None
