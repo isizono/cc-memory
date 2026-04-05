@@ -13,6 +13,7 @@ from src.services import (
     habit_service,
     relation_service,
     pin_service,
+    retract_service,
 )
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import search_tags as _search_tags, update_tag as _update_tag, collect_tag_notes_for_injection
@@ -270,6 +271,7 @@ def get_logs(
     entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
+    include_retracted: bool = False,
 ) -> dict:
     """
     指定エンティティの議論ログを取得する。
@@ -279,12 +281,13 @@ def get_logs(
         entity_id: 対象エンティティのID
         start_id: 取得開始位置のログID（ページネーション用）
         limit: 取得件数上限（最大30件）
+        include_retracted: Trueのとき取り消し済みログも含める（デフォルトFalse）
 
     Returns:
         議論ログ一覧（各logにtags付き）
         entity_type == "activity" の場合はrelated topics経由でlogs集約
     """
-    result = discussion_log_service.get_logs(entity_type, entity_id, start_id, limit)
+    result = discussion_log_service.get_logs(entity_type, entity_id, start_id, limit, include_retracted=include_retracted)
     if "error" not in result:
         all_tags = _collect_result_tags(result.get("logs", []))
         if all_tags:
@@ -298,6 +301,7 @@ def get_decisions(
     entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
+    include_retracted: bool = False,
 ) -> dict:
     """
     指定エンティティに関連する決定事項を取得する。
@@ -307,12 +311,13 @@ def get_decisions(
         entity_id: 対象エンティティのID
         start_id: 取得開始位置の決定事項ID（ページネーション用）
         limit: 取得件数上限（最大30件）
+        include_retracted: Trueのとき取り消し済み決定事項も含める（デフォルトFalse）
 
     Returns:
         決定事項一覧（各decisionにtags付き）
         entity_type == "activity" の場合はrelated topics経由でdecisions集約
     """
-    result = decision_service.get_decisions(entity_type, entity_id, start_id, limit)
+    result = decision_service.get_decisions(entity_type, entity_id, start_id, limit, include_retracted=include_retracted)
     if "error" not in result:
         all_tags = _collect_result_tags(result.get("decisions", []))
         if all_tags:
@@ -332,6 +337,7 @@ def search(
     domain: Optional[str] = None,
     date_after: Optional[str] = None,
     date_before: Optional[str] = None,
+    include_retracted: bool = False,
 ) -> dict:
     """
     キーワードで横断検索する。
@@ -357,6 +363,7 @@ def search(
         domain: ドメインフィルタ。内部でtags=["domain:{domain}"]にマージされる
         date_after: 日付フィルタ（以降）。YYYY-MM-DD or YYYY-MM-DD HH:MM:SS形式
         date_before: 日付フィルタ（以前）。YYYY-MM-DD or YYYY-MM-DD HH:MM:SS形式
+        include_retracted: Trueのとき取り消し済みのdecision/logも含める（デフォルトFalse）
 
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
@@ -366,7 +373,7 @@ def search(
         tagsはエンティティに紐づくタグ文字列のリスト。
         include_details=Trueの場合、上位10件にdetailsが追加される。
     """
-    result = search_service.search(keyword, tags, entity_type, limit, offset, keyword_mode, include_details, domain, date_after, date_before)
+    result = search_service.search(keyword, tags, entity_type, limit, offset, keyword_mode, include_details, domain, date_after, date_before, include_retracted=include_retracted)
     if "error" not in result and tags:
         _maybe_inject_tag_notes(result, tags)
     return result
@@ -835,6 +842,18 @@ def update_pin(entity_type: str, entity_id: int, pinned: bool) -> dict:
         pinned: True=pin, False=unpin
     """
     return pin_service.update_pin(entity_type, entity_id, pinned)
+
+
+@mcp.tool()
+def retract(entity_type: str, ids: list[int], undo: bool = False) -> dict:
+    """決定事項やログを取り消す（論理削除）。取り消し済みエンティティは検索・取得でデフォルト除外される。
+
+    Args:
+        entity_type: "decision" | "log"
+        ids: 対象エンティティのIDリスト
+        undo: True=取り消しを元に戻す（un-retract）、False=取り消す（retract）
+    """
+    return retract_service.retract(entity_type, ids, undo)
 
 
 @mcp.tool()

@@ -72,7 +72,7 @@ def _get_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -
         f"""
         SELECT id, decision
         FROM decisions
-        WHERE topic_id IN ({placeholders}) AND pinned = 0
+        WHERE topic_id IN ({placeholders}) AND pinned = 0 AND retracted_at IS NULL
         ORDER BY id DESC
         LIMIT {DECISIONS_FULL_LIMIT}
         """,
@@ -86,12 +86,12 @@ def _get_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -
 
 
 def _count_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int]) -> int:
-    """複数トピックのdecisionsの総件数を取得する（pinned含む、coverage分母用）。"""
+    """複数トピックのdecisionsの総件数を取得する（pinned含む、retracted除外、coverage分母用）。"""
     if not topic_ids:
         return 0
     placeholders = ",".join("?" * len(topic_ids))
     row = conn.execute(
-        f"SELECT COUNT(*) FROM decisions WHERE topic_id IN ({placeholders})",
+        f"SELECT COUNT(*) FROM decisions WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL",
         tuple(topic_ids),
     ).fetchone()
     return row[0] if row else 0
@@ -118,7 +118,7 @@ def _get_logs_catalog_from_topics(
         f"""
         SELECT id, title, content
         FROM discussion_logs
-        WHERE topic_id IN ({placeholders}) AND pinned = 0
+        WHERE topic_id IN ({placeholders}) AND pinned = 0 AND retracted_at IS NULL
         ORDER BY id DESC
         LIMIT 1
         """,
@@ -135,7 +135,7 @@ def _get_logs_catalog_from_topics(
         f"""
         SELECT id, title
         FROM discussion_logs
-        WHERE topic_id IN ({placeholders}) AND pinned = 0 AND id != ?
+        WHERE topic_id IN ({placeholders}) AND pinned = 0 AND retracted_at IS NULL AND id != ?
         ORDER BY id DESC
         """,
         params + (latest_row["id"],),
@@ -154,7 +154,7 @@ def _get_pinned_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[
         f"""
         SELECT id, decision, reason
         FROM decisions
-        WHERE topic_id IN ({placeholders}) AND pinned = 1
+        WHERE topic_id IN ({placeholders}) AND pinned = 1 AND retracted_at IS NULL
         ORDER BY id DESC
         """,
         tuple(topic_ids),
@@ -171,7 +171,7 @@ def _get_pinned_logs_from_topics(conn: sqlite3.Connection, topic_ids: list[int])
         f"""
         SELECT id, title, content
         FROM discussion_logs
-        WHERE topic_id IN ({placeholders}) AND pinned = 1
+        WHERE topic_id IN ({placeholders}) AND pinned = 1 AND retracted_at IS NULL
         ORDER BY id DESC
         """,
         tuple(topic_ids),
