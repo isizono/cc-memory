@@ -39,11 +39,12 @@ class TestAddMaterial:
     """add_materialの統合テスト"""
 
     def test_add_material_success(self, temp_db):
-        """資材の追加が成功する"""
+        """title, content, tags, sourceを指定して資材を追加すると成功しmaterial_idが返る"""
         result = add_material(
             title="Test Material",
             content="# Test Content\n\nThis is a test material.",
             tags=["domain:test", "design"],
+            source="テスト用データ",
         )
 
         assert "error" not in result
@@ -55,6 +56,7 @@ class TestAddMaterial:
             title="Related Material",
             content="Content",
             tags=["domain:test"],
+            source="テスト用データ",
             related=[{"type": "activity", "ids": [activity_id]}],
         )
 
@@ -62,11 +64,12 @@ class TestAddMaterial:
         assert result["material_id"] > 0
 
     def test_add_material_empty_title(self, temp_db):
-        """空のtitleでVALIDATION_ERRORになる"""
+        """titleが空文字の場合VALIDATION_ERRORを返す"""
         result = add_material(
             title="",
             content="Content",
             tags=["domain:test"],
+            source="テスト用データ",
         )
 
         assert "error" in result
@@ -74,22 +77,24 @@ class TestAddMaterial:
         assert "title" in result["error"]["message"]
 
     def test_add_material_whitespace_title(self, temp_db):
-        """空白のみのtitleでVALIDATION_ERRORになる"""
+        """titleが空白のみの場合VALIDATION_ERRORを返す"""
         result = add_material(
             title="   ",
             content="Content",
             tags=["domain:test"],
+            source="テスト用データ",
         )
 
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
 
     def test_add_material_empty_content(self, temp_db):
-        """空のcontentでVALIDATION_ERRORになる"""
+        """contentが空文字の場合VALIDATION_ERRORを返す"""
         result = add_material(
             title="Title",
             content="",
             tags=["domain:test"],
+            source="テスト用データ",
         )
 
         assert "error" in result
@@ -97,38 +102,81 @@ class TestAddMaterial:
         assert "content" in result["error"]["message"]
 
     def test_add_material_whitespace_content(self, temp_db):
-        """空白のみのcontentでVALIDATION_ERRORになる"""
+        """contentが空白のみの場合VALIDATION_ERRORを返す"""
         result = add_material(
             title="Title",
             content="   ",
             tags=["domain:test"],
+            source="テスト用データ",
         )
 
         assert "error" in result
         assert result["error"]["code"] == "VALIDATION_ERROR"
 
     def test_add_material_no_tags(self, temp_db):
-        """タグなしでTAGS_REQUIREDエラーになる"""
+        """tagsが空配列の場合TAGS_REQUIREDエラーを返す"""
         result = add_material(
             title="Title",
             content="Content",
             tags=[],
+            source="テスト用データ",
         )
 
         assert "error" in result
         assert result["error"]["code"] == "TAGS_REQUIRED"
 
+    def test_add_material_empty_source(self, temp_db):
+        """sourceが空文字の場合VALIDATION_ERRORを返す"""
+        result = add_material(
+            title="Title",
+            content="Content",
+            tags=["domain:test"],
+            source="",
+        )
+
+        assert "error" in result
+        assert result["error"]["code"] == "VALIDATION_ERROR"
+        assert "source" in result["error"]["message"]
+
+    def test_add_material_whitespace_source(self, temp_db):
+        """sourceが空白のみの場合VALIDATION_ERRORを返す"""
+        result = add_material(
+            title="Title",
+            content="Content",
+            tags=["domain:test"],
+            source="   ",
+        )
+
+        assert "error" in result
+        assert result["error"]["code"] == "VALIDATION_ERROR"
+        assert "source" in result["error"]["message"]
+
+    def test_add_material_source_persisted(self, temp_db):
+        """sourceを指定して作成した資材のget_materialレスポンスにsourceが含まれる"""
+        created = add_material(
+            title="Source Test",
+            content="Content for source test",
+            tags=["domain:test"],
+            source="公式ドキュメント",
+        )
+        assert "error" not in created
+
+        fetched = get_material(created["material_id"])
+        assert fetched["source"] == "公式ドキュメント"
+
     def test_add_multiple_materials(self, temp_db):
-        """複数の資材を追加できる"""
+        """複数の資材を追加するとそれぞれ異なるmaterial_idが割り当てられる"""
         result1 = add_material(
             title="Material 1",
             content="Content 1",
             tags=["domain:test"],
+            source="テスト用データ",
         )
         result2 = add_material(
             title="Material 2",
             content="Content 2",
             tags=["domain:test"],
+            source="テスト用データ",
         )
 
         assert "error" not in result1
@@ -140,11 +188,12 @@ class TestGetMaterial:
     """get_materialの統合テスト"""
 
     def test_get_material_success(self, temp_db):
-        """資材の全文取得が成功する"""
+        """get_materialでmaterial_id, title, content, source, tags, created_atが返る"""
         created = add_material(
             title="Get Test",
             content="Full content here",
             tags=["domain:test", "search"],
+            source="コード調査",
         )
         material_id = created["material_id"]
 
@@ -154,6 +203,7 @@ class TestGetMaterial:
         assert result["material_id"] == material_id
         assert result["title"] == "Get Test"
         assert result["content"] == "Full content here"
+        assert result["source"] == "コード調査"
         assert "tags" in result
         assert "domain:test" in result["tags"]
         assert "search" in result["tags"]
@@ -167,6 +217,7 @@ class TestGetMaterial:
             title="Hint Test",
             content="Content for hint test",
             tags=["domain:test"],
+            source="テスト用データ",
         )
 
         result = get_material(created["material_id"])
@@ -187,11 +238,12 @@ class TestGetByIdMaterial:
     """get_by_id / get_by_ids でmaterialを取得するテスト"""
 
     def test_get_by_id_material(self, temp_db):
-        """get_by_idでmaterialを取得できる"""
+        """get_by_idでmaterialのカタログ（material_id, title, tags, created_at）を取得できる"""
         created = add_material(
             title="ById Test",
             content="ById content",
             tags=["domain:test"],
+            source="テスト用データ",
         )
         material_id = created["material_id"]
 
@@ -219,6 +271,7 @@ class TestGetByIdMaterial:
             title="Batch Test",
             content="Batch content",
             tags=["domain:test"],
+            source="テスト用データ",
         )
         material_id = created["material_id"]
 
@@ -235,6 +288,7 @@ class TestGetByIdMaterial:
             title="Mixed Test",
             content="Mixed content",
             tags=["domain:test"],
+            source="テスト用データ",
             related=[{"type": "activity", "ids": [activity_id]}],
         )
         material_id = created["material_id"]
@@ -258,11 +312,12 @@ class TestUpdateMaterial:
     """update_material integration tests"""
 
     def _create_material(self):
-        """Helper to create a material for update tests"""
+        """title='Original Title', content='Original content', source='テスト用データ'で資材を作成するヘルパー"""
         return add_material(
             title="Original Title",
             content="Original content",
             tags=["domain:test", "design"],
+            source="テスト用データ",
         )
 
     def test_update_content(self, temp_db):
@@ -307,7 +362,7 @@ class TestUpdateMaterial:
         assert "title" not in result
 
     def test_update_neither_returns_validation_error(self, temp_db):
-        """Providing neither content nor title returns VALIDATION_ERROR"""
+        """content, title, tags, sourceのいずれも指定しない場合VALIDATION_ERRORを返す"""
         created = self._create_material()
         material_id = created["material_id"]
 
@@ -395,7 +450,7 @@ class TestUpdateMaterial:
         assert fetched["tags"] == ["domain:updated"]
 
     def test_update_tags_none_preserves_existing(self, temp_db):
-        """tags=None does not change existing tags"""
+        """tags=Noneの場合、タグは変更されず作成時の値が保持される"""
         created = self._create_material()
         material_id = created["material_id"]
 
@@ -404,3 +459,49 @@ class TestUpdateMaterial:
 
         fetched = get_material(material_id)
         assert sorted(fetched["tags"]) == sorted(["design", "domain:test"])
+
+    def test_update_source(self, temp_db):
+        """sourceのみを更新するとget_materialで新しいsource値が返る"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, source="公式ドキュメント")
+
+        assert "error" not in result
+        assert result["material_id"] == material_id
+
+        fetched = get_material(material_id)
+        assert fetched["source"] == "公式ドキュメント"
+
+    def test_update_source_empty_string(self, temp_db):
+        """sourceに空文字を指定するとVALIDATION_ERRORを返す"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, source="")
+
+        assert "error" in result
+        assert result["error"]["code"] == "VALIDATION_ERROR"
+        assert "source" in result["error"]["message"]
+
+    def test_update_source_whitespace_only(self, temp_db):
+        """sourceに空白のみを指定するとVALIDATION_ERRORを返す"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, source="   ")
+
+        assert "error" in result
+        assert result["error"]["code"] == "VALIDATION_ERROR"
+        assert "source" in result["error"]["message"]
+
+    def test_update_source_none_preserves_existing(self, temp_db):
+        """source=Noneの場合、sourceは変更されず作成時の値が保持される"""
+        created = self._create_material()
+        material_id = created["material_id"]
+
+        result = update_material(material_id, title="New Title")
+        assert "error" not in result
+
+        fetched = get_material(material_id)
+        assert fetched["source"] == "テスト用データ"

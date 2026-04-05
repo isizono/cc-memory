@@ -24,13 +24,14 @@ def _material_to_response(material: dict, tags: list[str]) -> dict:
         "material_id": material["id"],
         "title": material["title"],
         "content": material["content"],
+        "source": material["source"],
         "tags": tags,
         "created_at": material["created_at"],
         "hint": "contentの先頭1-2文は内容の説明・要約にしてください（check-in時にsnippetとして表示されます）",
     }
 
 
-def add_material(title: str, content: str, tags: list[str], related: list[dict] | None = None) -> dict:
+def add_material(title: str, content: str, tags: list[str], source: str, related: list[dict] | None = None) -> dict:
     """
     資材を追加する
 
@@ -38,6 +39,7 @@ def add_material(title: str, content: str, tags: list[str], related: list[dict] 
         title: 資材のタイトル
         content: 資材の本文
         tags: タグ配列（必須、1個以上）
+        source: データの出自
         related: 関連エンティティ [{"type": "topic", "ids": [1, 2]}, ...] (optional)
 
     Returns:
@@ -59,6 +61,14 @@ def add_material(title: str, content: str, tags: list[str], related: list[dict] 
             }
         }
 
+    if not source or not source.strip():
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "source must not be empty",
+            }
+        }
+
     # タグのバリデーション
     parsed_tags = validate_and_parse_tags(tags, required=True)
     if isinstance(parsed_tags, dict):
@@ -73,8 +83,8 @@ def add_material(title: str, content: str, tags: list[str], related: list[dict] 
     conn = get_connection()
     try:
         cursor = conn.execute(
-            "INSERT INTO materials (title, content) VALUES (?, ?)",
-            (title, content),
+            "INSERT INTO materials (title, content, source) VALUES (?, ?, ?)",
+            (title, content, source),
         )
         material_id = cursor.lastrowid
 
@@ -129,7 +139,7 @@ def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
         資材カタログのリスト [{"id": int, "title": str, "snippet": str, "tags": list[str], "created_at": str}, ...]
     """
     rows = conn.execute(
-        """SELECT m.id, m.title, m.content, m.created_at
+        """SELECT m.id, m.title, m.content, m.source, m.created_at
            FROM materials m
            JOIN activity_material_relations amr ON amr.material_id = m.id
            WHERE amr.activity_id = ?
@@ -143,6 +153,7 @@ def get_materials_by_relation_with_conn(conn, activity_id: int) -> list[dict]:
             "id": row["id"],
             "title": row["title"],
             "snippet": (row["content"] or "")[:SNIPPET_MAX_LEN],
+            "source": row["source"],
             "tags": tags_map.get(row["id"], []),
             "created_at": row["created_at"],
         }
@@ -155,6 +166,7 @@ def update_material(
     content: str | None = None,
     title: str | None = None,
     tags: list[str] | None = None,
+    source: str | None = None,
 ) -> dict:
     """
     Update an existing material's content, title, and/or tags.
@@ -164,15 +176,16 @@ def update_material(
         content: New content (full replace, optional)
         title: New title (optional)
         tags: New tags (full replace, optional. At least 1 required when specified)
+        source: New source (optional)
 
     Returns:
         Updated material info
     """
-    if content is None and title is None and tags is None:
+    if content is None and title is None and tags is None and source is None:
         return {
             "error": {
                 "code": "VALIDATION_ERROR",
-                "message": "At least one of content, title, or tags must be provided",
+                "message": "At least one of content, title, tags, or source must be provided",
             }
         }
 
@@ -196,6 +209,14 @@ def update_material(
             "error": {
                 "code": "VALIDATION_ERROR",
                 "message": "content must not be empty",
+            }
+        }
+
+    if source is not None and not source.strip():
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "source must not be empty",
             }
         }
 
@@ -224,6 +245,10 @@ def update_material(
         if content is not None:
             set_parts.append("content = ?")
             values.append(content)
+
+        if source is not None:
+            set_parts.append("source = ?")
+            values.append(source)
 
         if set_parts:
             set_clause = ", ".join(set_parts)

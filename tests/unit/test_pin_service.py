@@ -150,6 +150,7 @@ class TestPinMaterial:
             title="テスト資材",
             content="テスト資材の内容",
             tags=DEFAULT_TAGS,
+            source="テスト用データ",
         )
         material_id = result["material_id"]
 
@@ -174,6 +175,7 @@ class TestPinMaterial:
             title="テスト資材",
             content="テスト資材の内容",
             tags=DEFAULT_TAGS,
+            source="テスト用データ",
         )
         material_id = result["material_id"]
 
