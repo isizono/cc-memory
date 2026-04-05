@@ -1138,6 +1138,14 @@ def _rrf_merge(
                     "score": tag_score,
                 }
 
+    # 理論最大値で正規化（全ソース1位の場合のスコア）
+    max_score = (w_fts + w_vec) / (RRF_K + 1)
+    if tag_results:
+        max_score += RRF_W_TAG / (RRF_K + 1)
+    if max_score > 0:
+        for item in scores.values():
+            item["score"] = round(item["score"] / max_score, 4)
+
     # RRFスコア降順でソートし、上位limit件を返す
     merged = sorted(scores.values(), key=lambda x: x["score"], reverse=True)
     return merged[:limit]
@@ -1182,6 +1190,7 @@ def search(
 
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
+        scoreは0〜1に正規化された関連度スコア（RRF理論最大値基準）。
         snippetは各typeの対応するソースカラムの先頭200文字（materialはtitle優先表示）。
         tagsはエンティティに紐づくタグ文字列のリスト。
         include_details=Trueの場合、上位DETAILS_MAX_RESULTS件にdetailsが追加される。

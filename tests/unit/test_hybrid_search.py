@@ -76,7 +76,7 @@ def disable_embedding(monkeypatch):
 
 
 def test_rrf_merge_both_sources():
-    """RRF統合: 両方にヒットするアイテムのスコアが加算される"""
+    """RRF統合: 両方にヒットするアイテムのスコアが0〜1に正規化される"""
     fts = [
         {"type": "topic", "id": 1, "title": "A"},
         {"type": "topic", "id": 2, "title": "B"},
@@ -93,13 +93,15 @@ def test_rrf_merge_both_sources():
     # 同じスコアになるはず
     score_1 = next(r["score"] for r in results if r["id"] == 1)
     score_2 = next(r["score"] for r in results if r["id"] == 2)
-    expected = RRF_W_FTS / (RRF_K + 1) + RRF_W_VEC / (RRF_K + 2)
+    max_score = (RRF_W_FTS + RRF_W_VEC) / (RRF_K + 1)
+    raw_expected = RRF_W_FTS / (RRF_K + 1) + RRF_W_VEC / (RRF_K + 2)
+    expected = round(raw_expected / max_score, 4)
     assert score_1 == pytest.approx(expected)
     assert score_2 == pytest.approx(expected)
 
 
 def test_rrf_merge_fts_only():
-    """RRF統合: FTSのみの結果"""
+    """RRF統合: FTSのみでもスコアが0〜1に正規化される"""
     fts = [
         {"type": "topic", "id": 1, "title": "A"},
         {"type": "topic", "id": 2, "title": "B"},
@@ -108,15 +110,16 @@ def test_rrf_merge_fts_only():
     results = _rrf_merge(fts, [], limit=10)
 
     assert len(results) == 2
-    # ランク1のスコアが高い
+    # FTSのみ→理論最大値は (w_fts + w_vec) / (k+1)（タグなし）
+    max_score = (RRF_W_FTS + RRF_W_VEC) / (RRF_K + 1)
     assert results[0]["id"] == 1
-    assert results[0]["score"] == pytest.approx(RRF_W_FTS / (RRF_K + 1))
+    assert results[0]["score"] == pytest.approx(round(RRF_W_FTS / (RRF_K + 1) / max_score, 4))
     assert results[1]["id"] == 2
-    assert results[1]["score"] == pytest.approx(RRF_W_FTS / (RRF_K + 2))
+    assert results[1]["score"] == pytest.approx(round(RRF_W_FTS / (RRF_K + 2) / max_score, 4))
 
 
 def test_rrf_merge_vec_only():
-    """RRF統合: ベクトルのみの結果（Adaptive RRFにより重みが変わる）"""
+    """RRF統合: ベクトルのみでもAdaptive RRF重みを反映した正規化スコアが返る"""
     vec = [
         {"type": "decision", "id": 10, "title": "X"},
         {"type": "activity", "id": 20, "title": "Y"},
@@ -127,8 +130,9 @@ def test_rrf_merge_vec_only():
     assert len(results) == 2
     assert results[0]["id"] == 10
     # FTS=0, vec=2 → ratio=0.0 → w_vec=1.5（Adaptive RRF有効時）
-    _, expected_w_vec = _compute_adaptive_weights(0, 2)
-    assert results[0]["score"] == pytest.approx(expected_w_vec / (RRF_K + 1))
+    w_fts, w_vec = _compute_adaptive_weights(0, 2)
+    max_score = (w_fts + w_vec) / (RRF_K + 1)
+    assert results[0]["score"] == pytest.approx(round(w_vec / (RRF_K + 1) / max_score, 4))
 
 
 def test_rrf_merge_overlap_boosts_score():
@@ -242,7 +246,7 @@ def test_hybrid_search_3char_vec_disabled_fts_fallback(temp_db, disable_embeddin
 
 
 def test_hybrid_search_score_is_rrf(temp_db, mock_embedding_model):
-    """スコアがRRFスコアで返る（BM25の生値ではない）"""
+    """スコアが0〜1に正規化されたRRFスコアで返る"""
     add_topic(
         title="RRFスコアテスト用トピック",
         description="スコアの形式を検証する",
@@ -254,9 +258,8 @@ def test_hybrid_search_score_is_rrf(temp_db, mock_embedding_model):
     assert "error" not in result
     assert len(result["results"]) >= 1
     score = result["results"][0]["score"]
-    # RRFスコアは 1/(k+rank) の範囲内（0 < score <= 1/(k+1)）
-    # w_fts=1, w_vec=1, k=60 なので最大 2/(60+1) ≈ 0.0328
-    assert 0 < score <= 2 / (RRF_K + 1) + 0.001
+    # 正規化後のスコアは0〜1の範囲
+    assert 0 < score <= 1.0
 
 
 def test_hybrid_search_with_tags(temp_db, mock_embedding_model):
@@ -902,7 +905,7 @@ def test_add_topic_no_similar_when_embedding_disabled(temp_db, disable_embedding
 
 
 def test_rrf_merge_with_tag_results():
-    """RRF統合: 3ソース（FTS + ベクトル + タグLIKE）でスコアが加算される"""
+    """RRF統合: 3ソース全て1位でスコアが1.0になる（理論最大値 = 正規化基準）"""
     fts = [
         {"type": "topic", "id": 1, "title": "A"},
     ]
@@ -916,16 +919,12 @@ def test_rrf_merge_with_tag_results():
     results = _rrf_merge(fts, vec, limit=10, tag_results=tag)
 
     assert len(results) == 1
-    expected_score = (
-        RRF_W_FTS / (RRF_K + 1) +
-        RRF_W_VEC / (RRF_K + 1) +
-        RRF_W_TAG / (RRF_K + 1)
-    )
-    assert results[0]["score"] == pytest.approx(expected_score)
+    # 全ソース1位 → 正規化後1.0
+    assert results[0]["score"] == pytest.approx(1.0)
 
 
 def test_rrf_merge_tag_only():
-    """RRF統合: タグLIKEのみの結果"""
+    """RRF統合: タグLIKEのみでもスコアが0〜1に正規化される"""
     tag = [
         {"type": "topic", "id": 10, "title": "Tag only"},
         {"type": "activity", "id": 20, "title": "Tag only 2"},
@@ -935,9 +934,11 @@ def test_rrf_merge_tag_only():
 
     assert len(results) == 2
     assert results[0]["id"] == 10
-    assert results[0]["score"] == pytest.approx(RRF_W_TAG / (RRF_K + 1))
-    assert results[1]["id"] == 20
-    assert results[1]["score"] == pytest.approx(RRF_W_TAG / (RRF_K + 2))
+    # タグのみ→理論最大値は (w_fts + w_vec + W_TAG) / (k+1)
+    w_fts, w_vec = _compute_adaptive_weights(0, 0)
+    max_score = (w_fts + w_vec + RRF_W_TAG) / (RRF_K + 1)
+    assert results[0]["score"] == pytest.approx(round(RRF_W_TAG / (RRF_K + 1) / max_score, 4))
+    assert results[1]["score"] == pytest.approx(round(RRF_W_TAG / (RRF_K + 2) / max_score, 4))
 
 
 def test_rrf_merge_tag_boosts_existing():
@@ -963,7 +964,7 @@ def test_rrf_merge_tag_boosts_existing():
 
 
 def test_rrf_merge_no_tag_results():
-    """RRF統合: tag_results=Noneで従来通りの動作"""
+    """RRF統合: tag_results=Noneで2ソース1位→スコアが1.0になる"""
     fts = [
         {"type": "topic", "id": 1, "title": "A"},
     ]
@@ -974,8 +975,8 @@ def test_rrf_merge_no_tag_results():
     results = _rrf_merge(fts, vec, limit=10, tag_results=None)
 
     assert len(results) == 1
-    expected_score = RRF_W_FTS / (RRF_K + 1) + RRF_W_VEC / (RRF_K + 1)
-    assert results[0]["score"] == pytest.approx(expected_score)
+    # FTS+ベクトル両方1位 → 正規化後1.0
+    assert results[0]["score"] == pytest.approx(1.0)
 
 
 # ========================================
@@ -1324,50 +1325,53 @@ class TestRrfMergeAdaptive:
     """_rrf_merge でAdaptive RRF重みが反映されることを検証"""
 
     def test_adaptive_low_ratio_boosts_vector(self):
-        """ratio < 0.2: ベクトル結果の重みが1.5になる"""
+        """ratio < 0.2: Adaptive重み(0.5, 1.5)が正規化に反映される"""
         # FTS: 1件, ベクトル: 10件 → ratio=0.1 → w_fts=0.5, w_vec=1.5
         fts = [{"type": "topic", "id": 1, "title": "A"}]
         vec = [{"type": "topic", "id": i, "title": f"V{i}"} for i in range(2, 12)]
 
         results = _rrf_merge(fts, vec, limit=20)
 
+        max_score = (0.5 + 1.5) / (RRF_K + 1)
         # id=1 はFTSのランク1、ベクトルには未登場
         score_fts_only = next(r["score"] for r in results if r["id"] == 1)
-        assert score_fts_only == pytest.approx(0.5 / (RRF_K + 1))
+        assert score_fts_only == pytest.approx(round(0.5 / (RRF_K + 1) / max_score, 4))
 
         # id=2 はベクトルのランク1、FTSには未登場
         score_vec_only = next(r["score"] for r in results if r["id"] == 2)
-        assert score_vec_only == pytest.approx(1.5 / (RRF_K + 1))
+        assert score_vec_only == pytest.approx(round(1.5 / (RRF_K + 1) / max_score, 4))
 
     def test_adaptive_mid_ratio(self):
-        """ratio < 0.5: FTS重み0.8, ベクトル重み1.2"""
+        """ratio < 0.5: Adaptive重み(0.8, 1.2)が正規化に反映される"""
         # FTS: 3件, ベクトル: 10件 → ratio=0.3
         fts = [{"type": "topic", "id": i, "title": f"F{i}"} for i in range(1, 4)]
         vec = [{"type": "topic", "id": i, "title": f"V{i}"} for i in range(11, 21)]
 
         results = _rrf_merge(fts, vec, limit=20)
 
+        max_score = (0.8 + 1.2) / (RRF_K + 1)
         # FTSランク1の重み = 0.8
         score_fts = next(r["score"] for r in results if r["id"] == 1)
-        assert score_fts == pytest.approx(0.8 / (RRF_K + 1))
+        assert score_fts == pytest.approx(round(0.8 / (RRF_K + 1) / max_score, 4))
 
         # ベクトルランク1の重み = 1.2
         score_vec = next(r["score"] for r in results if r["id"] == 11)
-        assert score_vec == pytest.approx(1.2 / (RRF_K + 1))
+        assert score_vec == pytest.approx(round(1.2 / (RRF_K + 1) / max_score, 4))
 
     def test_adaptive_high_ratio_default(self):
-        """ratio >= 0.5: デフォルト重み（1.0, 1.0）"""
+        """ratio >= 0.5: デフォルト重み(1.0, 1.0)でランク1のスコアが0.5になる"""
         # FTS: 5件, ベクトル: 5件 → ratio=1.0
         fts = [{"type": "topic", "id": i, "title": f"F{i}"} for i in range(1, 6)]
         vec = [{"type": "topic", "id": i, "title": f"V{i}"} for i in range(11, 16)]
 
         results = _rrf_merge(fts, vec, limit=20)
 
+        # 片方のソースのみでランク1 → 0.5（理論最大の半分）
         score_fts = next(r["score"] for r in results if r["id"] == 1)
-        assert score_fts == pytest.approx(RRF_W_FTS / (RRF_K + 1))
+        assert score_fts == pytest.approx(0.5)
 
         score_vec = next(r["score"] for r in results if r["id"] == 11)
-        assert score_vec == pytest.approx(RRF_W_VEC / (RRF_K + 1))
+        assert score_vec == pytest.approx(0.5)
 
     def test_adaptive_tag_weight_unchanged(self):
         """Adaptive RRFでもタグLIKEの重みは固定（RRF_W_TAG=0.5）"""
@@ -1378,11 +1382,12 @@ class TestRrfMergeAdaptive:
 
         results = _rrf_merge(fts, vec, limit=20, tag_results=tag)
 
+        max_score = (0.5 + 1.5 + RRF_W_TAG) / (RRF_K + 1)
         score_tag = next(r["score"] for r in results if r["id"] == 100)
-        assert score_tag == pytest.approx(RRF_W_TAG / (RRF_K + 1))
+        assert score_tag == pytest.approx(round(RRF_W_TAG / (RRF_K + 1) / max_score, 4))
 
     def test_adaptive_disabled_uses_default(self, monkeypatch):
-        """ADAPTIVE_RRF_ENABLED=False: 固定重みが使われる"""
+        """ADAPTIVE_RRF_ENABLED=False: 固定重みが使われ、片方ランク1で0.5"""
         monkeypatch.setattr(search_service, 'ADAPTIVE_RRF_ENABLED', False)
 
         # ratio < 0.2 のケースでもデフォルト重みになること
@@ -1391,19 +1396,21 @@ class TestRrfMergeAdaptive:
 
         results = _rrf_merge(fts, vec, limit=20)
 
+        # デフォルト重み(1.0, 1.0)で片方ランク1 → 0.5
         score_fts = next(r["score"] for r in results if r["id"] == 1)
-        assert score_fts == pytest.approx(RRF_W_FTS / (RRF_K + 1))
+        assert score_fts == pytest.approx(0.5)
 
         score_vec = next(r["score"] for r in results if r["id"] == 2)
-        assert score_vec == pytest.approx(RRF_W_VEC / (RRF_K + 1))
+        assert score_vec == pytest.approx(0.5)
 
     def test_adaptive_vec_empty_uses_default(self):
-        """ベクトル結果が空: デフォルト重みでFTSスコアを算出"""
+        """ベクトル結果が空: デフォルト重みでFTSランク1が0.5になる"""
         fts = [{"type": "topic", "id": 1, "title": "A"}]
 
         results = _rrf_merge(fts, [], limit=10)
 
-        assert results[0]["score"] == pytest.approx(RRF_W_FTS / (RRF_K + 1))
+        # FTSのみランク1、理論最大(1.0+1.0)/(k+1)に対して1.0/(k+1) → 0.5
+        assert results[0]["score"] == pytest.approx(0.5)
 
 
 # ========================================
