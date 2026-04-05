@@ -361,7 +361,7 @@ def search(
     Returns:
         検索結果一覧（type, id, title, score, snippet, tags）
         scoreは0〜1に正規化された関連度スコア。1.0は全検索ソースで1位（理論最大）。
-        目安: 0.7以上=高関連、0.3〜0.7=中関連、0.3未満=低関連。
+        片方のソースのみヒット時は最大0.5。目安: 0.4以上=高関連、0.15〜0.4=中関連、0.15未満=低関連。
         snippetは各typeの対応するソースカラムの先頭200文字（materialはtitle優先表示）。
         tagsはエンティティに紐づくタグ文字列のリスト。
         include_details=Trueの場合、上位10件にdetailsが追加される。
