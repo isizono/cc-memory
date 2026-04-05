@@ -684,7 +684,6 @@ def _vector_search(
         # retractフィルタ（search_indexのsiエイリアスを使う版）
         # _vector_searchではsearch_indexにsiエイリアスがないクエリがあるため、
         # search_index直接参照版を使う
-        retract_sql_si = "" if include_retracted else RETRACT_FILTER_SQL
         retract_sql_direct = "" if include_retracted else """
   AND NOT EXISTS (
     SELECT 1 FROM decisions d
@@ -1355,22 +1354,22 @@ def search(
         if keyword_mode == "or":
             # OR時: 3文字以上のキーワードが1つでもあればFTSを使う
             if any(len(kw) >= 3 for kw in fts_keywords):
-                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, None, date_after, date_before, include_retracted)
+                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, None, date_after, date_before, include_retracted=include_retracted)
                 methods_used.append("fts5")
         else:
             # AND時（現行通り）: 全キーワードが3文字以上の場合のみ
             # QE拡張分はOR結合で追加されるため、元のキーワードの文字数チェックを使用
             if min_len >= 3:
-                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, original_kw_count, date_after, date_before, include_retracted)
+                fts_results = _fts_search(fts_keywords, tag_ids, entity_type, fetch_limit, keyword_mode, original_kw_count, date_after, date_before, include_retracted=include_retracted)
                 methods_used.append("fts5")
 
         # ベクトル検索（元のキーワードのまま、拡張なし）
-        vec_results = _vector_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode, date_after, date_before, include_retracted)
+        vec_results = _vector_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode, date_after, date_before, include_retracted=include_retracted)
         if vec_results is not None:
             methods_used.append("vector")
 
         # タグLIKE検索（キーワード長の制限なし）
-        tag_like_results = _tag_like_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode, date_after, date_before, include_retracted)
+        tag_like_results = _tag_like_search(keywords, tag_ids, entity_type, fetch_limit, keyword_mode, date_after, date_before, include_retracted=include_retracted)
         if tag_like_results:
             methods_used.append("tag_like")
 
