@@ -180,6 +180,7 @@ def get_decisions(
     entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
+    include_retracted: bool = False,
 ) -> dict:
     """
     指定エンティティに関連する決定事項を取得する。
@@ -195,6 +196,8 @@ def get_decisions(
         entity_type == "topic": 従来通りtopic_idで直接取得
         entity_type == "activity": related topics（上限10件）経由でdecisions集約
     """
+    retract_filter = "" if include_retracted else " AND retracted_at IS NULL"
+
     conn = get_connection()
     try:
         # limitを30件に制限
@@ -219,9 +222,9 @@ def get_decisions(
 
             if start_id is None:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM decisions
-                    WHERE topic_id = ?
+                    WHERE topic_id = ?{retract_filter}
                     ORDER BY created_at ASC, id ASC
                     LIMIT ?
                     """,
@@ -229,9 +232,9 @@ def get_decisions(
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM decisions
-                    WHERE topic_id = ? AND id >= ?
+                    WHERE topic_id = ? AND id >= ?{retract_filter}
                     ORDER BY created_at ASC, id ASC
                     LIMIT ?
                     """,
@@ -244,13 +247,16 @@ def get_decisions(
             decisions = []
             for row in rows:
                 dec = row_to_dict(row)
-                decisions.append({
+                item = {
                     "id": dec["id"],
                     "decision": dec["decision"],
                     "reason": dec["reason"],
                     "tags": tags_map.get(dec["id"], []),
                     "created_at": dec["created_at"],
-                })
+                }
+                if dec.get("retracted_at"):
+                    item["retracted_at"] = dec["retracted_at"]
+                decisions.append(item)
 
             return {
                 "topic_id": topic_id,
@@ -274,7 +280,7 @@ def get_decisions(
                 rows = conn.execute(
                     f"""
                     SELECT * FROM decisions
-                    WHERE topic_id IN ({placeholders})
+                    WHERE topic_id IN ({placeholders}){retract_filter}
                     ORDER BY id DESC
                     LIMIT ?
                     """,
@@ -284,7 +290,7 @@ def get_decisions(
                 rows = conn.execute(
                     f"""
                     SELECT * FROM decisions
-                    WHERE topic_id IN ({placeholders}) AND id <= ?
+                    WHERE topic_id IN ({placeholders}) AND id <= ?{retract_filter}
                     ORDER BY id DESC
                     LIMIT ?
                     """,
@@ -298,13 +304,16 @@ def get_decisions(
             decisions = []
             for row in rows:
                 dec = row_to_dict(row)
-                decisions.append({
+                item = {
                     "id": dec["id"],
                     "decision": dec["decision"],
                     "reason": dec["reason"],
                     "tags": tags_map.get(dec["id"], []),
                     "created_at": dec["created_at"],
-                })
+                }
+                if dec.get("retracted_at"):
+                    item["retracted_at"] = dec["retracted_at"]
+                decisions.append(item)
 
             return {"decisions": decisions}
 

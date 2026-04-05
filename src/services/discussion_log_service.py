@@ -158,6 +158,7 @@ def get_logs(
     entity_id: int,
     start_id: Optional[int] = None,
     limit: int = 30,
+    include_retracted: bool = False,
 ) -> dict:
     """
     指定エンティティの議論ログを取得する。
@@ -167,12 +168,15 @@ def get_logs(
         entity_id: 対象エンティティのID
         start_id: 取得開始位置のログID（ページネーション用）
         limit: 取得件数上限（最大30件）
+        include_retracted: Trueのとき取り消し済みログも含める（デフォルトFalse）
 
     Returns:
         議論ログ一覧（各logにtags付き）
         entity_type == "topic": 従来通りtopic_idで直接取得
         entity_type == "activity": related topics（上限10件）経由でlogs集約
     """
+    retract_filter = "" if include_retracted else " AND retracted_at IS NULL"
+
     conn = get_connection()
     try:
         # limitを30件に制限
@@ -182,9 +186,9 @@ def get_logs(
             topic_id = entity_id
             if start_id is None:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM discussion_logs
-                    WHERE topic_id = ?
+                    WHERE topic_id = ?{retract_filter}
                     ORDER BY created_at ASC, id ASC
                     LIMIT ?
                     """,
@@ -192,9 +196,9 @@ def get_logs(
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM discussion_logs
-                    WHERE topic_id = ? AND id >= ?
+                    WHERE topic_id = ? AND id >= ?{retract_filter}
                     ORDER BY created_at ASC, id ASC
                     LIMIT ?
                     """,
@@ -207,14 +211,17 @@ def get_logs(
             logs = []
             for row in rows:
                 log = row_to_dict(row)
-                logs.append({
+                item = {
                     "id": log["id"],
                     "topic_id": log["topic_id"],
                     "title": log["title"],
                     "content": log["content"],
                     "tags": tags_map.get(log["id"], []),
                     "created_at": log["created_at"],
-                })
+                }
+                if log.get("retracted_at"):
+                    item["retracted_at"] = log["retracted_at"]
+                logs.append(item)
 
             return {"logs": logs}
 
@@ -234,7 +241,7 @@ def get_logs(
                 rows = conn.execute(
                     f"""
                     SELECT * FROM discussion_logs
-                    WHERE topic_id IN ({placeholders})
+                    WHERE topic_id IN ({placeholders}){retract_filter}
                     ORDER BY id DESC
                     LIMIT ?
                     """,
@@ -244,7 +251,7 @@ def get_logs(
                 rows = conn.execute(
                     f"""
                     SELECT * FROM discussion_logs
-                    WHERE topic_id IN ({placeholders}) AND id <= ?
+                    WHERE topic_id IN ({placeholders}) AND id <= ?{retract_filter}
                     ORDER BY id DESC
                     LIMIT ?
                     """,
@@ -258,14 +265,17 @@ def get_logs(
             logs = []
             for row in rows:
                 log = row_to_dict(row)
-                logs.append({
+                item = {
                     "id": log["id"],
                     "topic_id": log["topic_id"],
                     "title": log["title"],
                     "content": log["content"],
                     "tags": tags_map.get(log["id"], []),
                     "created_at": log["created_at"],
-                })
+                }
+                if log.get("retracted_at"):
+                    item["retracted_at"] = log["retracted_at"]
+                logs.append(item)
 
             return {"logs": logs}
 
