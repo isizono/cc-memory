@@ -658,18 +658,388 @@ class TestMaterialRelations:
         assert "tags" in mat_entry
         assert isinstance(mat_entry["tags"], list)
 
-    def test_material_self_reference_rejected(self, sample_entities):
-        """material-materialの自己参照はバリデーションで弾かれる"""
+    def test_material_self_reference_skipped(self, sample_entities):
+        """material-materialの自己参照はスキップされる（エラーにならない）"""
         e = sample_entities
         result = add_relation("material", e["m1"], [{"type": "material", "ids": [e["m1"]]}])
 
-        assert "error" in result
-        assert result["error"]["code"] == "UNSUPPORTED_RELATION"
+        assert "error" not in result
+        assert result["added"] == 0
 
-    def test_material_material_relation_rejected(self, sample_entities):
-        """material-material（異なるID）はバリデーションで弾かれる"""
+    def test_material_material_relation_success(self, sample_entities):
+        """material-material（異なるID）のrelatedリレーションが追加できる"""
         e = sample_entities
         result = add_relation("material", e["m1"], [{"type": "material", "ids": [e["m2"]]}])
 
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_remove_material_material_relation(self, sample_entities):
+        """material-materialリレーション削除が動作する"""
+        e = sample_entities
+        add_relation("material", e["m1"], [{"type": "material", "ids": [e["m2"]]}])
+
+        result = remove_relation("material", e["m1"], [{"type": "material", "ids": [e["m2"]]}])
+
+        assert "error" not in result
+        assert result["removed"] == 1
+
+
+def _create_decision(conn, topic_id, title="Test Decision"):
+    """テスト用decisionを作成する"""
+    cursor = conn.execute(
+        "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
+        (topic_id, title, f"Reason for {title}"),
+    )
+    return cursor.lastrowid
+
+
+def _create_log(conn, topic_id, title="Test Log"):
+    """テスト用discussion_logを作成する"""
+    cursor = conn.execute(
+        "INSERT INTO discussion_logs (topic_id, content) VALUES (?, ?)",
+        (topic_id, f"Content for {title}"),
+    )
+    return cursor.lastrowid
+
+
+@pytest.fixture
+def entities_with_decision_log(temp_db):
+    """テスト用のtopic, activity, material, decision, logを作成する"""
+    conn = get_connection()
+    try:
+        t1 = _create_topic(conn, "Topic A")
+        t2 = _create_topic(conn, "Topic B")
+        a1 = _create_activity(conn, "Activity X")
+        a2 = _create_activity(conn, "Activity Y")
+        m1 = _create_material(conn, "Material P")
+        m2 = _create_material(conn, "Material Q")
+        d1 = _create_decision(conn, t1, "Decision 1")
+        d2 = _create_decision(conn, t1, "Decision 2")
+        d3 = _create_decision(conn, t2, "Decision 3")
+        l1 = _create_log(conn, t1, "Log 1")
+        l2 = _create_log(conn, t2, "Log 2")
+        conn.commit()
+    finally:
+        conn.close()
+    return {
+        "t1": t1, "t2": t2,
+        "a1": a1, "a2": a2,
+        "m1": m1, "m2": m2,
+        "d1": d1, "d2": d2, "d3": d3,
+        "l1": l1, "l2": l2,
+    }
+
+
+class TestNewEntityTypeRelations:
+    """decision/logエンティティタイプのrelatedリレーションテスト"""
+
+    def test_decision_decision_related(self, entities_with_decision_log):
+        """decision↔decisionのrelatedリレーションが追加・削除できる"""
+        e = entities_with_decision_log
+        result = add_relation("decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}])
+        assert "error" not in result
+        assert result["added"] == 1
+
+        result = remove_relation("decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}])
+        assert "error" not in result
+        assert result["removed"] == 1
+
+    def test_log_log_related(self, entities_with_decision_log):
+        """log↔logのrelatedリレーションが追加・削除できる"""
+        e = entities_with_decision_log
+        result = add_relation("log", e["l1"], [{"type": "log", "ids": [e["l2"]]}])
+        assert "error" not in result
+        assert result["added"] == 1
+
+        result = remove_relation("log", e["l1"], [{"type": "log", "ids": [e["l2"]]}])
+        assert "error" not in result
+        assert result["removed"] == 1
+
+    def test_topic_decision_related(self, entities_with_decision_log):
+        """topic↔decisionのrelatedリレーションが追加できる"""
+        e = entities_with_decision_log
+        result = add_relation("topic", e["t1"], [{"type": "decision", "ids": [e["d1"]]}])
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_activity_log_related(self, entities_with_decision_log):
+        """activity↔logのrelatedリレーションが追加できる"""
+        e = entities_with_decision_log
+        result = add_relation("activity", e["a1"], [{"type": "log", "ids": [e["l1"]]}])
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_decision_material_related(self, entities_with_decision_log):
+        """decision↔materialのrelatedリレーションが追加できる"""
+        e = entities_with_decision_log
+        result = add_relation("decision", e["d1"], [{"type": "material", "ids": [e["m1"]]}])
+        assert "error" not in result
+        assert result["added"] == 1
+
+    def test_log_topic_related(self, entities_with_decision_log):
+        """log→topicのrelatedリレーション（逆方向指定）が追加できる"""
+        e = entities_with_decision_log
+        result = add_relation("log", e["l1"], [{"type": "topic", "ids": [e["t1"]]}])
+        assert "error" not in result
+        assert result["added"] == 1
+
+
+class TestSupersedes:
+    """supersedesリレーションのテスト"""
+
+    def test_supersedes_add_and_remove(self, entities_with_decision_log):
+        """decision→decisionのsupersedesリレーションが追加・削除できる"""
+        e = entities_with_decision_log
+        result = add_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result
+        assert result["added"] == 1
+
+        result = remove_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result
+        assert result["removed"] == 1
+
+    def test_supersedes_direct_cycle_rejected(self, entities_with_decision_log):
+        """supersedes直接循環（A→B, B→A）がCIRCULAR_SUPERSEDESエラーで拒否される"""
+        e = entities_with_decision_log
+        result = add_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result
+        assert result["added"] == 1
+
+        result = add_relation(
+            "decision", e["d2"], [{"type": "decision", "ids": [e["d1"]]}],
+            relation_type="supersedes",
+        )
         assert "error" in result
-        assert result["error"]["code"] == "UNSUPPORTED_RELATION"
+        assert result["error"]["code"] == "CIRCULAR_SUPERSEDES"
+
+    def test_supersedes_transitive_cycle_rejected(self, entities_with_decision_log):
+        """supersedes推移的循環（A→B, B→C, C→A）がCIRCULAR_SUPERSEDESエラーで拒否される"""
+        e = entities_with_decision_log
+        result = add_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result
+
+        result = add_relation(
+            "decision", e["d2"], [{"type": "decision", "ids": [e["d3"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result
+
+        result = add_relation(
+            "decision", e["d3"], [{"type": "decision", "ids": [e["d1"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "CIRCULAR_SUPERSEDES"
+
+    def test_supersedes_non_decision_source_rejected(self, entities_with_decision_log):
+        """supersedesのsource_typeがdecision以外の場合INVALID_RELATION_TYPEエラーになる"""
+        e = entities_with_decision_log
+        result = add_relation(
+            "topic", e["t1"], [{"type": "decision", "ids": [e["d1"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"
+
+    def test_supersedes_non_decision_target_rejected(self, entities_with_decision_log):
+        """supersedesのtarget_typeがdecision以外の場合INVALID_RELATION_TYPEエラーになる"""
+        e = entities_with_decision_log
+        result = add_relation(
+            "decision", e["d1"], [{"type": "topic", "ids": [e["t1"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"
+
+    def test_supersedes_idempotent(self, entities_with_decision_log):
+        """同じsupersedesペアを再追加してもエラーにならずadded=0が返る"""
+        e = entities_with_decision_log
+        result1 = add_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+        assert result1["added"] == 1
+
+        result2 = add_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result2
+        assert result2["added"] == 0
+
+    def test_supersedes_cycle_rollback(self, entities_with_decision_log):
+        """循環検出時にトランザクションがロールバックされ、同一バッチ内の先行追加も取り消される"""
+        e = entities_with_decision_log
+        # d1→d2 を先に追加
+        add_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+
+        # d2→d3 と d2→d1 を同一バッチで追加（d2→d1で循環検出）
+        result = add_relation(
+            "decision", e["d2"],
+            [{"type": "decision", "ids": [e["d3"], e["d1"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "CIRCULAR_SUPERSEDES"
+
+        # d2→d3も追加されていないことを確認（ロールバック）
+        conn = get_connection()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM decision_supersedes WHERE source_id = ? AND target_id = ?",
+                (e["d2"], e["d3"]),
+            ).fetchone()["cnt"]
+            assert count == 0
+        finally:
+            conn.close()
+
+    def test_supersedes_self_reference_skipped(self, entities_with_decision_log):
+        """supersedes自己参照はスキップされる（エラーにならない）"""
+        e = entities_with_decision_log
+        result = add_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d1"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result
+        assert result["added"] == 0
+
+    def test_remove_supersedes_non_decision_rejected(self, entities_with_decision_log):
+        """supersedes削除でsource_typeがdecision以外の場合エラーになる"""
+        e = entities_with_decision_log
+        result = remove_relation(
+            "topic", e["t1"], [{"type": "topic", "ids": [e["t2"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_RELATION_TYPE"
+
+    def test_remove_nonexistent_supersedes(self, entities_with_decision_log):
+        """存在しないsupersedesの削除はエラーにならずremoved=0が返る"""
+        e = entities_with_decision_log
+        result = remove_relation(
+            "decision", e["d1"], [{"type": "decision", "ids": [e["d2"]]}],
+            relation_type="supersedes",
+        )
+        assert "error" not in result
+        assert result["removed"] == 0
+
+
+class TestGetMapDecisionLogFilter:
+    """get_mapのdecision/logフィルタテスト"""
+
+    def test_get_map_excludes_decision_from_output(self, entities_with_decision_log):
+        """decision経由で走査するが、出力にdecisionが含まれない"""
+        e = entities_with_decision_log
+        # t1 - d1 - t2 のチェーン（t1→d1はrelated、d1→t2もrelated）
+        add_relation("topic", e["t1"], [{"type": "decision", "ids": [e["d1"]]}])
+        add_relation("decision", e["d1"], [{"type": "topic", "ids": [e["t2"]]}])
+
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=2)
+
+        assert "error" not in result
+        types_in_result = {ent["type"] for ent in result["entities"]}
+        assert "decision" not in types_in_result
+        # t1(depth=0) と t2(depth=2, decision経由) が含まれる
+        ids_in_result = {(ent["type"], ent["id"]) for ent in result["entities"]}
+        assert ("topic", e["t1"]) in ids_in_result
+        assert ("topic", e["t2"]) in ids_in_result
+
+    def test_get_map_excludes_log_from_output(self, entities_with_decision_log):
+        """log経由で走査するが、出力にlogが含まれない"""
+        e = entities_with_decision_log
+        # a1 - l1 - a2 のチェーン
+        add_relation("activity", e["a1"], [{"type": "log", "ids": [e["l1"]]}])
+        add_relation("activity", e["a2"], [{"type": "log", "ids": [e["l1"]]}])
+
+        result = get_map("activity", e["a1"], min_depth=0, max_depth=2)
+
+        assert "error" not in result
+        types_in_result = {ent["type"] for ent in result["entities"]}
+        assert "log" not in types_in_result
+        # a1(depth=0) と a2(depth=2, log経由) が含まれる
+        ids_in_result = {(ent["type"], ent["id"]) for ent in result["entities"]}
+        assert ("activity", e["a1"]) in ids_in_result
+        assert ("activity", e["a2"]) in ids_in_result
+
+    def test_get_map_decision_traversal_reaches_material(self, entities_with_decision_log):
+        """decision経由でmaterialに到達できる"""
+        e = entities_with_decision_log
+        # t1 - d1 - m1 のチェーン
+        add_relation("topic", e["t1"], [{"type": "decision", "ids": [e["d1"]]}])
+        add_relation("decision", e["d1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=2)
+
+        assert "error" not in result
+        ids_in_result = {(ent["type"], ent["id"]) for ent in result["entities"]}
+        assert ("material", e["m1"]) in ids_in_result
+        assert ("topic", e["t1"]) in ids_in_result
+
+    def test_get_map_decision_origin_returns_no_decision(self, entities_with_decision_log):
+        """decisionを起点にget_mapを実行すると、起点のdecision自体も出力から除外される"""
+        e = entities_with_decision_log
+        add_relation("decision", e["d1"], [{"type": "topic", "ids": [e["t1"]]}])
+
+        result = get_map("decision", e["d1"], min_depth=0, max_depth=1)
+
+        assert "error" not in result
+        types_in_result = {ent["type"] for ent in result["entities"]}
+        assert "decision" not in types_in_result
+        # depth=1のtopicだけ返る
+        ids_in_result = {(ent["type"], ent["id"]) for ent in result["entities"]}
+        assert ("topic", e["t1"]) in ids_in_result
+
+    def test_get_map_traverses_supersedes_edge(self, entities_with_decision_log):
+        """supersedes経由でdecisionに紐づくtopicに到達できる"""
+        e = entities_with_decision_log
+        # d2 supersedes d1、d1 related t1 のチェーン
+        add_relation(
+            "decision", e["d2"], [{"type": "decision", "ids": [e["d1"]]}],
+            relation_type="supersedes",
+        )
+        add_relation("decision", e["d1"], [{"type": "topic", "ids": [e["t1"]]}])
+
+        result = get_map("decision", e["d2"], min_depth=0, max_depth=2)
+
+        assert "error" not in result
+        # supersedes経由でd1に到達し、d1→t1のrelatedでt1に到達する
+        ids_in_result = {(ent["type"], ent["id"]) for ent in result["entities"]}
+        assert ("topic", e["t1"]) in ids_in_result
+        # decision自体は出力に含まれない
+        types_in_result = {ent["type"] for ent in result["entities"]}
+        assert "decision" not in types_in_result
+
+
+class TestFKLossImpact:
+    """FK制約がないことによる影響テスト"""
+
+    def test_nonexistent_id_relation_excluded_from_get_map(self, entities_with_decision_log):
+        """存在しないIDへのリレーション追加後、get_mapで正しく除外される"""
+        e = entities_with_decision_log
+        # 存在するtopicと存在しないtopicの両方にリレーションを追加
+        add_relation("topic", e["t1"], [{"type": "topic", "ids": [99999, e["t2"]]}])
+
+        result = get_map("topic", e["t1"], min_depth=1, max_depth=1)
+
+        assert "error" not in result
+        # 存在しないID 99999はカタログに含まれない
+        ids_in_result = {(ent["type"], ent["id"]) for ent in result["entities"]}
+        assert ("topic", 99999) not in ids_in_result
+        # 存在するt2は含まれる
+        assert ("topic", e["t2"]) in ids_in_result

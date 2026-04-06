@@ -738,14 +738,17 @@ def add_relation(
     - トピック同士を関連付け: add_relation("topic", 1, [{"type": "topic", "ids": [2, 3]}])
     - アクティビティとトピックを関連付け: add_relation("activity", 10, [{"type": "topic", "ids": [1]}])
     - 資材とアクティビティを関連付け: add_relation("material", 5, [{"type": "activity", "ids": [10]}])
+    - 決定事項とトピックを関連付け: add_relation("decision", 1, [{"type": "topic", "ids": [1]}])
     - 複数タイプを一度に: add_relation("topic", 1, [{"type": "topic", "ids": [2]}, {"type": "activity", "ids": [10, 11]}])
     - 依存関係を追加: add_relation("activity", 1, [{"type": "activity", "ids": [2]}], relation_type="depends_on")
+    - 上書き関係を追加: add_relation("decision", 2, [{"type": "decision", "ids": [1]}], relation_type="supersedes")
 
     Args:
-        source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
+        source_type: 起点エンティティのタイプ（"topic", "activity", "material", "decision", or "log"）
         source_id: 起点エンティティのID
-        targets: ターゲットリスト [{"type": "topic"|"activity"|"material", "ids": [int, ...]}, ...]
-        relation_type: リレーションタイプ（"related" or "depends_on"）。depends_onはactivity同士のみ有効。
+        targets: ターゲットリスト [{"type": "topic"|"activity"|"material"|"decision"|"log", "ids": [int, ...]}, ...]
+        relation_type: リレーションタイプ（"related", "depends_on", or "supersedes"）。
+            depends_onはactivity同士のみ、supersedesはdecision同士のみ有効。
 
     Returns:
         成功時: {"added": int}（実際に追加された件数。重複はカウントしない）
@@ -767,12 +770,14 @@ def remove_relation(
     典型的な使い方:
     - 関連リレーション削除: remove_relation("topic", 1, [{"type": "topic", "ids": [2]}])
     - 依存関係削除: remove_relation("activity", 1, [{"type": "activity", "ids": [2]}], relation_type="depends_on")
+    - 上書き関係削除: remove_relation("decision", 2, [{"type": "decision", "ids": [1]}], relation_type="supersedes")
 
     Args:
-        source_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
+        source_type: 起点エンティティのタイプ（"topic", "activity", "material", "decision", or "log"）
         source_id: 起点エンティティのID
-        targets: ターゲットリスト [{"type": "topic"|"activity"|"material", "ids": [int, ...]}, ...]
-        relation_type: リレーションタイプ（"related" or "depends_on"）。depends_onはactivity同士のみ有効。
+        targets: ターゲットリスト [{"type": "topic"|"activity"|"material"|"decision"|"log", "ids": [int, ...]}, ...]
+        relation_type: リレーションタイプ（"related", "depends_on", or "supersedes"）。
+            depends_onはactivity同士のみ、supersedesはdecision同士のみ有効。
 
     Returns:
         成功時: {"removed": int}（実際に削除された件数）
@@ -792,10 +797,11 @@ def get_map(
     リレーショングラフを走査し、到達可能エンティティのカタログを返す。
 
     再帰的にリレーションを辿り、指定深度範囲のエンティティをカタログ形式で返す。
+    decision/logノードはグラフ走査の経由ノードとして使用するが、返却カタログにはtopic/activity/materialのみ含める。
     check-in時の2次カタログと同じロジックを使用。
 
     Args:
-        entity_type: 起点エンティティのタイプ（"topic", "activity", or "material"）
+        entity_type: 起点エンティティのタイプ（"topic", "activity", "material", "decision", or "log"）
         entity_id: 起点エンティティのID
         min_depth: 最小深度（デフォルト: 0。0=起点自身を含む）
         max_depth: 最大深度（デフォルト: 2、上限: 10）
