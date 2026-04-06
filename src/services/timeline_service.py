@@ -1,0 +1,205 @@
+"""タイムラインサービス
+
+トピックまたはアクティビティに紐づくdecision・log・materialを時系列で返す。
+"""
+import logging
+from datetime import datetime
+
+from src.db import get_connection
+
+logger = logging.getLogger(__name__)
+
+VALID_ENTITY_TYPES = {"decision", "log", "material"}
+MAX_LIMIT = 100
+
+
+def get_timeline(
+    topic_id: int | None = None,
+    activity_id: int | None = None,
+    entity_types: list[str] | None = None,
+    before: str | None = None,
+    limit: int = 50,
+    order: str = "desc",
+) -> dict:
+    """トピックまたはアクティビティに紐づくdecision・log・materialを時系列で返す。
+
+    topic_idまたはactivity_idのいずれか一方を必須で指定する（排他）。
+    activity_id指定時はtopic_activity_relationsから関連topic_idsを取得し、
+    それらのtopic_idsに紐づくエンティティを集約する。
+
+    Args:
+        topic_id: トピックID（activity_idと排他）
+        activity_id: アクティビティID（topic_idと排他）
+        entity_types: 取得するエンティティ型のリスト（"decision","log","material"のサブセット、未指定で全型）
+        before: ページネーション用カーソル（ISO 8601形式のcreated_at、descでの前方ページネーション用）
+        limit: 取得件数上限（デフォルト50、最大100）
+        order: ソート方向（"desc"または"asc"、デフォルト"desc"）
+
+    Note:
+        beforeはdesc順での前方ページネーション用。asc順で次ページを取得するには
+        未対応（afterパラメータが必要だが現時点では未実装）。
+
+    Returns:
+        {items: [{id, type, title, created_at, replaces, replaced_by}], total}
+        totalはbefore条件に関係なく、entity_types・topic_id条件に合致する全件数を返す。
+    """
+    # --- バリデーション ---
+
+    # topic_id / activity_id 排他チェック
+    if topic_id is not None and activity_id is not None:
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "topic_id and activity_id are mutually exclusive",
+            }
+        }
+    if topic_id is None and activity_id is None:
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Either topic_id or activity_id is required",
+            }
+        }
+
+    # entity_types バリデーション
+    if entity_types is not None:
+        if not entity_types:
+            return {
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "entity_types must not be empty when specified",
+                }
+            }
+        invalid = set(entity_types) - VALID_ENTITY_TYPES
+        if invalid:
+            return {
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": f"Invalid entity_types: {sorted(invalid)}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
+                }
+            }
+
+    # before バリデーション
+    if before is not None:
+        try:
+            datetime.fromisoformat(before)
+        except (ValueError, TypeError):
+            return {
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": f"Invalid before value: '{before}'. Must be ISO 8601 format (e.g. '2025-01-01 00:00:00')",
+                }
+            }
+
+    # order バリデーション
+    if order not in ("asc", "desc"):
+        return {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": f"Invalid order: '{order}'. Must be 'asc' or 'desc'",
+            }
+        }
+
+    # limit クランプ
+    if limit < 1:
+        limit = 1
+    if limit > MAX_LIMIT:
+        limit = MAX_LIMIT
+
+    # 取得対象の型を決定
+    types = set(entity_types) if entity_types else VALID_ENTITY_TYPES
+
+    conn = get_connection()
+    try:
+        # --- topic_ids の解決 ---
+        if activity_id is not None:
+            rows = conn.execute(
+                "SELECT topic_id FROM topic_activity_relations WHERE activity_id = ?",
+                (activity_id,),
+            ).fetchall()
+            topic_ids = [row["topic_id"] for row in rows]
+            if not topic_ids:
+                return {"items": [], "total": 0}
+        else:
+            topic_ids = [topic_id]
+
+        placeholders = ",".join("?" * len(topic_ids))
+
+        # --- UNION ALL クエリ構築 ---
+        union_parts = []
+        params: list = []
+        count_parts = []
+        count_params: list = []
+
+        if "log" in types:
+            union_parts.append(
+                f"SELECT id, 'log' AS type, title, created_at FROM discussion_logs WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL"
+            )
+            params.extend(topic_ids)
+            count_parts.append(
+                f"SELECT id, created_at FROM discussion_logs WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL"
+            )
+            count_params.extend(topic_ids)
+
+        if "decision" in types:
+            union_parts.append(
+                f"SELECT id, 'decision' AS type, decision AS title, created_at FROM decisions WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL"
+            )
+            params.extend(topic_ids)
+            count_parts.append(
+                f"SELECT id, created_at FROM decisions WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL"
+            )
+            count_params.extend(topic_ids)
+
+        if "material" in types:
+            union_parts.append(
+                f"SELECT DISTINCT m.id, 'material' AS type, m.title, m.created_at FROM materials m JOIN topic_material_relations tmr ON m.id = tmr.material_id WHERE tmr.topic_id IN ({placeholders})"
+            )
+            params.extend(topic_ids)
+            count_parts.append(
+                f"SELECT DISTINCT m.id, m.created_at FROM materials m JOIN topic_material_relations tmr ON m.id = tmr.material_id WHERE tmr.topic_id IN ({placeholders})"
+            )
+            count_params.extend(topic_ids)
+
+        # before カーソル条件を外側のWHEREで適用
+        base_query = " UNION ALL ".join(union_parts)
+
+        # totalは常にbefore条件なしの全件数を返す
+        count_query = f"SELECT COUNT(*) FROM ({' UNION ALL '.join(count_parts)}) AS c"
+
+        if before:
+            query = f"SELECT id, type, title, created_at FROM ({base_query}) AS t WHERE t.created_at < ? ORDER BY t.created_at {order} LIMIT ?"
+            params.append(before)
+            params.append(limit)
+        else:
+            query = f"SELECT id, type, title, created_at FROM ({base_query}) AS t ORDER BY t.created_at {order} LIMIT ?"
+            params.append(limit)
+
+        # --- クエリ実行 ---
+        rows = conn.execute(query, params).fetchall()
+        total_row = conn.execute(count_query, count_params).fetchone()
+        total = total_row[0] if total_row else 0
+
+        items = [
+            {
+                "id": row["id"],
+                "type": row["type"],
+                "title": row["title"],
+                "created_at": row["created_at"],
+                "replaces": None,
+                "replaced_by": None,
+            }
+            for row in rows
+        ]
+
+        return {"items": items, "total": total}
+
+    except Exception as e:
+        return {
+            "error": {
+                "code": "DATABASE_ERROR",
+                "message": str(e),
+            }
+        }
+    finally:
+        conn.close()

@@ -857,7 +857,7 @@ def test_search_methods_used_empty_results(temp_db):
 
 def test_search_trigger_sync_material(temp_db):
     """materialがsearch_indexに同期される"""
-    add_material(title="トリガー同期素材検索テスト", content="素材の内容テスト", tags=DEFAULT_TAGS)
+    add_material(title="トリガー同期素材検索テスト", content="素材の内容テスト", tags=DEFAULT_TAGS, source="テスト用データ")
     result = search_service.search(keyword="トリガー同期素材検索テスト")
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -867,7 +867,7 @@ def test_search_trigger_sync_material(temp_db):
 
 def test_search_entity_type_material(temp_db):
     """entity_type=materialでmaterialのみ取得"""
-    add_material(title="素材フィルタ対象テスト", content="素材の内容", tags=DEFAULT_TAGS)
+    add_material(title="素材フィルタ対象テスト", content="素材の内容", tags=DEFAULT_TAGS, source="テスト用データ")
     result = search_service.search(keyword="素材フィルタ対象テスト", entity_type="material")
     assert "error" not in result
     for item in result["results"]:
@@ -877,7 +877,7 @@ def test_search_entity_type_material(temp_db):
 def test_search_cross_type_includes_material(temp_db):
     """横断検索にmaterialも含まれる"""
     topic = add_topic(title="横断素材検索テスト用", description="テスト", tags=DEFAULT_TAGS)
-    add_material(title="横断素材検索テスト対象素材", content="素材内容", tags=DEFAULT_TAGS)
+    add_material(title="横断素材検索テスト対象素材", content="素材内容", tags=DEFAULT_TAGS, source="テスト用データ")
     add_decision(topic_id=topic["topic_id"], decision="横断素材検索テスト決定", reason="テスト")
     result = search_service.search(keyword="横断素材検索テスト")
     assert "error" not in result
@@ -887,7 +887,7 @@ def test_search_cross_type_includes_material(temp_db):
 
 def test_search_material_by_content(temp_db):
     """materialのcontentでも検索がヒットする"""
-    add_material(title="タイトル", content="素材コンテンツ検索対象のユニーク文字列", tags=DEFAULT_TAGS)
+    add_material(title="タイトル", content="素材コンテンツ検索対象のユニーク文字列", tags=DEFAULT_TAGS, source="テスト用データ")
     result = search_service.search(keyword="素材コンテンツ検索対象のユニーク文字列")
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -902,7 +902,7 @@ def test_search_material_by_content(temp_db):
 
 def test_search_snippet_material_title_priority(temp_db):
     """materialのsnippetはtitle優先表示（"title: content..." 形式）"""
-    add_material(title="設計書", content="ここに設計の内容が入ります", tags=DEFAULT_TAGS)
+    add_material(title="設計書", content="ここに設計の内容が入ります", tags=DEFAULT_TAGS, source="テスト用データ")
     result = search_service.search(keyword="設計書", entity_type="material")
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -915,7 +915,7 @@ def test_search_snippet_material_title_priority(temp_db):
 def test_search_snippet_material_max_length(temp_db):
     """materialのsnippetはSNIPPET_MAX_LEN以下に収まる"""
     long_content = "あ" * 300
-    add_material(title="長コンテンツテスト素材", content=long_content, tags=DEFAULT_TAGS)
+    add_material(title="長コンテンツテスト素材", content=long_content, tags=DEFAULT_TAGS, source="テスト用データ")
     result = search_service.search(keyword="長コンテンツテスト素材", entity_type="material")
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -931,7 +931,7 @@ def test_search_snippet_material_max_length(temp_db):
 def test_search_material_tag_filter_own_tags(temp_db):
     """materialは自身のタグでタグフィルタされる"""
     add_material(title="タグフィルタテスト素材対象", content="素材の内容",
-                 tags=["domain:test", "intent:design"])
+                 tags=["domain:test", "intent:design"], source="テスト用データ")
     result = search_service.search(keyword="タグフィルタテスト素材対象", tags=["intent:design"])
     assert "error" not in result
     types = [r["type"] for r in result["results"]]
@@ -941,7 +941,7 @@ def test_search_material_tag_filter_own_tags(temp_db):
 def test_search_material_tag_filter_excludes(temp_db):
     """materialにないタグでフィルタすると除外される"""
     add_material(title="タグ除外テスト素材対象", content="素材の内容",
-                 tags=["domain:test"])
+                 tags=["domain:test"], source="テスト用データ")
     result = search_service.search(keyword="タグ除外テスト素材対象", tags=["domain:other"])
     assert "error" not in result
     # domain:other は存在しないのでヒットしない
@@ -951,7 +951,7 @@ def test_search_material_tag_filter_excludes(temp_db):
 def test_search_material_tags_in_results(temp_db):
     """search結果のmaterialに自身のtagsが含まれること"""
     add_material(title="素材タグ表示テスト対象", content="素材の内容",
-                 tags=["domain:test", "intent:implement"])
+                 tags=["domain:test", "intent:implement"], source="テスト用データ")
     result = search_service.search(keyword="素材タグ表示テスト対象")
     assert "error" not in result
     assert len(result["results"]) >= 1
@@ -968,7 +968,7 @@ def test_search_material_tags_in_results(temp_db):
 
 def test_get_by_ids_single_material(temp_db):
     """get_by_ids: materialの詳細取得（1件）"""
-    material = add_material(title="詳細取得テスト素材", content="素材本文テスト", tags=["domain:test"])
+    material = add_material(title="詳細取得テスト素材", content="素材本文テスト", tags=["domain:test"], source="テスト用データ")
     result = search_service.get_by_ids([{"type": "material", "id": material["material_id"]}])
     assert len(result["results"]) == 1
     item = result["results"][0]

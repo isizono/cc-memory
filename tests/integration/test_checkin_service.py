@@ -123,23 +123,23 @@ class TestCheckIn:
         assert result["materials"] == []
 
     def test_check_in_with_materials(self, activity_id):
-        """materialsがある場合、relationsテーブル経由でカタログ形式で返る"""
-        m1 = add_material("設計書", "# 設計\n詳細内容", ["domain:test"],
-                          related=[{"type": "activity", "ids": [activity_id]}])
-        m2 = add_material("調査結果", "# 調査\n結果内容", ["domain:test"],
+        """materialsがある場合、activity_material_relations経由でカタログ形式で返る"""
+        m2 = add_material("調査結果", "# 調査\n結果内容", ["domain:test"], "テスト用データ",
                           related=[{"type": "activity", "ids": [activity_id]}])
 
         result = check_in(activity_id)
 
         assert "error" not in result
         assert len(result["materials"]) == 2
-        # カタログ形式: id, title, snippet, created_at（contentなし）
+        # カタログ形式: id, title, snippet, source, created_at（contentなし）
         for m in result["materials"]:
             assert "id" in m
             assert "title" in m
             assert "snippet" in m
+            assert "source" in m
             assert "created_at" in m
             assert "content" not in m
+            assert m["source"] == "テスト用データ"
         # snippetの値が正しい
         assert result["materials"][0]["snippet"] == "# 設計\n詳細内容"
         assert result["materials"][1]["snippet"] == "# 調査\n結果内容"
@@ -147,7 +147,7 @@ class TestCheckIn:
     def test_check_in_materials_snippet_truncated(self, activity_id):
         """materialsのsnippetが200文字に切り詰められる"""
         long_content = "あ" * 250
-        add_material("長い資材", long_content, ["domain:test"],
+        add_material("長い資材", long_content, ["domain:test"], "テスト用データ",
                       related=[{"type": "activity", "ids": [activity_id]}])
 
         result = check_in(activity_id)
@@ -422,8 +422,8 @@ class TestCheckInCoverage:
 
     def test_coverage_with_materials(self, activity_id):
         """materialsがある場合、coverageの分母に件数が反映される"""
-        add_material("資材1", "内容1", DEFAULT_TAGS, related=[{"type": "activity", "ids": [activity_id]}])
-        add_material("資材2", "内容2", DEFAULT_TAGS, related=[{"type": "activity", "ids": [activity_id]}])
+        add_material("資材1", "内容1", DEFAULT_TAGS, "テスト用データ", related=[{"type": "activity", "ids": [activity_id]}])
+        add_material("資材2", "内容2", DEFAULT_TAGS, "テスト用データ", related=[{"type": "activity", "ids": [activity_id]}])
 
         result = check_in(activity_id)
 
@@ -713,7 +713,7 @@ class TestCheckInPinned:
     def test_pinned_material_in_pinned_field(self, temp_db):
         """pinされたmaterialがpinned.materialsにcontent付きで返る"""
         a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
-        m = add_material("設計書", "# 設計\n詳細な内容", DEFAULT_TAGS,
+        m = add_material("設計書", "# 設計\n詳細な内容", DEFAULT_TAGS, "テスト用データ",
                          related=[{"type": "activity", "ids": [a["activity_id"]]}])
         update_pin("material", m["material_id"], True)
 
@@ -724,13 +724,14 @@ class TestCheckInPinned:
         assert len(result["pinned"]["materials"]) == 1
         assert result["pinned"]["materials"][0]["title"] == "設計書"
         assert result["pinned"]["materials"][0]["content"] == "# 設計\n詳細な内容"
+        assert result["pinned"]["materials"][0]["source"] == "テスト用データ"
 
     def test_pinned_material_excluded_from_materials(self, temp_db):
         """pinされたmaterialは通常のmaterialsフィールドから除外される"""
         a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
-        m1 = add_material("pin資材", "内容1", DEFAULT_TAGS,
+        m1 = add_material("pin資材", "内容1", DEFAULT_TAGS, "テスト用データ",
                           related=[{"type": "activity", "ids": [a["activity_id"]]}])
-        add_material("通常資材", "内容2", DEFAULT_TAGS,
+        add_material("通常資材", "内容2", DEFAULT_TAGS, "テスト用データ",
                      related=[{"type": "activity", "ids": [a["activity_id"]]}])
         update_pin("material", m1["material_id"], True)
 
@@ -775,9 +776,9 @@ class TestCheckInPinned:
     def test_coverage_includes_pinned_materials(self, temp_db):
         """coverageのmaterials分子にpinned件数が加算される"""
         a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
-        m1 = add_material("pin資材", "内容1", DEFAULT_TAGS,
+        m1 = add_material("pin資材", "内容1", DEFAULT_TAGS, "テスト用データ",
                           related=[{"type": "activity", "ids": [a["activity_id"]]}])
-        add_material("通常資材", "内容2", DEFAULT_TAGS,
+        add_material("通常資材", "内容2", DEFAULT_TAGS, "テスト用データ",
                      related=[{"type": "activity", "ids": [a["activity_id"]]}])
         update_pin("material", m1["material_id"], True)
 
@@ -794,7 +795,7 @@ class TestCheckInPinned:
         log = add_log(topic_id=topic["topic_id"], title="重要ログ", content="内容")
         a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
         add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [topic["topic_id"]]}])
-        m = add_material("重要資材", "内容", DEFAULT_TAGS,
+        m = add_material("重要資材", "内容", DEFAULT_TAGS, "テスト用データ",
                          related=[{"type": "activity", "ids": [a["activity_id"]]}])
         update_pin("decision", d["decision_id"], True)
         update_pin("log", log["log_id"], True)

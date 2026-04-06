@@ -1623,6 +1623,7 @@ def test_include_details_true_material_no_details(temp_db, mock_embedding_model)
         title="マテリアル詳細テスト用素材",
         content="素材の本文内容",
         tags=DEFAULT_TAGS,
+        source="テスト用データ",
     )
 
     result = search_service.search(

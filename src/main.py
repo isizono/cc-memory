@@ -14,6 +14,7 @@ from src.services import (
     relation_service,
     pin_service,
     retract_service,
+    timeline_service,
 )
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import search_tags as _search_tags, update_tag as _update_tag, collect_tag_notes_for_injection
@@ -619,6 +620,7 @@ def add_material(
     title: str,
     content: str,
     tags: list[str],
+    source: str,
     related: list[dict] | None = None,
 ) -> dict:
     """
@@ -629,20 +631,21 @@ def add_material(
     決定事項と違って「双方の合意」が不要。成果物が出た時点でユーザーに確認せず呼ぶ。
 
     典型的な使い方:
-    - 設計ドキュメントを保存: add_material("API設計書", "# API設計\n...", ["domain:cc-memory", "intent:design"])
-    - 調査結果を保存: add_material("既存実装の調査結果", "## 調査結果\n...", ["domain:cc-memory", "調査"])
-    - アクティビティと紐付け: add_material("設計書", "...", ["domain:cc-memory"], related=[{"type": "activity", "ids": [123]}])
+    - 設計ドキュメントを保存: add_material("API設計書", "# API設計\n...", ["domain:cc-memory", "intent:design"], "コード調査")
+    - 調査結果を保存: add_material("既存実装の調査結果", "## 調査結果\n...", ["domain:cc-memory", "調査"], "公式ドキュメント")
+    - アクティビティと紐付け: add_material("設計書", "...", ["domain:cc-memory"], "ユーザー発言", related=[{"type": "activity", "ids": [123]}])
 
     Args:
         title: 資材のタイトル
         content: 資材の本文（マークダウン形式推奨）。先頭1-2文は内容の説明・要約を書くこと（check-in時にsnippetとして表示される）
         tags: タグ配列（必須、1個以上）。domain:タグに加えて内容を表すタグも付けること。namespace: domain:(プロジェクト)/intent:(意図)/素タグ(キーワード)
+        source: データの出自。典型的なソース種類: ユーザー発言、公式ドキュメント、コード調査、計測結果、外部記事、チーム議事録など。事実と推論が混在する場合はcontent内で明示的に区別すること
         related: 関連エンティティ（optional）。[{"type": "topic"|"activity", "ids": [int, ...]}] 形式。作成と同時にリレーションを張る
 
     Returns:
-        作成された資材情報（material_id, title, content, tags, created_at）
+        作成された資材情報（material_id, title, content, source, tags, created_at）
     """
-    return material_service.add_material(title, content, tags, related=related)
+    return material_service.add_material(title, content, tags, source, related=related)
 
 
 @mcp.tool()
@@ -651,9 +654,10 @@ def update_material(
     content: str | None = None,
     title: str | None = None,
     tags: list[str] | None = None,
+    source: str | None = None,
 ) -> dict:
     """
-    既存の資材を更新する。content、title、tagsを個別または同時に更新できる。
+    既存の資材を更新する。content、title、tags、sourceを個別または同時に更新できる。
 
     contentは全体置換（部分更新やappendではない）。
     tagsは全置換（指定時は既存タグを全削除して新しいタグに置き換える）。
@@ -663,6 +667,7 @@ def update_material(
     - 内容を改訂: update_material(material_id=5, content="# 改訂版\n...")
     - タイトル変更: update_material(material_id=5, title="新しいタイトル")
     - タグ変更: update_material(material_id=5, tags=["domain:cc-memory", "design"])
+    - ソース更新: update_material(material_id=5, source="公式ドキュメント")
     - 複数同時: update_material(material_id=5, content="...", title="...", tags=["..."])
 
     Args:
@@ -670,11 +675,12 @@ def update_material(
         content: 新しい本文（全体置換。optional）。先頭1-2文は内容の説明・要約を書くこと（check-inやsearchのsnippetに使われるため）
         title: 新しいタイトル（optional）
         tags: 新しいタグ配列（指定時は全置換。1個以上必須。optional）
+        source: 新しいソース（optional）
 
     Returns:
         更新された資材情報
     """
-    return material_service.update_material(material_id, content=content, title=title, tags=tags)
+    return material_service.update_material(material_id, content=content, title=title, tags=tags, source=source)
 
 
 @mcp.tool()
@@ -690,7 +696,7 @@ def get_material(
         material_id: 資材のID
 
     Returns:
-        資材の全文情報（material_id, title, content, tags, created_at）
+        資材の全文情報（material_id, title, content, source, tags, created_at）
     """
     return material_service.get_material(material_id)
 
@@ -854,6 +860,32 @@ def retract(entity_type: str, ids: list[int], undo: bool = False) -> dict:
         undo: True=取り消しを元に戻す（un-retract）、False=取り消す（retract）
     """
     return retract_service.retract(entity_type, ids, undo)
+
+
+@mcp.tool()
+def get_timeline(
+    topic_id: int | None = None,
+    activity_id: int | None = None,
+    entity_types: list[str] | None = None,
+    before: str | None = None,
+    limit: int = 50,
+    order: str = "desc",
+) -> dict:
+    """トピックまたはアクティビティに紐づくdecision・log・materialを時系列で返す。
+
+    Args:
+        topic_id: トピックID（activity_idと排他）
+        activity_id: アクティビティID（topic_idと排他）
+        entity_types: 取得するエンティティ型のリスト（"decision","log","material"のサブセット、未指定で全型）
+        before: ページネーション用カーソル（ISO 8601形式のcreated_at）
+        limit: 取得件数上限（デフォルト50、最大100）
+        order: ソート方向（"desc"または"asc"、デフォルト"desc"）
+    """
+    return timeline_service.get_timeline(
+        topic_id=topic_id, activity_id=activity_id,
+        entity_types=entity_types, before=before,
+        limit=limit, order=order,
+    )
 
 
 @mcp.tool()
