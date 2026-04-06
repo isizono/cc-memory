@@ -159,8 +159,8 @@ class TestGetTimelineByTopicId:
             assert "replaces" in item
             assert "replaced_by" in item
 
-    def test_replaces_and_replaced_by_are_null(self, topic_with_data):
-        """Phase 1ではreplaces/replaced_byは常にnull"""
+    def test_replaces_and_replaced_by_null_without_supersedes(self, topic_with_data):
+        """supersedes関係がないエンティティのreplaces/replaced_byはnull"""
         result = get_timeline(topic_id=topic_with_data["topic_id"])
         for item in result["items"]:
             assert item["replaces"] is None
@@ -597,3 +597,104 @@ class TestMixedTimeline:
         assert result["items"][1]["type"] == "decision"
         assert result["items"][2]["title"] == "資材C"
         assert result["items"][2]["type"] == "material"
+
+
+class TestSupersedes:
+    """decision_supersedesによるreplaces/replaced_byの表示"""
+
+    def test_decision_replaces_shows_target(self, topic):
+        """supersedesのsource側decisionのreplacesにtarget情報が入る"""
+        tid = topic["topic_id"]
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO decisions (id, topic_id, decision, reason) VALUES (?, ?, ?, ?)",
+                (1001, tid, "旧決定", "理由"),
+            )
+            conn.execute(
+                "INSERT INTO decisions (id, topic_id, decision, reason) VALUES (?, ?, ?, ?)",
+                (1002, tid, "新決定", "理由"),
+            )
+            conn.execute(
+                "INSERT INTO decision_supersedes (source_id, target_id) VALUES (?, ?)",
+                (1002, 1001),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = get_timeline(topic_id=tid, entity_types=["decision"])
+        items_by_id = {item["id"]: item for item in result["items"]}
+
+        # 新決定(source)は旧決定(target)をreplaces
+        assert items_by_id[1002]["replaces"] == {"type": "decision", "id": 1001}
+        assert items_by_id[1002]["replaced_by"] is None
+
+    def test_decision_replaced_by_shows_source(self, topic):
+        """supersedesのtarget側decisionのreplaced_byにsource情報が入る"""
+        tid = topic["topic_id"]
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO decisions (id, topic_id, decision, reason) VALUES (?, ?, ?, ?)",
+                (2001, tid, "旧決定", "理由"),
+            )
+            conn.execute(
+                "INSERT INTO decisions (id, topic_id, decision, reason) VALUES (?, ?, ?, ?)",
+                (2002, tid, "新決定", "理由"),
+            )
+            conn.execute(
+                "INSERT INTO decision_supersedes (source_id, target_id) VALUES (?, ?)",
+                (2002, 2001),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = get_timeline(topic_id=tid, entity_types=["decision"])
+        items_by_id = {item["id"]: item for item in result["items"]}
+
+        # 旧決定(target)は新決定(source)にreplaced_by
+        assert items_by_id[2001]["replaced_by"] == {"type": "decision", "id": 2002}
+        assert items_by_id[2001]["replaces"] is None
+
+    def test_log_and_material_replaces_null_even_with_supersedes(self, topic):
+        """supersedes関係を持つdecisionが存在してもlog/materialのreplaces/replaced_byはnull"""
+        tid = topic["topic_id"]
+
+        # supersedes関係のあるdecisionを作成
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO decisions (id, topic_id, decision, reason) VALUES (?, ?, ?, ?)",
+                (3001, tid, "旧決定", "理由"),
+            )
+            conn.execute(
+                "INSERT INTO decisions (id, topic_id, decision, reason) VALUES (?, ?, ?, ?)",
+                (3002, tid, "新決定", "理由"),
+            )
+            conn.execute(
+                "INSERT INTO decision_supersedes (source_id, target_id) VALUES (?, ?)",
+                (3002, 3001),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        add_logs([{"topic_id": tid, "content": "テストログ", "title": "ログ"}])
+        add_material(
+            title="テスト資材",
+            content="内容",
+            tags=DEFAULT_TAGS,
+            source="テスト用データ",
+            related=[{"type": "topic", "ids": [tid]}],
+        )
+
+        result = get_timeline(topic_id=tid)
+        non_decision_items = [i for i in result["items"] if i["type"] != "decision"]
+        assert len(non_decision_items) == 2
+        for item in non_decision_items:
+            assert item["replaces"] is None
+            assert item["replaced_by"] is None

@@ -133,7 +133,7 @@ def get_timeline(
 
         if "log" in types:
             union_parts.append(
-                f"SELECT id, 'log' AS type, title, created_at FROM discussion_logs WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL"
+                f"SELECT id, 'log' AS type, title, created_at, NULL AS replaces_id, NULL AS replaced_by_id FROM discussion_logs WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL"
             )
             params.extend(topic_ids)
             count_parts.append(
@@ -142,8 +142,14 @@ def get_timeline(
             count_params.extend(topic_ids)
 
         if "decision" in types:
+            # supersedes関係はスカラー（1:1前提）で返す。
+            # decision_supersedesは多対多のスキーマだが、APIレスポンスのreplaces/replaced_byは
+            # D#1874で{type, id}のスカラーと定義されているため、最新の1件のみ返す。
             union_parts.append(
-                f"SELECT id, 'decision' AS type, decision AS title, created_at FROM decisions WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL"
+                f"SELECT d.id, 'decision' AS type, d.decision AS title, d.created_at,"
+                f" (SELECT target_id FROM decision_supersedes WHERE source_id = d.id ORDER BY created_at DESC LIMIT 1) AS replaces_id,"
+                f" (SELECT source_id FROM decision_supersedes WHERE target_id = d.id ORDER BY created_at DESC LIMIT 1) AS replaced_by_id"
+                f" FROM decisions d WHERE d.topic_id IN ({placeholders}) AND d.retracted_at IS NULL"
             )
             params.extend(topic_ids)
             count_parts.append(
@@ -153,7 +159,7 @@ def get_timeline(
 
         if "material" in types:
             union_parts.append(
-                f"SELECT DISTINCT m.id, 'material' AS type, m.title, m.created_at FROM materials m JOIN relations r ON r.source_type = 'material' AND r.source_id = m.id AND r.target_type = 'topic' AND r.target_id IN ({placeholders})"
+                f"SELECT DISTINCT m.id, 'material' AS type, m.title, m.created_at, NULL AS replaces_id, NULL AS replaced_by_id FROM materials m JOIN relations r ON r.source_type = 'material' AND r.source_id = m.id AND r.target_type = 'topic' AND r.target_id IN ({placeholders})"
             )
             params.extend(topic_ids)
             count_parts.append(
@@ -168,11 +174,11 @@ def get_timeline(
         count_query = f"SELECT COUNT(*) FROM ({' UNION ALL '.join(count_parts)}) AS c"
 
         if before:
-            query = f"SELECT id, type, title, created_at FROM ({base_query}) AS t WHERE t.created_at < ? ORDER BY t.created_at {order} LIMIT ?"
+            query = f"SELECT id, type, title, created_at, replaces_id, replaced_by_id FROM ({base_query}) AS t WHERE t.created_at < ? ORDER BY t.created_at {order} LIMIT ?"
             params.append(before)
             params.append(limit)
         else:
-            query = f"SELECT id, type, title, created_at FROM ({base_query}) AS t ORDER BY t.created_at {order} LIMIT ?"
+            query = f"SELECT id, type, title, created_at, replaces_id, replaced_by_id FROM ({base_query}) AS t ORDER BY t.created_at {order} LIMIT ?"
             params.append(limit)
 
         # --- クエリ実行 ---
@@ -186,8 +192,8 @@ def get_timeline(
                 "type": row["type"],
                 "title": row["title"],
                 "created_at": row["created_at"],
-                "replaces": None,
-                "replaced_by": None,
+                "replaces": {"type": "decision", "id": row["replaces_id"]} if row["replaces_id"] else None,
+                "replaced_by": {"type": "decision", "id": row["replaced_by_id"]} if row["replaced_by_id"] else None,
             }
             for row in rows
         ]
