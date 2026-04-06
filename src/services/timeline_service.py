@@ -114,10 +114,10 @@ def get_timeline(
         # --- topic_ids の解決 ---
         if activity_id is not None:
             rows = conn.execute(
-                "SELECT topic_id FROM topic_activity_relations WHERE activity_id = ?",
+                "SELECT target_id FROM relations WHERE source_type = 'activity' AND source_id = ? AND target_type = 'topic'",
                 (activity_id,),
             ).fetchall()
-            topic_ids = [row["topic_id"] for row in rows]
+            topic_ids = [row["target_id"] for row in rows]
             if not topic_ids:
                 return {"items": [], "total": 0}
         else:
@@ -153,11 +153,11 @@ def get_timeline(
 
         if "material" in types:
             union_parts.append(
-                f"SELECT DISTINCT m.id, 'material' AS type, m.title, m.created_at FROM materials m JOIN topic_material_relations tmr ON m.id = tmr.material_id WHERE tmr.topic_id IN ({placeholders})"
+                f"SELECT DISTINCT m.id, 'material' AS type, m.title, m.created_at FROM materials m JOIN relations r ON r.source_type = 'material' AND r.source_id = m.id AND r.target_type = 'topic' AND r.target_id IN ({placeholders})"
             )
             params.extend(topic_ids)
             count_parts.append(
-                f"SELECT DISTINCT m.id, m.created_at FROM materials m JOIN topic_material_relations tmr ON m.id = tmr.material_id WHERE tmr.topic_id IN ({placeholders})"
+                f"SELECT DISTINCT m.id, m.created_at FROM materials m JOIN relations r ON r.source_type = 'material' AND r.source_id = m.id AND r.target_type = 'topic' AND r.target_id IN ({placeholders})"
             )
             count_params.extend(topic_ids)
 

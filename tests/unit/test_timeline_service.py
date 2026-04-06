@@ -62,6 +62,7 @@ def topic_with_data(topic):
         title="テスト資材1",
         content="資材の内容",
         tags=DEFAULT_TAGS,
+        source="テスト用データ",
         related=[{"type": "topic", "ids": [tid]}],
     )
 
@@ -547,6 +548,7 @@ class TestMaterialDedup:
             title="共有資材",
             content="共有の内容",
             tags=DEFAULT_TAGS,
+            source="テスト用データ",
             related=[{"type": "topic", "ids": [tid1, tid2]}],
         )
 
@@ -573,15 +575,15 @@ class TestMixedTimeline:
                 "INSERT INTO decisions (topic_id, decision, reason, created_at) VALUES (?, ?, ?, ?)",
                 (tid, "決定B", "理由", "2025-02-01 00:00:00"),
             )
-            # material: topic_material_relationsを直接作成
+            # material: relationsテーブルを直接作成（正規化: 'material' < 'topic'）
             cursor = conn.execute(
-                "INSERT INTO materials (title, content, created_at) VALUES (?, ?, ?)",
-                ("資材C", "内容", "2025-03-01 00:00:00"),
+                "INSERT INTO materials (title, content, source, created_at) VALUES (?, ?, ?, ?)",
+                ("資材C", "内容", "テスト用データ", "2025-03-01 00:00:00"),
             )
             mat_id = cursor.lastrowid
             conn.execute(
-                "INSERT INTO topic_material_relations (topic_id, material_id) VALUES (?, ?)",
-                (tid, mat_id),
+                "INSERT INTO relations (source_type, source_id, target_type, target_id) VALUES ('material', ?, 'topic', ?)",
+                (mat_id, tid),
             )
             conn.commit()
         finally:
