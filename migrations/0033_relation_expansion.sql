@@ -1,6 +1,6 @@
--- Migration 032: リレーションテーブル統合 + decision_supersedes新設
+-- Migration 033: リレーションテーブル統合 + decision_supersedes新設
 --
--- depends: 0031_add_retracted_at
+-- depends: 0032_add_material_source
 --
 -- 背景:
 --   旧スキーマでは5つの個別リレーションテーブル（topic_relations,
