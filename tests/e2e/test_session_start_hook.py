@@ -136,7 +136,7 @@ class TestSessionStartHookBasic:
         assert "additionalContext" in result["hookSpecificOutput"]
 
     def test_empty_db_returns_static_guide_only(self, temp_db):
-        """データが空の場合、静的な検索フローガイドのみ出力される"""
+        """データが空の場合、静的なコンテキスト取得フローガイドのみ出力される"""
         # 初期データを削除
         conn = get_connection()
         try:
@@ -150,8 +150,8 @@ class TestSessionStartHookBasic:
         result = _run_session_start_hook(temp_db)
 
         context = result["hookSpecificOutput"]["additionalContext"]
-        assert "検索フロー" in context
-        assert "アクティビティ一覧" not in context
+        assert "コンテキスト取得フロー" in context
+        assert "# アクティビティ一覧" not in context
         assert "振る舞い" not in context
 
 
@@ -287,19 +287,6 @@ class TestSessionStartHookHabits:
         context = result["hookSpecificOutput"]["additionalContext"]
 
         assert "無効な振る舞い" not in context
-
-
-class TestSessionStartHookFooter:
-    """フッターの確認"""
-
-    def test_footer_present_when_content_exists(self, temp_db):
-        """コンテンツがある場合、フッターの案内文が含まれる"""
-        _seed_activity("[作業] フッターテスト用", status="in_progress")
-
-        result = _run_session_start_hook(temp_db)
-        context = result["hookSpecificOutput"]["additionalContext"]
-
-        assert "詳細はsearch / get_decisions / get_logs / check_in等で取得してください" in context
 
 
 class TestSessionStartHookErrorHandling:
