@@ -15,6 +15,7 @@ from src.services import (
     pin_service,
     retract_service,
     timeline_service,
+    harness_service,
 )
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import search_tags as _search_tags, update_tag as _update_tag, collect_tag_notes_for_injection
@@ -166,6 +167,9 @@ mcp = FastMCP("cc-memory", instructions=build_instructions())
 # セッション管理（HTTPモードで使用）
 _session_manager = None
 
+# ハーネス: 条件#4（整合性確認hint）のセッション内表示済みフラグ
+_shown_consistency_hint = False
+
 
 def get_session_manager():
     """現在のSessionManagerインスタンスを返す。HTTPモード以外ではNone。"""
@@ -241,6 +245,21 @@ def add_decisions(items: list[dict]) -> dict:
                 all_tags.update(item["tags"])
         if all_tags:
             _maybe_inject_tag_notes(result, list(all_tags))
+
+        # ハーネス: 推奨行動hintを注入
+        global _shown_consistency_hint
+        all_hints: list[str] = []
+        seen_topics: set[int] = set()
+        for item in items:
+            tid = item.get("topic_id")
+            if tid and tid not in seen_topics:
+                seen_topics.add(tid)
+                hints = harness_service.get_recommendations(tid, _shown_consistency_hint)
+                all_hints.extend(hints)
+        if all_hints:
+            result["hints"] = list(dict.fromkeys(all_hints))
+            if any(h == harness_service.HINT_CONSISTENCY_CHECK for h in all_hints):
+                _shown_consistency_hint = True
     return result
 
 

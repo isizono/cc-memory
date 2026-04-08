@@ -98,6 +98,46 @@ class TestRecordNudge:
         assert json.loads(result.stdout) == {}
 
 
+class TestRecordNudgeMultiplication:
+    """record nudge増殖: repeatフィールドに応じてメッセージが繰り返される"""
+
+    def test_repeat_2_doubles_message(self, state_dir):
+        """repeat=2 → メッセージが2回注入される"""
+        _write_events(
+            [{"e": "nudge", "type": "record", "turn": 4, "repeat": 2}],
+            state_dir,
+        )
+
+        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
+        output = json.loads(result.stdout)
+        ctx = output["hookSpecificOutput"]["additionalContext"]
+        assert ctx.count("記録が遅れています") == 2
+
+    def test_repeat_3_triples_message(self, state_dir):
+        """repeat=3 → メッセージが3回注入される"""
+        _write_events(
+            [{"e": "nudge", "type": "record", "turn": 6, "repeat": 3}],
+            state_dir,
+        )
+
+        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
+        output = json.loads(result.stdout)
+        ctx = output["hookSpecificOutput"]["additionalContext"]
+        assert ctx.count("記録が遅れています") == 3
+
+    def test_no_repeat_field_defaults_to_1(self, state_dir):
+        """repeatフィールドなし → メッセージ1回（後方互換）"""
+        _write_events(
+            [{"e": "nudge", "type": "record", "turn": 2}],
+            state_dir,
+        )
+
+        result = _run_hook({"session_id": _SESSION_ID}, state_dir)
+        output = json.loads(result.stdout)
+        ctx = output["hookSpecificOutput"]["additionalContext"]
+        assert ctx.count("記録が遅れています") == 1
+
+
 class TestFollowUpNudge:
     """follow_up nudgeイベント → system-reminder注入"""
 
@@ -115,6 +155,8 @@ class TestFollowUpNudge:
         ctx = output["hookSpecificOutput"]["additionalContext"]
         assert "決定事項" in ctx
         assert "topic" in ctx
+        assert "material" in ctx
+        assert "tag_notes" in ctx
 
     def test_follow_up_nudge_takes_priority(self, state_dir):
         """follow_up nudgeが最新なら、record nudgeより優先"""
