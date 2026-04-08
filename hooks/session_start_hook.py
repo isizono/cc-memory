@@ -3,7 +3,7 @@
 サービス層経由でDBからデータを取得し、セッション開始時のコンテキストを注入する。
 - アクティビティ一覧（active = in_progress + pending）
 - 振る舞い（active=1）
-- 検索フローガイダンス（静的テキスト）
+- コンテキスト取得フロー・補助ツール認知（静的テキスト）
 """
 import json
 import sys
@@ -236,15 +236,28 @@ def _build_snapshot_section(conn) -> str:
     return ""
 
 
-_SEARCH_FLOW_GUIDE = """\
-# 検索フロー
+_CONTEXT_FLOW_GUIDE = """\
+# コンテキスト取得フロー
 
-1. アクティブコンテキストにIDがあれば`get_by_ids`で直接取得する。なければ`search`で検索する
-2. `search`結果のsnippetを確認し、詳細が必要なものを`get_by_ids`でピンポイント取得する
-3. `get_by_ids`の典型ユースケース:
+1. ユーザーの発言やアクティビティ一覧から該当するものを判定し、`check_in`で作業コンテキストを取得する
+   - ぴったりなアクティビティがなければ`add_activity`で作成してからcheck-inする
+   - check-inするとtag_notes・資材・関連decisionsが一括で返り、statusも自動更新される
+   - 返ってきたsummaryフィールドはそのまま出力すること
+2. 特定エンティティの深掘りには`get_decisions`・`get_logs`を使う
+   （議論の詳細な経緯はlogsに入っていることが多い）
+3. キーワードベースの探索には`search`を使う。結果の詳細は`get_by_ids`でピンポイント取得する
+4. `get_by_ids`の典型ユースケース:
    - search結果からのチェリーピック（関連する上位N件をまとめて詳細取得）
    - ログ・decision内の参照先をまとめて取得
    - ユーザーがIDで「これ何？」と聞いたとき
+
+# 補助ツール・概念
+
+- `update_pin`: 重要なエンティティをピン留めする。check-in時に必ず返されるので、長期にわたって参照され続けるエンティティにはピン留めを自律的に行うこと
+  - 例: ユビキタス言語を定義したmaterial、方針を決定づけるdecision
+- `get_map`: トピックやアクティビティの関連構造を俯瞰できる。全体像の把握や探索に有用
+- `get_timeline`: エンティティの時系列変遷を追える。経緯を辿りたいときに有用
+- リレーションタイプ `supersedes`・`depends_on`（`add_relation`で設定）: 差し替えられたdecisionやブロッカーのあるアクティビティの管理に使う
 """
 
 
@@ -273,10 +286,9 @@ def _build_session_context() -> str:
                 pass
 
         # 静的セクション（DB不要）
-        sections.append(_SEARCH_FLOW_GUIDE)
+        sections.append(_CONTEXT_FLOW_GUIDE)
 
         context = "\n".join(sections)
-        context += "\n詳細はsearch / get_decisions / get_logs / check_in等で取得してください。"
         return context
 
     finally:
