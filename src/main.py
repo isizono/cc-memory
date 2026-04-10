@@ -1,7 +1,7 @@
 """MCPサーバーのメインエントリーポイント"""
 import logging
 import random
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from typing import Optional
 from src.services import (
     topic_service,
@@ -15,6 +15,7 @@ from src.services import (
     pin_service,
     retract_service,
     timeline_service,
+    harness_service,
 )
 from src.services.checkin_service import check_in as _check_in
 from src.services.tag_service import search_tags as _search_tags, update_tag as _update_tag, collect_tag_notes_for_injection
@@ -151,6 +152,9 @@ mcp = FastMCP("cc-memory", instructions=build_instructions())
 # セッション管理（HTTPモードで使用）
 _session_manager = None
 
+# ハーネス: 条件#4（整合性確認hint）のセッション別表示済みフラグ
+_shown_consistency_hints: set[str] = set()
+
 
 def get_session_manager():
     """現在のSessionManagerインスタンスを返す。HTTPモード以外ではNone。"""
@@ -202,7 +206,7 @@ def add_logs(items: list[dict]) -> dict:
 
 
 @mcp.tool()
-def add_decisions(items: list[dict]) -> dict:
+def add_decisions(items: list[dict], ctx: Context) -> dict:
     """複数の決定事項を一括記録する（最大10件）。
 
     items: 決定事項情報の配列。各要素は以下のキーを持つ:
@@ -226,6 +230,22 @@ def add_decisions(items: list[dict]) -> dict:
                 all_tags.update(item["tags"])
         if all_tags:
             _maybe_inject_tag_notes(result, list(all_tags))
+
+        # ハーネス: 推奨行動hintを注入
+        session_key = ctx.session_id or "__default__"
+        shown = session_key in _shown_consistency_hints
+        all_hints: list[str] = []
+        seen_topics: set[int] = set()
+        for item in items:
+            tid = item.get("topic_id")
+            if tid and tid not in seen_topics:
+                seen_topics.add(tid)
+                hints = harness_service.get_recommendations(tid, shown)
+                all_hints.extend(hints)
+        if all_hints:
+            result["hints"] = list(dict.fromkeys(all_hints))
+            if any(h == harness_service.HINT_CONSISTENCY_CHECK for h in all_hints):
+                _shown_consistency_hints.add(session_key)
     return result
 
 

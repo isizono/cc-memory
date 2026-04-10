@@ -538,13 +538,12 @@ class TestStateUpdatedOnApprove:
         assert offset_val == transcript.stat().st_size
 
 
-class TestRecordEscalation:
-    """record nudge escalation: 4ターン記録なしでblock"""
+class TestRecordNudgeMultiplication:
+    """record nudge増殖: 記録なしターンが続くとrepeatが増える（blockはしない）"""
 
-    def test_block_at_4_turns_without_recording(self, env_setup):
-        """4ターン記録なし → block"""
+    def test_4_turns_without_recording_approve_with_nudge(self, env_setup):
+        """4ターン記録なし → blockせずapprove、nudgeにrepeat=2"""
         state_dir = env_setup["state_dir"]
-        # check-in済みの状態を作る
         _write_events(
             [
                 {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
@@ -554,7 +553,6 @@ class TestRecordEscalation:
         Path(state_dir, "current_turn_test-session").write_text("1")
         Path(state_dir, "checked_in_activity_test-session").write_text("1")
 
-        # turn 2, 3, 4を進める（記録なし）
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -571,12 +569,15 @@ class TestRecordEscalation:
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
         )
-        # turn 4で block（4ターン記録なし）
-        assert result["decision"] == "block"
-        assert "記録が漏れています" in result["reason"]
+        assert result["decision"] == "approve"
 
-    def test_no_block_at_2_turns_without_recording(self, env_setup):
-        """2ターン記録なし → blockではなくapprove（警告nudgeのみ）"""
+        events = _read_events(state_dir, "test-session")
+        record_nudges = [e for e in events if e.get("e") == "nudge" and e.get("type") == "record"]
+        assert len(record_nudges) >= 1
+        assert record_nudges[-1]["repeat"] == 2
+
+    def test_2_turns_without_recording_nudge_repeat_1(self, env_setup):
+        """2ターン記録なし → nudge repeat=1"""
         state_dir = env_setup["state_dir"]
         _write_events(
             [
@@ -601,15 +602,53 @@ class TestRecordEscalation:
         )
         assert result["decision"] == "approve"
 
-        # 警告nudgeイベントが生成されている
         events = _read_events(state_dir, "test-session")
         record_nudges = [e for e in events if e.get("e") == "nudge" and e.get("type") == "record"]
         assert len(record_nudges) >= 1
+        assert record_nudges[-1]["repeat"] == 1
 
-    def test_recording_resets_escalation(self, env_setup):
-        """記録後はカウンターリセット → blockしない"""
+    def test_6_turns_without_recording_nudge_repeat_3_ceiling(self, env_setup):
+        """6ターン記録なし → nudge repeat=3（天井）"""
         state_dir = env_setup["state_dir"]
-        # turn 1でcheck-in、turn 3で記録
+        _write_events(
+            [
+                {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
+            ],
+            state_dir, "test-session",
+        )
+        Path(state_dir, "current_turn_test-session").write_text("1")
+        Path(state_dir, "checked_in_activity_test-session").write_text("1")
+
+        transcript = env_setup["tmp_path"] / "transcript.jsonl"
+        _write_transcript(
+            [
+                _make_user_entry("turn2"),
+                _make_assistant_entry(text="response 2"),
+                _make_user_entry("turn3"),
+                _make_assistant_entry(text="response 3"),
+                _make_user_entry("turn4"),
+                _make_assistant_entry(text="response 4"),
+                _make_user_entry("turn5"),
+                _make_assistant_entry(text="response 5"),
+                _make_user_entry("turn6"),
+                _make_assistant_entry(text="response 6"),
+            ],
+            transcript,
+        )
+
+        result = _run_stop_hook(
+            str(transcript), "test-session", env_setup["env_override"],
+        )
+        assert result["decision"] == "approve"
+
+        events = _read_events(state_dir, "test-session")
+        record_nudges = [e for e in events if e.get("e") == "nudge" and e.get("type") == "record"]
+        assert len(record_nudges) >= 1
+        assert record_nudges[-1]["repeat"] == 3
+
+    def test_recording_resets_nudge_repeat(self, env_setup):
+        """記録後はrepeatがリセットされる"""
+        state_dir = env_setup["state_dir"]
         _write_events(
             [
                 {"e": "tool", "name": "check_in", "turn": 1, "activity_id": 1},
@@ -620,7 +659,6 @@ class TestRecordEscalation:
         Path(state_dir, "current_turn_test-session").write_text("3")
         Path(state_dir, "checked_in_activity_test-session").write_text("1")
 
-        # turn 4, 5を進める
         transcript = env_setup["tmp_path"] / "transcript.jsonl"
         _write_transcript(
             [
@@ -635,5 +673,4 @@ class TestRecordEscalation:
         result = _run_stop_hook(
             str(transcript), "test-session", env_setup["env_override"],
         )
-        # turn 5: 記録(turn3)から2ターン → blockではなくapprove
         assert result["decision"] == "approve"

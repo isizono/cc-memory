@@ -7,8 +7,7 @@
 4. events.jsonl全読み
 5. Skill Span判定 → Span中なら即approve（安全弁: MAX_SKILL_SPAN_TURNS）
 6. check-in判定（e:toolでcheck_in/add_activityが1件でもあるか、猶予あり）
-7. record escalation（4ターン連続記録なし → block）
-8. nudge判定 + 状態更新 → approve
+7. nudge判定 + 状態更新 → approve
 """
 import json
 import os
@@ -35,7 +34,6 @@ _BLOCK_LIMIT = 1
 _CHECKIN_DEFER_TURNS = 2
 _MAX_SKILL_SPAN_TURNS = 20
 _NUDGE_INTERVAL = 2
-_ESCALATION_BLOCK_TURNS = 4
 
 
 def _output(decision: str, reason: str = "") -> None:
@@ -116,20 +114,7 @@ def main() -> None:
             )
             return
 
-        # 7. record escalation (4ターン連続記録なし → block)
-        # nudgeと同じ_NUDGE_INTERVAL境界でのみ判定（偶数ターン専用）
-        if current_turn > 0 and current_turn % _NUDGE_INTERVAL == 0:
-            turns_since = _turns_since_last_recording(all_events, current_turn)
-            if turns_since >= _ESCALATION_BLOCK_TURNS:
-                state.increment_block_count()
-                _output(
-                    "block",
-                    "記録が漏れています。このターンのレスポンス内で、直近の議論を "
-                    "add_logs / add_decisions / add_topic で記録してください。",
-                )
-                return
-
-        # 8. nudge判定 + 状態更新 + approve
+        # 7. nudge判定 + 状態更新 + approve
         state.reset_block_count()
         _output("approve")
         _safe_post_approve(
@@ -236,7 +221,7 @@ def _handle_nudges(state: HookState, events: list[dict], current_turn: int) -> N
     """
     nudge_events: list[dict] = []
 
-    # record nudge: _NUDGE_INTERVAL turnごとに記録がなければ発火
+    # record nudge: _NUDGE_INTERVAL turnごとに記録がなければ発火（増殖式）
     if current_turn > 0 and current_turn % _NUDGE_INTERVAL == 0:
         recent_turn_threshold = current_turn - _NUDGE_INTERVAL
         has_recent_record = any(
@@ -246,10 +231,13 @@ def _handle_nudges(state: HookState, events: list[dict], current_turn: int) -> N
             for e in events
         )
         if not has_recent_record:
+            turns_since = _turns_since_last_recording(events, current_turn)
+            repeat = max(1, min(turns_since // _NUDGE_INTERVAL, 3))
             nudge_events.append({
                 "e": "nudge",
                 "type": "record",
                 "turn": current_turn,
+                "repeat": repeat,
             })
 
     # follow_up nudge: 直近turnにadd_decisionsあり & 他の記録系/check-in系ツールなし

@@ -32,15 +32,17 @@ def _make_hook_output(message: str) -> dict:
 
 _FOLLOW_UP_NUDGE_MESSAGE = (
     "<system-reminder>"
-    "決定事項を記録しました。関連するエンティティ（topic・logs・activity）の"
-    "作成や更新も忘れずに行ってください。該当しなければ無視してください。"
+    "決定事項を記録しました。以下を確認してください:\n"
+    "- 関連するエンティティ（topic・logs・activity）の作成や更新\n"
+    "- 資材（material）として残すべき成果物がないか\n"
+    "- tag_notesへ転記すべき運用ルールや設計指針がないか\n"
+    "該当しなければ無視してください。"
     "</system-reminder>"
 )
 
 _RECORD_NUDGE_MESSAGE = (
     "<system-reminder>"
     "記録が遅れています。議論の途中でもいいので add_logs / add_decisions / add_topic で記録してください。"
-    "2ターン以内に記録がなければblockが走ります。"
     "</system-reminder>"
 )
 
@@ -85,7 +87,9 @@ def main() -> None:
                 print(json.dumps(_make_hook_output(_FOLLOW_UP_NUDGE_MESSAGE), ensure_ascii=False))
                 return
             elif e.get("type") == "record":
-                print(json.dumps(_make_hook_output(_RECORD_NUDGE_MESSAGE), ensure_ascii=False))
+                repeat = e.get("repeat", 1)
+                message = _RECORD_NUDGE_MESSAGE * repeat
+                print(json.dumps(_make_hook_output(message), ensure_ascii=False))
                 return
 
         # 5. 何もなし
