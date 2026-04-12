@@ -7,6 +7,7 @@ import pytest
 from src.db import get_connection, init_database
 from src.services.relation_service import add_relation, get_map, remove_relation
 from src.services.tag_service import _injected_tags
+from tests.helpers import add_decision
 
 
 DEFAULT_TAGS = [("domain", "test")]
@@ -449,19 +450,8 @@ class TestGetMap:
         """topicエンティティにdecisions_count/materials_countが含まれる"""
         e = sample_entities
         # t1にdecisions 2件とmaterials 1件を紐づける
-        conn = get_connection()
-        try:
-            conn.execute(
-                "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
-                (e["t1"], "決定1", "理由1"),
-            )
-            conn.execute(
-                "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
-                (e["t1"], "決定2", "理由2"),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        add_decision(decision="決定1", reason="理由1", topic_id=e["t1"])
+        add_decision(decision="決定2", reason="理由2", topic_id=e["t1"])
         add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
 
         result = get_map("topic", e["t1"], min_depth=0, max_depth=0)
@@ -486,15 +476,14 @@ class TestGetMap:
     def test_get_map_topic_excludes_retracted_decisions(self, sample_entities):
         """retracted decisionsはdecisions_countに含まれない"""
         e = sample_entities
+        add_decision(decision="有効", reason="理由", topic_id=e["t1"])
+        retracted = add_decision(decision="撤回済み", reason="理由", topic_id=e["t1"])
+        # 1件をretract
         conn = get_connection()
         try:
             conn.execute(
-                "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
-                (e["t1"], "有効", "理由"),
-            )
-            conn.execute(
-                "INSERT INTO decisions (topic_id, decision, reason, retracted_at) VALUES (?, ?, ?, datetime('now'))",
-                (e["t1"], "撤回済み", "理由"),
+                "UPDATE decisions SET retracted_at = datetime('now') WHERE id = ?",
+                (retracted["decision_id"],),
             )
             conn.commit()
         finally:
@@ -547,23 +536,9 @@ class TestGetMap:
         # t1 -> t2 (depth 1)
         add_relation("topic", e["t1"], [{"type": "topic", "ids": [e["t2"]]}])
         # t1にdecision 1件、t2にdecision 2件
-        conn = get_connection()
-        try:
-            conn.execute(
-                "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
-                (e["t1"], "d1", "r"),
-            )
-            conn.execute(
-                "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
-                (e["t2"], "d2a", "r"),
-            )
-            conn.execute(
-                "INSERT INTO decisions (topic_id, decision, reason) VALUES (?, ?, ?)",
-                (e["t2"], "d2b", "r"),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        add_decision(decision="d1", reason="r", topic_id=e["t1"])
+        add_decision(decision="d2a", reason="r", topic_id=e["t2"])
+        add_decision(decision="d2b", reason="r", topic_id=e["t2"])
         # t1にmaterial 1件、t2にmaterial 2件を直接紐づけ
         add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
         add_relation("topic", e["t2"], [{"type": "material", "ids": [e["m1"], e["m2"]]}])
