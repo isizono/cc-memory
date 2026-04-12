@@ -37,7 +37,11 @@ def _get_direct_relations(conn: sqlite3.Connection, entity_type: str, entity_id:
 
 
 def _get_topics_info(conn: sqlite3.Connection, topic_ids: list[int]) -> list[dict]:
-    """複数トピックの基本情報を取得する。"""
+    """複数トピックの基本情報を取得する。
+
+    各topicにdecisions_count（retracted除外）とmaterials_count（直接リレーションのみ）を付与する。
+    カウントがゼロのtopicでもフィールドは0として返す（フィールド欠落させない）。
+    """
     if not topic_ids:
         return []
     placeholders = ",".join("?" * len(topic_ids))
@@ -45,7 +49,17 @@ def _get_topics_info(conn: sqlite3.Connection, topic_ids: list[int]) -> list[dic
         f"SELECT id, title FROM discussion_topics WHERE id IN ({placeholders})",
         tuple(topic_ids),
     ).fetchall()
-    return [{"id": row["id"], "title": row["title"]} for row in rows]
+    dec_counts = _count_decisions_per_topic(conn, topic_ids)
+    mat_counts = _count_materials_per_topic(conn, topic_ids)
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "decisions_count": dec_counts.get(row["id"], 0),
+            "materials_count": mat_counts.get(row["id"], 0),
+        }
+        for row in rows
+    ]
 
 
 def _get_activities_overview(conn: sqlite3.Connection, activity_ids: list[int]) -> list[dict]:
@@ -95,6 +109,56 @@ def _count_decisions_from_topics(conn: sqlite3.Connection, topic_ids: list[int])
         tuple(topic_ids),
     ).fetchone()
     return row[0] if row else 0
+
+
+def _count_decisions_per_topic(conn: sqlite3.Connection, topic_ids: list[int]) -> dict[int, int]:
+    """トピックごとのdecisions件数を取得する（retracted除外）。
+
+    Returns:
+        {topic_id: count, ...} — decisionsが0件のtopic_idはキーに含まれない
+    """
+    if not topic_ids:
+        return {}
+    placeholders = ",".join("?" * len(topic_ids))
+    rows = conn.execute(
+        f"""
+        SELECT topic_id, COUNT(*) AS cnt
+        FROM decisions
+        WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL
+        GROUP BY topic_id
+        """,
+        tuple(topic_ids),
+    ).fetchall()
+    return {row["topic_id"]: row["cnt"] for row in rows}
+
+
+def _count_materials_per_topic(conn: sqlite3.Connection, topic_ids: list[int]) -> dict[int, int]:
+    """トピックごとに直接紐づくmaterials件数を取得する。
+
+    relations_viewを通じてtopic→materialの直接リレーション件数をカウントする。
+    relationsテーブルは_normalize_pairによりsource/targetが正規化されて格納されるため、
+    双方向ビューであるrelations_view経由で取得する。
+    activity経由の間接リレーションは含めない。
+
+    Returns:
+        {topic_id: count, ...} — materialsが0件のtopic_idはキーに含まれない
+    """
+    if not topic_ids:
+        return {}
+    placeholders = ",".join("?" * len(topic_ids))
+    rows = conn.execute(
+        f"""
+        SELECT source_id AS topic_id, COUNT(*) AS cnt
+        FROM relations_view
+        WHERE source_type = 'topic'
+          AND target_type = 'material'
+          AND relation_type = 'related'
+          AND source_id IN ({placeholders})
+        GROUP BY source_id
+        """,
+        tuple(topic_ids),
+    ).fetchall()
+    return {row["topic_id"]: row["cnt"] for row in rows}
 
 
 def _get_logs_catalog_from_topics(

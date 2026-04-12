@@ -527,6 +527,15 @@ def _get_map_with_conn(
     activity_tags_map = get_entity_tags_batch(conn, "activity_tags", "activity_id", activity_ids) if activity_ids else {}
     material_tags_map = get_entity_tags_batch(conn, "material_tags", "material_id", material_ids) if material_ids else {}
 
+    # topicエンティティの重力カウント（decisions/materials）をバッチ取得
+    # 循環import回避のためローカルimport
+    from src.services.checkin_service import (
+        _count_decisions_per_topic,
+        _count_materials_per_topic,
+    )
+    topic_decisions_counts = _count_decisions_per_topic(conn, topic_ids) if topic_ids else {}
+    topic_materials_counts = _count_materials_per_topic(conn, topic_ids) if topic_ids else {}
+
     # 存在するIDのセットを構築（存在しないIDを除外するため）
     existing_ids = set()
     existing_ids.update(("topic", tid) for tid in topic_titles)
@@ -555,13 +564,20 @@ def _get_map_with_conn(
         else:
             continue
 
-        entities.append({
+        entity = {
             "type": etype,
             "id": eid,
             "title": title,
             "tags": tags,
             "depth": depth,
-        })
+        }
+
+        # topicのみ重力カウントを付与（activity/materialには付与しない）
+        if etype == "topic":
+            entity["decisions_count"] = topic_decisions_counts.get(eid, 0)
+            entity["materials_count"] = topic_materials_counts.get(eid, 0)
+
+        entities.append(entity)
 
     # depth順、同depth内はtype→id順でソート
     entities.sort(key=lambda e: (e["depth"], e["type"], e["id"]))
