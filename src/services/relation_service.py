@@ -528,13 +528,13 @@ def _get_map_with_conn(
     material_tags_map = get_entity_tags_batch(conn, "material_tags", "material_id", material_ids) if material_ids else {}
 
     # topicエンティティの重力カウント（decisions/materials）をバッチ取得
-    # 循環import回避のためローカルimport
-    from src.services.checkin_service import (
-        _count_decisions_per_topic,
-        _count_materials_per_topic,
+    # topic_service → relation_service の循環import回避のためローカルimport
+    from src.services.topic_service import (
+        count_decisions_per_topic,
+        count_materials_per_topic,
     )
-    topic_decisions_counts = _count_decisions_per_topic(conn, topic_ids) if topic_ids else {}
-    topic_materials_counts = _count_materials_per_topic(conn, topic_ids) if topic_ids else {}
+    topic_decisions_counts = count_decisions_per_topic(conn, topic_ids) if topic_ids else {}
+    topic_materials_counts = count_materials_per_topic(conn, topic_ids) if topic_ids else {}
 
     # 存在するIDのセットを構築（存在しないIDを除外するため）
     existing_ids = set()

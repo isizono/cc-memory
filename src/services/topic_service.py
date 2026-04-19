@@ -18,6 +18,65 @@ from src.services.tag_service import (
 TOPIC_DESC_MAX_LEN = 200
 
 
+def count_decisions_per_topic(conn: sqlite3.Connection, topic_ids: list[int]) -> dict[int, int]:
+    """トピックごとのdecisions件数を取得する（retracted除外）。
+
+    Returns:
+        {topic_id: count, ...} — decisionsが0件のtopic_idはキーに含まれない
+    """
+    if not topic_ids:
+        return {}
+    placeholders = ",".join("?" * len(topic_ids))
+    rows = conn.execute(
+        f"""
+        SELECT topic_id, COUNT(*) AS cnt
+        FROM decisions
+        WHERE topic_id IN ({placeholders}) AND retracted_at IS NULL
+        GROUP BY topic_id
+        """,
+        tuple(topic_ids),
+    ).fetchall()
+    return {row["topic_id"]: row["cnt"] for row in rows}
+
+
+def count_materials_per_topic(conn: sqlite3.Connection, topic_ids: list[int]) -> dict[int, int]:
+    """トピックごとに直接紐づくmaterials件数を取得する。
+
+    relations_viewを通じてtopic→materialの直接リレーション件数をカウントする。
+
+    実装上のポイント:
+    relationsテーブルは_normalize_pairにより source_type < target_type の辞書順で
+    正規化して格納する。'material' < 'topic' のため、topic-materialペアは常に
+    source=(material), target=(topic) として保存される。
+    そのためrelationsを直接 source_type='topic' で引くと0件になる。
+    双方向ビューであるrelations_viewは逆方向UNIONを含むため、
+    source_type='topic' AND target_type='material' で正しくマッチする。
+    各ペアはビュー内で1方向にしかマッチしないため二重計上は起きない。
+
+    relation_type='related' フィルタにより、supersedes/depends_on経由の
+    リレーションは除外される。activity経由の間接リレーションも含めない。
+
+    Returns:
+        {topic_id: count, ...} — materialsが0件のtopic_idはキーに含まれない
+    """
+    if not topic_ids:
+        return {}
+    placeholders = ",".join("?" * len(topic_ids))
+    rows = conn.execute(
+        f"""
+        SELECT source_id AS topic_id, COUNT(*) AS cnt
+        FROM relations_view
+        WHERE source_type = 'topic'
+          AND target_type = 'material'
+          AND relation_type = 'related'
+          AND source_id IN ({placeholders})
+        GROUP BY source_id
+        """,
+        tuple(topic_ids),
+    ).fetchall()
+    return {row["topic_id"]: row["cnt"] for row in rows}
+
+
 def get_recent_topics_with_conn(conn, limit: int = 10) -> list[dict]:
     """最近作成されたトピックのID・タイトルを取得する（conn共有版）。
 

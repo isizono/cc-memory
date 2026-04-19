@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.activity_service import add_activity, update_activity
-from tests.helpers import add_decision, add_log
+from tests.helpers import add_decision, add_log, retract_decision
 from src.services.material_service import add_material
 from src.services.pin_service import update_pin
 from src.services.relation_service import add_relation
@@ -411,15 +411,7 @@ class TestCheckInRelations:
         d1 = add_decision(decision="決定1", reason="理由", topic_id=tid)
         add_decision(decision="決定2", reason="理由", topic_id=tid)
         # 1件をretract
-        conn = get_connection()
-        try:
-            conn.execute(
-                "UPDATE decisions SET retracted_at = datetime('now') WHERE id = ?",
-                (d1["decision_id"],),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        retract_decision(d1["decision_id"])
 
         a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
         add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [tid]}])

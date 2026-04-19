@@ -7,7 +7,7 @@ import pytest
 from src.db import get_connection, init_database
 from src.services.relation_service import add_relation, get_map, remove_relation
 from src.services.tag_service import _injected_tags
-from tests.helpers import add_decision
+from tests.helpers import add_decision, retract_decision
 
 
 DEFAULT_TAGS = [("domain", "test")]
@@ -479,15 +479,7 @@ class TestGetMap:
         add_decision(decision="有効", reason="理由", topic_id=e["t1"])
         retracted = add_decision(decision="撤回済み", reason="理由", topic_id=e["t1"])
         # 1件をretract
-        conn = get_connection()
-        try:
-            conn.execute(
-                "UPDATE decisions SET retracted_at = datetime('now') WHERE id = ?",
-                (retracted["decision_id"],),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        retract_decision(retracted["decision_id"])
 
         result = get_map("topic", e["t1"], min_depth=0, max_depth=0)
 
