@@ -7,6 +7,7 @@ import pytest
 from src.db import get_connection, init_database
 from src.services.relation_service import add_relation, get_map, remove_relation
 from src.services.tag_service import _injected_tags
+from tests.helpers import add_decision, retract_decision
 
 
 DEFAULT_TAGS = [("domain", "test")]
@@ -444,6 +445,104 @@ class TestGetMap:
 
         depths = [ent["depth"] for ent in result["entities"]]
         assert depths == sorted(depths)
+
+    def test_get_map_topic_has_gravity_counts(self, sample_entities):
+        """topicエンティティにdecisions_count/materials_countが含まれる"""
+        e = sample_entities
+        # t1にdecisions 2件とmaterials 1件を紐づける
+        add_decision(decision="決定1", reason="理由1", topic_id=e["t1"])
+        add_decision(decision="決定2", reason="理由2", topic_id=e["t1"])
+        add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=0)
+
+        assert "error" not in result
+        t1_entity = next(ent for ent in result["entities"] if ent["id"] == e["t1"])
+        assert t1_entity["type"] == "topic"
+        assert t1_entity["decisions_count"] == 2
+        assert t1_entity["materials_count"] == 1
+
+    def test_get_map_topic_zero_gravity_counts_present(self, sample_entities):
+        """decisions/materialsがゼロのtopicでもdecisions_count=0, materials_count=0が返る"""
+        e = sample_entities
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=0)
+
+        assert "error" not in result
+        t1_entity = result["entities"][0]
+        assert t1_entity["type"] == "topic"
+        assert t1_entity["decisions_count"] == 0
+        assert t1_entity["materials_count"] == 0
+
+    def test_get_map_topic_excludes_retracted_decisions(self, sample_entities):
+        """retracted decisionsはdecisions_countに含まれない"""
+        e = sample_entities
+        add_decision(decision="有効", reason="理由", topic_id=e["t1"])
+        retracted = add_decision(decision="撤回済み", reason="理由", topic_id=e["t1"])
+        # 1件をretract
+        retract_decision(retracted["decision_id"])
+
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=0)
+
+        assert "error" not in result
+        t1_entity = result["entities"][0]
+        assert t1_entity["decisions_count"] == 1
+
+    def test_get_map_activity_material_no_gravity_fields(self, sample_entities):
+        """activity/materialエンティティにはdecisions_count/materials_countが付与されない"""
+        e = sample_entities
+        add_relation("topic", e["t1"], [
+            {"type": "activity", "ids": [e["a1"]]},
+            {"type": "material", "ids": [e["m1"]]},
+        ])
+
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=1)
+
+        assert "error" not in result
+        non_topic = [ent for ent in result["entities"] if ent["type"] != "topic"]
+        # activity, materialが含まれていることを確認
+        types = {ent["type"] for ent in non_topic}
+        assert "activity" in types
+        assert "material" in types
+        # これらのエンティティにはgravityフィールドが付与されていない
+        for ent in non_topic:
+            assert "decisions_count" not in ent
+            assert "materials_count" not in ent
+
+    def test_get_map_topic_materials_count_excludes_activity_indirect(self, sample_entities):
+        """topicのmaterials_countはactivity経由の間接リレーションを含まない"""
+        e = sample_entities
+        # topic-activity-material の経路のみ設定（topicには直接紐づけない）
+        add_relation("topic", e["t1"], [{"type": "activity", "ids": [e["a1"]]}])
+        add_relation("activity", e["a1"], [{"type": "material", "ids": [e["m1"]]}])
+
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=2)
+
+        assert "error" not in result
+        t1_entity = next(ent for ent in result["entities"] if ent["type"] == "topic" and ent["id"] == e["t1"])
+        # 直接リレーションがないためゼロ
+        assert t1_entity["materials_count"] == 0
+
+    def test_get_map_multi_topic_independent_gravity_counts(self, sample_entities):
+        """深さ走査で到達した複数topicがそれぞれ独立した重力カウントを持つ"""
+        e = sample_entities
+        # t1 -> t2 (depth 1)
+        add_relation("topic", e["t1"], [{"type": "topic", "ids": [e["t2"]]}])
+        # t1にdecision 1件、t2にdecision 2件
+        add_decision(decision="d1", reason="r", topic_id=e["t1"])
+        add_decision(decision="d2a", reason="r", topic_id=e["t2"])
+        add_decision(decision="d2b", reason="r", topic_id=e["t2"])
+        # t1にmaterial 1件、t2にmaterial 2件を直接紐づけ
+        add_relation("topic", e["t1"], [{"type": "material", "ids": [e["m1"]]}])
+        add_relation("topic", e["t2"], [{"type": "material", "ids": [e["m1"], e["m2"]]}])
+
+        result = get_map("topic", e["t1"], min_depth=0, max_depth=1)
+
+        assert "error" not in result
+        by_id = {ent["id"]: ent for ent in result["entities"] if ent["type"] == "topic"}
+        assert by_id[e["t1"]]["decisions_count"] == 1
+        assert by_id[e["t2"]]["decisions_count"] == 2
+        assert by_id[e["t1"]]["materials_count"] == 1
+        assert by_id[e["t2"]]["materials_count"] == 2
 
 
 class TestCascadeDelete:

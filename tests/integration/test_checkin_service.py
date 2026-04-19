@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from src.db import init_database, get_connection
 from src.services.activity_service import add_activity, update_activity
-from tests.helpers import add_decision, add_log
+from tests.helpers import add_decision, add_log, retract_decision
 from src.services.material_service import add_material
 from src.services.pin_service import update_pin
 from src.services.relation_service import add_relation
@@ -362,6 +362,90 @@ class TestCheckInRelations:
 
         assert "error" not in result
         assert len(result["recent_decisions"]) == DECISIONS_FULL_LIMIT
+
+    def test_related_topics_include_gravity_counts(self, temp_db):
+        """related_topicsの各topicにdecisions_count/materials_countが含まれる"""
+        topic = add_topic(title="重力テスト", description="Desc", tags=DEFAULT_TAGS)
+        tid = topic["topic_id"]
+        # decisions 2件
+        add_decision(decision="決定1", reason="理由", topic_id=tid)
+        add_decision(decision="決定2", reason="理由", topic_id=tid)
+        # material 1件を直接紐づけ
+        add_material("資材1", "内容", DEFAULT_TAGS, "src", related=[{"type": "topic", "ids": [tid]}])
+        # activity経由のmaterialはmaterials_countに含まれないことを確認するためのダミー
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [tid]}])
+        add_material(
+            "activity経由資材", "内容", DEFAULT_TAGS, "src",
+            related=[{"type": "activity", "ids": [a["activity_id"]]}],
+        )
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        assert len(result["related_topics"]) == 1
+        rt = result["related_topics"][0]
+        assert rt["id"] == tid
+        assert rt["decisions_count"] == 2
+        # topic直接紐づけは1件のみ（activity経由のmaterialは含まない）
+        assert rt["materials_count"] == 1
+
+    def test_related_topics_zero_counts_present(self, temp_db):
+        """decisions/materialsがゼロのtopicでもdecisions_count=0, materials_count=0が返る"""
+        topic = add_topic(title="空のトピック", description="Desc", tags=DEFAULT_TAGS)
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [topic["topic_id"]]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        assert len(result["related_topics"]) == 1
+        rt = result["related_topics"][0]
+        assert rt["decisions_count"] == 0
+        assert rt["materials_count"] == 0
+
+    def test_related_topics_exclude_retracted_decisions(self, temp_db):
+        """retracted decisionsはdecisions_countに含まれない"""
+        topic = add_topic(title="retractテスト", description="Desc", tags=DEFAULT_TAGS)
+        tid = topic["topic_id"]
+        d1 = add_decision(decision="決定1", reason="理由", topic_id=tid)
+        add_decision(decision="決定2", reason="理由", topic_id=tid)
+        # 1件をretract
+        retract_decision(d1["decision_id"])
+
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [tid]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        rt = result["related_topics"][0]
+        # retract済みを除いた1件のみカウント
+        assert rt["decisions_count"] == 1
+
+    def test_related_topics_multiple_topics_independent_counts(self, temp_db):
+        """複数topicでそれぞれ独立したdecisions_count/materials_countが返る"""
+        t1 = add_topic(title="トピック1", description="Desc", tags=DEFAULT_TAGS)
+        t2 = add_topic(title="トピック2", description="Desc", tags=DEFAULT_TAGS)
+        tid1, tid2 = t1["topic_id"], t2["topic_id"]
+        add_decision(decision="d1a", reason="r", topic_id=tid1)
+        add_decision(decision="d1b", reason="r", topic_id=tid1)
+        add_decision(decision="d2a", reason="r", topic_id=tid2)
+        add_material("m1", "c", DEFAULT_TAGS, "src", related=[{"type": "topic", "ids": [tid1]}])
+        add_material("m2a", "c", DEFAULT_TAGS, "src", related=[{"type": "topic", "ids": [tid2]}])
+        add_material("m2b", "c", DEFAULT_TAGS, "src", related=[{"type": "topic", "ids": [tid2]}])
+
+        a = add_activity(title="タスク", description="Desc", tags=DEFAULT_TAGS, check_in=False)
+        add_relation("activity", a["activity_id"], [{"type": "topic", "ids": [tid1, tid2]}])
+
+        result = check_in(a["activity_id"])
+
+        assert "error" not in result
+        by_id = {rt["id"]: rt for rt in result["related_topics"]}
+        assert by_id[tid1]["decisions_count"] == 2
+        assert by_id[tid1]["materials_count"] == 1
+        assert by_id[tid2]["decisions_count"] == 1
+        assert by_id[tid2]["materials_count"] == 2
 
 
 class TestCheckInCoverage:
